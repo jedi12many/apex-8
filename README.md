@@ -208,6 +208,43 @@ node test/c64-bench.js "C:\path\to\GTK3VICE-3.10-win64"
 
 `test/c64-bench.js` builds a version that turns 4/1024 of a turn every frame for 64 frames: a quarter turn from the start, past the guards. Each frame turns the same amount however long it takes, so every build draws the same frames. `--walk` walks along the first corridor instead. It times them with the VICE monitor's stopwatch and prints cycles per frame and frames per second.
 
+## Platformer (in progress)
+
+A side-scrolling platformer engine for the C64, with layers of parallax for depth, smooth scrolling at 50 frames a second and tight controls. So far it is a JavaScript reference you can play; the 6502 engine comes next and will be tested pixel for pixel against it, like the raycaster.
+
+| File | What it is |
+|------|------------|
+| `core/platform.js` | Levels, player physics and the camera, in integer maths |
+| `c64/side/view.js` | What the C64 screen shows each frame |
+| `levels/side/w1.txt` | Green Hills, the first level |
+| `web/side.html` | The reference, playable in a browser (`web/bundle.js` makes one-file versions in `web/out/`) |
+| `showcase/side.js` | An autopilot run through the level, as `showcase/out/side-run.mp4` |
+
+**Screen.** Multicolor characters, 38 columns, three bands, each with its own hardware fine scroll and colours set by raster splits:
+
+| Rows | Layer | Speed |
+|------|-------|-------|
+| 0–4 | Mountains: lit rock, rock in shadow, snow | 1/4 |
+| 5–8 | Hills | 1/2 |
+| 9–24 | The level, in APEXSCII side-oblique blocks (forest theme): grass tops and earth sides receding up-right | 1 |
+| 9–24 | A forest behind the level, in its empty cells | 3/4 |
+
+The forest is four characters per row pattern, redrawn each frame with the pattern shifted; it moves in 2-pixel steps, as multicolor pixels are 2 wide. Colour RAM never changes, so it never has to scroll. The level band's background starts as the hills' green behind the treetops and turns to sky a few lines down, behind solid canopy. The whole look takes 85 of the 212 free characters.
+
+**Levels** are text, one character per 16×16 block: `#` solid, `.` empty, `P` the start. The engine draws each block as a 2×2-character front with its top and side one character up and right, choosing APEXSCII's glyphs for every cell from which faces cover its two halves.
+
+**Physics** runs once per 50 Hz frame, in 1/16 pixel:
+- running: speeds up and slows down rather than starting and stopping dead
+- jumping: up to 3.5 blocks, lower when the button is let go early
+- grace: a jump still works for 5 frames after running off a ledge, and a jump pressed up to 6 frames before landing happens on landing
+- collision: the player box is 12×20 pixels, checked against blocks one axis at a time
+- camera: it follows the player within a dead zone
+
+```bash
+node showcase/side.js
+node web/bundle.js
+```
+
 ## Roadmap
 
 The raycaster is a renderer so far. These are what a game built on it would need, in a sensible order. None is planned yet.

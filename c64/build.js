@@ -17,12 +17,13 @@ function run(cmd, args, cwd) {
 }
 
 // Assembles into dir and returns the PRG's bytes; dir also gets the map and a VICE label file.
-// opts.bench: a benchmark build that turns for that many frames, then parks at bench_done.
+// opts.bench: a benchmark build that turns (or with opts.walk, walks forward) for that many frames,
+// then parks at bench_done.
 // opts.script: [[input bits, ticks], ...] played instead of the joystick (1 fwd, 2 back, 4 left, 8 right).
 function build(pose, dir = path.join(here, 'build', pose ? 'test' : 'game'), opts = {}) {
   gen(map, dir, pose);
   const extra = [];
-  if (opts.bench) extra.push(`BENCH = ${opts.bench}`);
+  if (opts.bench) extra.push(`BENCH = ${opts.bench}`, `BENCH_INPUT = ${opts.walk ? 1 : 8}`);
   if (opts.script) {
     extra.push('SCRIPT = 1', '.segment "RODATA"',
       `SCRIPT_IN: .byte ${[...opts.script.map(s => s[0]), 0].join(',')}`,

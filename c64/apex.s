@@ -81,6 +81,13 @@ ticks_used: .res 1
 HE:      .res 40            ; per screen column: the even ray's j + 41 * (shadeB + 2 * joint) (c64/view.js)
 HO:      .res 40            ; and the odd ray's
 RJ:      .res RAYS          ; per ray: j (half height / 2), + 41 for shade B
+DISTLO:  .res RAYS          ; per ray: the walk's distance to its wall (a lower bound in the fog)
+DISTHI:  .res RAYS
+CASTF:   .res RAYS          ; per ray: 1 when DIST, HIT and U came from a cast at this ray's angle
+lastx:   .res 2             ; the pose the rays are for
+lasty:   .res 2
+lasta:   .res 2
+cvalid:  .res 1             ; 1 once there are rays
 U:       .res RAYS          ; per ray: where along the face it hit (0-255, left to right)
 uq:      .res 1             ; the quadrant of the angle whose sine gives u
 col:     .res 1             ; the joint pass's screen column
@@ -113,6 +120,7 @@ start:
     sta $0291
     lda #0
     sta front
+    sta cvalid
     sta ticks
     sta last
 
@@ -349,14 +357,15 @@ irq_top:
 cast:
     lda #$ff                ; set up the first ray's quadrant afresh
     sta lastq
+    jsr reuse
     ldx #0                  ; the even rays, then the last
-:   jsr cast_ray
+:   jsr ray_x
     inx
     inx
     cpx #RAYS
     bcc :-
     ldx #RAYS - 1
-    jsr cast_ray
+    jsr ray_x
     ldx #1                  ; then each odd ray: the mean of its neighbours when they hit the same face
 @odd:
     lda HITL-1,x
@@ -379,6 +388,8 @@ cast:
     sta HITL,x
     lda HITH-1,x
     sta HITH,x
+    lda #0                  ; nothing to keep for turning
+    sta CASTF,x
     clc                     ; and the distance, for the sprites
     lda PERPLO-1,x
     adc PERPLO+1,x
@@ -392,7 +403,7 @@ cast:
     sta PERPLO,x
     jmp @next
 @full:
-    jsr cast_ray
+    jsr ray_x
 @next:
     inx
     inx
@@ -439,6 +450,20 @@ put:
 .endmacro
 
 joints:
+    lda px                  ; the pose these rays are for
+    sta lastx
+    lda px+1
+    sta lastx+1
+    lda py
+    sta lasty
+    lda py+1
+    sta lasty+1
+    lda pa
+    sta lasta
+    lda pa+1
+    sta lasta+1
+    lda #1
+    sta cvalid
     ldx #0
     stx col
 j_pair:
@@ -500,6 +525,130 @@ j_put:
     adc J82,y
     ldy col
     sta HO,y
+    rts
+
+; Ray X: recast from what an earlier cast kept, or cast.
+ray_x:
+    lda CASTF,x
+    beq :+
+    jmp recast
+:   jmp cast_ray
+
+; Turning on the spot shifts the rays: with the position the same as the last cast and the angle d
+; units on (a multiple of 4), ray c now is the ray c + d / 2 was, so what the walk found (DIST, HIT,
+; U) moves with it, and the rays that come in at the edge are cast. Anything else casts every ray.
+reuse:
+    lda cvalid
+    bne @j1
+    jmp @all
+@j1:
+    ldx #3
+:   lda px,x                ; px, py are 4 bytes in a row
+    cmp lastx,x
+    beq @j2
+    jmp @all
+@j2:
+    dex
+    bpl :-
+    sec                     ; d = pa - cpa, as -512..511
+    lda pa
+    sbc lasta
+    sta t0
+    lda pa+1
+    sbc lasta+1
+    and #3
+    cmp #2
+    bcc :+
+    ora #$fc                ; negative
+:   sta t1
+    lsr                     ; k = d / 2 (d is even)
+    lda t0
+    ror
+    sta t0                  ; k, -256..255 in t1:t0 >> ... (t1 bit 0 shifted in)
+    lda t1
+    bmi @left
+    cmp #1
+    bcc @j3
+    jmp @all
+@j3:                ; k >= 256
+    lda t0
+    beq @done
+    cmp #RAYS
+    bcc @j4
+    jmp @all
+@j4:
+    ; k > 0: ray c takes ray c + k
+    sta t2
+    ldx #0
+    ldy t2
+@r: lda DISTLO,y
+    sta DISTLO,x
+    lda DISTHI,y
+    sta DISTHI,x
+    lda U,y
+    sta U,x
+    lda HITL,y
+    sta HITL,x
+    lda HITH,y
+    sta HITH,x
+    lda CASTF,y
+    sta CASTF,x
+    inx
+    iny
+    cpy #RAYS
+    bne @r
+    lda #0
+:   sta CASTF,x
+    inx
+    cpx #RAYS
+    bne :-
+@done:
+    rts
+@left:                      ; k < 0: ray c takes ray c + k, from the right end down
+    cmp #$ff
+    beq @j5
+    jmp @all
+@j5:
+    lda t0
+    cmp #256 - RAYS + 1
+    bcs @j6
+    jmp @all
+@j6:
+    eor #$ff                ; -k
+    clc
+    adc #1
+    sta t2
+    ldx #RAYS - 1
+    lda #RAYS - 1
+    sec
+    sbc t2
+    tay
+@l: lda DISTLO,y
+    sta DISTLO,x
+    lda DISTHI,y
+    sta DISTHI,x
+    lda U,y
+    sta U,x
+    lda HITL,y
+    sta HITL,x
+    lda HITH,y
+    sta HITH,x
+    lda CASTF,y
+    sta CASTF,x
+    dex
+    dey
+    bpl @l
+    lda #0
+:   sta CASTF,x
+    dex
+    bpl :-
+    rts
+@all:
+    lda #0
+    ldx #RAYS - 1
+:   sta CASTF,x
+    dex
+    bpl :-
     rts
 
 ; Ray X: walk to the first wall, then store its distance, j and the face it hit. Returns X = the ray.
@@ -801,8 +950,18 @@ cr_hit:
     beq :+
     ora #$80
 :   sta HITH,x
+    lda dist                ; kept for turning (see reuse)
+    sta DISTLO,x
+    lda dist+1
+    sta DISTHI,x
+    lda #1
+    sta CASTF,x
+    jsr height
+    jmp cr_found
 
-
+; Ray X's corrected distance from dist (into PERPLO / PERPHI) and A = j, its half height / 2.
+; Clobbers X.
+height:
     lda COLCOS,x            ; perp = dist * COLCOS[ray] >> 8, by quarter squares
     sta p_mf1+1
     sta p_mf3+1
@@ -853,7 +1012,7 @@ p_mf8:
     cmp #64
     bcc :+
     lda #0                  ; perp >= 16384: no wall height at all
-    jmp cr_found
+    rts
 :   lda m_r+1
     lsr
     lsr
@@ -882,6 +1041,8 @@ cr_refine:
     dey
     bne cr_refine
 :   tya
+    rts
+
 cr_found:
     sta t0                  ; j
     cmp #U_NEAR             ; too far for bricks: no u
@@ -995,6 +1156,13 @@ cr_store:
 ; In the fog: no wall (j = 0), no face, and the greatest distance, so every object in front shows.
 cr_fog:
     ldx ray
+    lda FOGLO,x             ; the wall is at least this far: kept for turning
+    sta DISTLO,x
+    lda FOGHI,x
+    sta DISTHI,x
+    lda #1
+    sta CASTF,x
+fogged:
     lda #$ff
     sta HITL,x
     sta HITH,x
@@ -1003,6 +1171,34 @@ cr_fog:
     lda #0
     sta RJ,x
     sta U,x
+    rts
+
+; Ray X again after a turn, from what an earlier cast found at the same angle (DIST, HIT, U): a wall
+; past this column's fog distance is fog, and a fog ray whose bound no longer reaches this column's
+; fog distance is cast afresh. Otherwise only the corrected distance and height change.
+recast:
+    stx ray
+    lda DISTLO,x            ; at least this column's fog distance: fog
+    cmp FOGLO,x
+    lda DISTHI,x
+    sbc FOGHI,x
+    bcs fogged
+    lda HITL,x              ; a fog ray that may now reach a wall: cast it
+    and HITH,x
+    cmp #$ff
+    bne :+
+    jmp cast_ray
+:   lda DISTLO,x
+    sta dist
+    lda DISTHI,x
+    sta dist+1
+    jsr height
+    ldx ray
+    ldy HITH,x              ; bit 7: a north/south face (shade A); otherwise shade B
+    bmi :+
+    clc
+    adc #41
+:   sta RJ,x
     rts
 
 ; A = the ray's quadrant, new since the last ray: patch the walk's steps, pick the 1/cos tables, and
@@ -1364,7 +1560,7 @@ control:
 ; inp from joystick port 2 and the W/A/S/D keys (the KERNAL's last key pressed, $CB).
 input:
 .ifdef BENCH
-    lda #8                  ; benchmark: keep turning right
+    lda #BENCH_INPUT        ; benchmark: keep turning right (8) or walking forward (1)
     sta inp
     rts
 .endif
@@ -1447,29 +1643,30 @@ walk:
     sta py+1
 :   rts
 
-; Carry clear if a quarter-tile square around (nx, ny) is all open floor.
+; Carry clear if the square WALL_RADIUS around (nx, ny) is all open floor and no object is nearer
+; than OBJ_RADIUS on both axes, so the eye never comes near a wall or an object.
 clear:
     sec
     lda nx
-    sbc #64
+    sbc #WALL_RADIUS
     lda nx+1
     sbc #0
     sta xl
     clc
     lda nx
-    adc #64
+    adc #WALL_RADIUS
     lda nx+1
     adc #0
     sta xh
     sec
     lda ny
-    sbc #64
+    sbc #WALL_RADIUS
     lda ny+1
     sbc #0
     sta yl
     clc
     lda ny
-    adc #64
+    adc #WALL_RADIUS
     lda ny+1
     adc #0
     sta yh
@@ -1491,6 +1688,39 @@ clear:
     sta tc
     jsr tile
     bne @no
+.if NOBJ > 0
+    ldx #NOBJ - 1           ; and no object within OBJ_RADIUS on both axes: -R <= n - o < R
+@obj:
+    sec
+    lda nx
+    sbc OBJXLO,x
+    sta t0
+    lda nx+1
+    sbc OBJXHI,x
+    sta t1
+    clc
+    lda t0
+    adc #OBJ_RADIUS
+    lda t1
+    adc #0
+    bne @far
+    sec
+    lda ny
+    sbc OBJYLO,x
+    sta t0
+    lda ny+1
+    sbc OBJYHI,x
+    sta t1
+    clc
+    lda t0
+    adc #OBJ_RADIUS
+    lda t1
+    adc #0
+    beq @no
+@far:
+    dex
+    bpl @obj
+.endif
     clc
     rts
 @no:
@@ -1517,10 +1747,12 @@ YSTEP_LO: .byte 32, 32, $e0, $e0   ; +32 (south) or -32 (north) on the map row p
 YSTEP_BR: .byte $90, $90, $b0, $b0 ; BCC / BCS: skip the page change
 YSTEP_OP: .byte $e6, $e6, $c6, $c6 ; INC / DEC zp
 J82:     .byte 0, 82, 164       ; a ray's joint, in its draw byte
+.segment "HIGH"
 GCEIL:
 .repeat 256, I
     .byte (I + 63) / 64     ; ceil(u / 64)
 .endrepeat
+.segment "RODATA"
 KEYS:    .byte $09, $0d, $0a, $12 ; W S A D
 KEYBITS: .byte 1, 2, 4, 8
 ROWLO:

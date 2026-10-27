@@ -196,47 +196,41 @@ project:
 @skip:
     jmp @next
 
-    ; q = |lat| * FOCAL / depth, then floor for negative lat; centre = 160 + (q >> 6)
-:   lda lat
-    sta m_b
-    lda lat+1
-    sta m_b+1
-    lda #<FOCAL
-    jsr mul8x16
-    lda m_r
+    ; r = |lat| * 256 / depth (at most 512), q = ATAN_COL[r] ray columns (8.8) from the centre, negated
+    ; for negative lat; centre = 160 + (q >> 6)
+:   lda #0
     sta dv
-    lda m_r+1
-    sta dv+1
-    lda m_r+2
-    sta dv+2
-    lda #0
     sta dv+3
-    lda #>FOCAL
-    jsr mul8x16
-    clc
-    lda dv+1
-    adc m_r
+    lda lat
     sta dv+1
-    lda dv+2
-    adc m_r+1
+    lda lat+1
     sta dv+2
-    lda dv+3
-    adc m_r+2
-    sta dv+3
     lda depth
     sta ds
     lda depth+1
     sta ds+1
     jsr div32
+    lda #<ATLO
+    sta tp
+    lda #>ATLO
+    clc
+    adc dv+1
+    sta tp+1
+    ldy dv
+    lda (tp),y
+    tax
+    lda #<ATHI
+    sta tp
+    lda #>ATHI
+    clc
+    adc dv+1
+    sta tp+1
+    lda (tp),y
+    sta dv+1
+    stx dv
     bit neg
     bpl @pos
-    lda dv+2                ; negative: -(q + (remainder != 0))
-    ora dv+3
-    beq :+
-    inc dv
-    bne :+
-    inc dv+1
-:   sec
+    sec
     lda #0
     sbc dv
     sta dv

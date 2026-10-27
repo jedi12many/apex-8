@@ -51,8 +51,9 @@ const GRADIENT = {
 };
 if (GRADIENT.ceiling.length !== HALF_ROWS * 8 || GRADIENT.floor.length !== HALF_ROWS * 8) throw new Error('GRADIENT must cover each half');
 
-// Bricks only on walls with j (half height / 2) at least TEX_NEAR; 0 for every wall. See below.
-const TEX_NEAR = +(process.env.APEX_TEX_NEAR || 0); // 0: every wall
+// Bricks only on walls with j (half height / 2) at least TEX_NEAR; 0 for every wall. 20 (about 3
+// tiles) was tried: 5% faster, but bricks popped in too close. See below.
+const TEX_NEAR = 0;
 const caster = APEXRAY.makeCaster({ rays: 80, fov: 66, scale: 120, maxH: HALF_ROWS * 8, even: true, interpolate: true, fog: DARK, uNear: TEX_NEAR - 4 });
 
 // Bricks (multicolor only). A wall of half height h = 2j is 4 courses of bricks, mirrored about the

@@ -1,0 +1,92 @@
+/*
+ * APEX raycaster — the reference implementation every platform port is checked against.
+ *
+ * It uses integer maths only, the way an 8-bit CPU would run it, so a 6502 port that uses the same
+ * tables gets exactly the same numbers:
+ *   - positions are 8.8 fixed point in tiles (256 = one tile)
+ *   - angles run 0-1023 for a full turn: 0 east, 256 south (y grows downward, as in the map text)
+ *   - per ray, a DDA walk over the grid using sec() tables, then a fisheye correction per column
+ *
+ * makeCaster(opts) builds the tables for one view (ray count, field of view, wall scale); cast()
+ * returns one { halfH, side, tile, dist } per ray. Platforms turn those into pixels their own way.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXRAY = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const ANG = 1024, QUAD = 256, ONE = 256, MAX16 = 0xffff;
+  const rad = a => (a * 2 * Math.PI) / ANG;
+
+  // SEC[k] = 1/cos(k) for k in 0..256 (one quadrant), 8.8, saturating at $FFFF.
+  const SEC = Array.from({ length: QUAD + 1 }, (_, k) => {
+    const c = Math.cos(rad(k));
+    return c < ONE / MAX16 ? MAX16 : Math.min(MAX16, Math.round(ONE / c));
+  });
+  // SIN[k] for k in 0..256, 0.8 (256 = 1.0), for moving the player.
+  const SIN = Array.from({ length: QUAD + 1 }, (_, k) => Math.round(Math.sin(rad(k)) * ONE));
+
+  function sin(a) {
+    a &= ANG - 1;
+    const q = a >> 8, k = a & 255;
+    const v = q & 1 ? SIN[QUAD - k] : SIN[k];
+    return q & 2 ? -v : v;
+  }
+  const cos = a => sin(a + QUAD);
+
+  // opts: rays (columns), fov (degrees), scale (half-wall height in pixels at one tile), maxH (half the
+  // view height in pixels), even (round half-heights down to even pixels), maxSteps (DDA limit).
+  function makeCaster(opts = {}) {
+    const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64 }, opts);
+    const t = Math.tan((o.fov * Math.PI) / 360);
+    // Each ray's angle relative to the view direction: evenly spaced on the screen plane, not in angle.
+    const COL_ANGLE = Array.from({ length: o.rays }, (_, c) =>
+      Math.round((Math.atan((((c + 0.5) * 2) / o.rays - 1) * t) * ANG) / (2 * Math.PI)));
+    // Fisheye correction: cos of that angle, 0.8 fixed, capped at 255.
+    const COL_COS = COL_ANGLE.map(a => Math.min(255, Math.round(Math.cos(rad(a)) * ONE)));
+    const SCALE = o.scale * ONE;
+
+    // map: { w, h, cells: Uint8Array, 0 = open, anything else = a wall tile }; outside the map is solid.
+    function cast(map, px, py, pa) {
+      const out = [];
+      const solid = (x, y) => (x < 0 || y < 0 || x >= map.w || y >= map.h ? 1 : map.cells[y * map.w + x]);
+      for (let c = 0; c < o.rays; c++) {
+        const a = (pa + COL_ANGLE[c]) & (ANG - 1), q = a >> 8, k = a & 255;
+        const secX = q & 1 ? SEC[QUAD - k] : SEC[k], secY = q & 1 ? SEC[k] : SEC[QUAD - k];
+        const stepX = q === 0 || q === 3 ? 1 : -1, stepY = q < 2 ? 1 : -1;
+        let mapX = px >> 8, mapY = py >> 8;
+        const fx = px & 255, fy = py & 255;
+        let sideX = Math.min(MAX16, ((stepX > 0 ? ONE - fx : fx) * secX) >> 8);
+        let sideY = Math.min(MAX16, ((stepY > 0 ? ONE - fy : fy) * secY) >> 8);
+        let side = 0, dist = 0, tile = 0;
+        for (let n = 0; n < o.maxSteps; n++) {
+          if (sideX < sideY) { mapX += stepX; side = 0; dist = sideX; sideX = Math.min(MAX16, sideX + secX); }
+          else { mapY += stepY; side = 1; dist = sideY; sideY = Math.min(MAX16, sideY + secY); }
+          tile = solid(mapX, mapY);
+          if (tile) break;
+        }
+        const perp = (dist * COL_COS[c]) >> 8;
+        let halfH = perp ? Math.min(o.maxH, Math.floor(SCALE / perp)) : o.maxH;
+        if (o.even) halfH &= ~1;
+        out.push({ halfH, side, tile, dist: perp });
+      }
+      return out;
+    }
+
+    return { opts: o, COL_ANGLE, COL_COS, cast };
+  }
+
+  // Move by `speed` (8.8 tiles) along angle a, sliding along walls; keeps `radius` (8.8) clear of them.
+  function move(map, p, a, speed, radius = 64) {
+    const solid = (x, y) => x < 0 || y < 0 || x >= map.w || y >= map.h || map.cells[y * map.w + x];
+    const dx = (cos(a) * speed) >> 8, dy = (sin(a) * speed) >> 8;
+    const clear = (x, y) => !solid((x - radius) >> 8, (y - radius) >> 8) && !solid((x + radius) >> 8, (y - radius) >> 8) &&
+      !solid((x - radius) >> 8, (y + radius) >> 8) && !solid((x + radius) >> 8, (y + radius) >> 8);
+    if (clear(p.x + dx, p.y)) p.x += dx;
+    if (clear(p.x, p.y + dy)) p.y += dy;
+    return p;
+  }
+
+  return { ANG, QUAD, ONE, SEC, SIN, sin, cos, makeCaster, move };
+});

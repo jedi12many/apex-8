@@ -1,5 +1,5 @@
 // A walk through E1M1 in the C64 raycast view: the player looks around, then follows a loop of
-// corridors and rooms, turning smoothly at each corner.
+// corridors and rooms past guards, barrels and treasure (hardware sprites), turning smoothly at each corner.
 //
 //   node showcase/walk.js [--rom <chargen file>]
 //
@@ -47,9 +47,10 @@ function path_() {
 
 const frameAt = (p, mode) => VIEW.frame(map, p, mode, VIEW.statusLines(map, p));
 
-// Stills for the VICE test: a few points on the route, in both modes.
+// Stills for the VICE test, in both modes: eight sprites in use, a treasure clipped by a wall corner,
+// guards at three distances, barrels cut off by the screen edge.
 function stills() {
-  const route = path_(), picks = [0, 240, 300, 540, 660];
+  const route = path_(), picks = [200, 230, 290, 350, 570];
   return picks.flatMap(k => ['mc', 'hires'].map(mode => ({ name: `walk-${mode}-${String(k).padStart(4, '0')}`, frame: frameAt(route[k], mode) })));
 }
 

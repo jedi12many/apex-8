@@ -74,7 +74,18 @@
       return out;
     }
 
-    return { opts: o, COL_ANGLE, COL_COS, cast };
+    // Where a point object at (x, y) appears: depth along the view (8.8 tiles, comparable with a ray's
+    // dist), col its screen position in ray columns (8.8, 0 = left edge) and halfH the half height of a
+    // wall at that depth, uncapped. Null when it is behind the player or closer than an eighth of a tile.
+    const FOCAL = Math.round(((o.rays / 2) * ONE) / t);
+    function project(p, x, y) {
+      const dx = x - p.x, dy = y - p.y, c = cos(p.a), s = sin(p.a);
+      const depth = (dx * c + dy * s) >> 8, lat = (dy * c - dx * s) >> 8;
+      if (depth < 32) return null;
+      return { depth, col: (o.rays / 2) * ONE + Math.floor((lat * FOCAL) / depth), halfH: Math.floor(SCALE / depth) };
+    }
+
+    return { opts: o, COL_ANGLE, COL_COS, cast, project };
   }
 
   // Move by `speed` (8.8 tiles) along angle a, sliding along walls; keeps `radius` (8.8) clear of them.

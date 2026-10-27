@@ -9,9 +9,11 @@
  * Rays that hit an east/west face use wall shade B, north/south faces shade A, as Wolfenstein does.
  *
  * Multicolor colours: ceiling $D021, floor $D022, wall A $D023, wall B colour RAM (never changes).
+ * Objects (guards, barrels, treasure) are hardware sprites; see sprites.js.
  */
 const APEXSCII = require('../apexscii/apexscii.js');
 const APEXRAY = require('../core/raycast.js');
+const SPRITES = require('./sprites.js');
 const { RAY } = APEXSCII;
 
 const VIEW_ROWS = 20, HALF_ROWS = VIEW_ROWS / 2, STATUS_ROWS = 25 - VIEW_ROWS;
@@ -37,12 +39,14 @@ function viewCodes(rays) {
   return screen;
 }
 
-// A whole 40x25 frame: the view plus the status panel. status: up to 5 lines of text, where {...} is
-// shown in reverse video.
+// A whole 40x25 frame: the view, the map's objects as sprites, and the status panel. status: up to 5
+// lines of text, where {...} is shown in reverse video.
 function frame(map, player, mode = 'mc', status = []) {
   const C = COLOURS[mode], mc = mode === 'mc';
   const screen = new Uint8Array(1000).fill(0x20), color = new Uint8Array(1000).fill(C.text);
-  screen.set(viewCodes(caster.cast(map, player.x, player.y, player.a)));
+  const rays = caster.cast(map, player.x, player.y, player.a);
+  screen.set(viewCodes(rays));
+  const sprites = SPRITES.place(caster, rays, map.objects || [], player, { horizon: HALF_ROWS * 8, rows: VIEW_ROWS * 8, pxPerRay: 4 });
   color.fill(mc ? 8 | C.wallB : C.ink, 0, VIEW_ROWS * 40);
   status.slice(0, STATUS_ROWS).forEach((line, k) => {
     let col = 1, rev = false;
@@ -59,9 +63,9 @@ function frame(map, player, mode = 'mc', status = []) {
     ? { mode, bg: C.bg, mc1: C.mc1, mc2: C.mc2, border: C.border, romRows: STATUS_ROWS }
     : { mode, bg: C.bg, border: C.border, romRows: STATUS_ROWS };
   return {
-    chars, screen, color, opts,
-    prg: () => APEXSCII.screenPrg(chars, screen, color, opts),
-    rgba: rom => APEXSCII.screenRGB(chars, screen, color, opts, rom),
+    chars, screen, color, opts, sprites,
+    prg: () => SPRITES.prg(chars, screen, color, opts, sprites),
+    rgba: rom => SPRITES.overlay(APEXSCII.screenRGB(chars, screen, color, opts, rom), sprites),
   };
 }
 

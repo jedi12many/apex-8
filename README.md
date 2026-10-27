@@ -21,6 +21,7 @@ git clone --recurse-submodules https://github.com/jedi12many/apex.git
 | `core/level.js` | The level format |
 | `levels/` | Levels, as text grids |
 | `c64/view.js` | The C64 view: 80 rays drawn with APEXSCII glyphs, plus a ROM-font status panel |
+| `c64/sprites.js` | Guards, barrels and treasure as hardware sprites, scaled and hidden behind walls |
 | `showcase/walk.js` | A walk through E1M1 as videos, runnable stills and a contact sheet |
 | `test/vice-check.js` | Runs the stills in VICE and checks every pixel |
 | `apexscii/` | The character sets (submodule) |
@@ -46,6 +47,11 @@ Rays are spaced evenly across the screen, not in angle, so walls stay straight.
 - `tile`: the wall type
 - `dist`: the corrected distance
 
+`project(player, x, y)` places a point object for the same view. It returns:
+- `depth`: comparable with a ray's `dist`
+- `col`: the screen position in ray columns, 8.8
+- `halfH`: the half height of a wall at that depth
+
 `move()` moves the player, sliding along walls.
 
 ## Levels
@@ -58,6 +64,7 @@ Levels are text files with one character per tile:
 | `1`–`9` | a wall of that type |
 | `.` or a space | floor |
 | `N`, `E`, `S`, `W` | the player's start, facing that way |
+| `G`, `B`, `$` | floor with a guard, a barrel or treasure on it |
 
 Lines starting with `;` are comments, and the first comment names the level. See `levels/e1m1.txt`.
 
@@ -78,6 +85,22 @@ Lines starting with `;` are comments, and the first comment names the level. See
   - wall B: colour RAM
   
   The colour RAM is one constant value, so a frame only rewrites the 800 screen codes. Walls are foreground pixels, so hardware sprites with background priority hide behind them.
+
+### Sprites
+
+Guards, barrels and treasure are multicolor hardware sprites, so they keep their own colours and use no character slots. Each frame, `c64/sprites.js` does this for every object:
+1. **Project** it with `project()`.
+2. **Scale** it from its source art to its height at that depth, with feet on the floor.
+3. **Mask** it column by column wherever the ray in that column hit a wall nearer than the object. It disappears behind corners and doorways exactly, with no sprite-priority tricks.
+4. **Cut** what's left into 24×21 sprites. When X/Y expansion takes fewer sprites, it uses that, so a guard close up is 6 expanded sprites.
+
+The nearest objects claim the VIC's 8 sprites first, and an object that doesn't fit whole waits. On the C64 that work is a masked copy of a few hundred bytes per frame.
+
+Shared colours:
+- `$D025`: black outlines
+- `$D026`: light red skin and highlights
+
+Each object's own colour is brown for guards, green for barrels and yellow for treasure.
 
 ```bash
 node showcase/walk.js --rom "C:\path\to\GTK3VICE-3.10-win64\C64\chargen-901225-01.bin"
@@ -106,7 +129,8 @@ node test/vice-check.js "C:\path\to\GTK3VICE-3.10-win64"
 2. **Game:**
    - movement and collision on the C64
    - doors
-   - enemies as hardware sprites, which hide behind walls through sprite priority
+   - enemy behaviour and animation frames
+   - a sprite multiplexer for more than 8 sprites
 3. **Other machines:** 16-, 32- and 64-bit ports share `core/` and `levels/` and add bitmap rendering with textured walls.
 
 ## Licence

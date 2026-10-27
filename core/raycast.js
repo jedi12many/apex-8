@@ -9,6 +9,10 @@
  *
  * makeCaster(opts) builds the tables for one view (ray count, field of view, wall scale); cast()
  * returns one { halfH, side, tile, dist } per ray. Platforms turn those into pixels their own way.
+ *
+ * With opts.interpolate, only the even rays (and the last) are cast. An odd ray whose neighbours hit
+ * the same face of the same tile takes the mean of their heights and distances instead: on a flat wall
+ * 1/distance, and so the wall height, changes linearly across the screen. Any other odd ray is cast.
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -36,9 +40,10 @@
   const cos = a => sin(a + QUAD);
 
   // opts: rays (columns), fov (degrees), scale (half-wall height in pixels at one tile), maxH (half the
-  // view height in pixels), even (round half-heights down to even pixels), maxSteps (DDA limit).
+  // view height in pixels), even (round half-heights down to even pixels), maxSteps (DDA limit),
+  // interpolate (cast every other ray where it can, see above).
   function makeCaster(opts = {}) {
-    const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64 }, opts);
+    const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64, interpolate: false }, opts);
     const t = Math.tan((o.fov * Math.PI) / 360);
     // Each ray's angle relative to the view direction: evenly spaced on the screen plane, not in angle.
     const COL_ANGLE = Array.from({ length: o.rays }, (_, c) =>
@@ -49,9 +54,9 @@
 
     // map: { w, h, cells: Uint8Array, 0 = open, anything else = a wall tile }; outside the map is solid.
     function cast(map, px, py, pa) {
-      const out = [];
+      const out = new Array(o.rays);
       const solid = (x, y) => (x < 0 || y < 0 || x >= map.w || y >= map.h ? 1 : map.cells[y * map.w + x]);
-      for (let c = 0; c < o.rays; c++) {
+      const ray = c => {
         const a = (pa + COL_ANGLE[c]) & (ANG - 1), q = a >> 8, k = a & 255;
         const secX = q & 1 ? SEC[QUAD - k] : SEC[k], secY = q & 1 ? SEC[k] : SEC[QUAD - k];
         const stepX = q === 0 || q === 3 ? 1 : -1, stepY = q < 2 ? 1 : -1;
@@ -69,7 +74,20 @@
         const perp = (dist * COL_COS[c]) >> 8;
         let halfH = perp ? Math.min(o.maxH, Math.floor(SCALE / perp)) : o.maxH;
         if (o.even) halfH &= ~1;
-        out.push({ halfH, side, tile, dist: perp });
+        out[c] = { halfH, side, tile, dist: perp, mapX, mapY };
+      };
+      if (!o.interpolate) {
+        for (let c = 0; c < o.rays; c++) ray(c);
+        return out;
+      }
+      for (let c = 0; c < o.rays; c += 2) ray(c);
+      if (!(o.rays & 1)) ray(o.rays - 1);
+      for (let c = 1; c < o.rays - 1; c += 2) {
+        const l = out[c - 1], r = out[c + 1];
+        if (l.mapX !== r.mapX || l.mapY !== r.mapY || l.side !== r.side) { ray(c); continue; }
+        let halfH = (l.halfH + r.halfH) >> 1;
+        if (o.even) halfH &= ~1;
+        out[c] = { halfH, side: l.side, tile: l.tile, dist: (l.dist + r.dist) >> 1, mapX: l.mapX, mapY: l.mapY, interpolated: true };
       }
       return out;
     }

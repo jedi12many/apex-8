@@ -49,7 +49,9 @@ Platforms get their own folder: `c64/` now, and others as they're added.
 
 Rays are spaced evenly across the screen, not in angle, so walls stay straight.
 
-`makeCaster({ rays, fov, scale, maxH })` builds the tables for one view. `cast(map, x, y, angle)` returns one result per ray:
+With `interpolate`, only the even rays and the last are cast. An odd ray whose two neighbours hit the same face of the same tile takes the mean of their heights and distances. On a flat wall, 1/distance changes linearly across the screen, so the mean is within 2 pixels of a cast. Any other odd ray is cast. Along the E1M1 walk this casts 47.5 of the 80 rays a frame, and about 3 rays a frame differ from a full cast, by 2 pixels.
+
+`makeCaster({ rays, fov, scale, maxH, interpolate })` builds the tables for one view. `cast(map, x, y, angle)` returns one result per ray:
 - `halfH`: the half wall height
 - `side`: 0 when the ray hits an east/west face, 1 for north/south
 - `tile`: the wall type
@@ -81,14 +83,15 @@ Lines starting with `;` are comments, and the first comment names the level. See
 - **Layout:**
   - the view is 320×160 on rows 0–19, with 80 rays, two per character column
   - rows 20–24 are a status panel in the ROM font, shown through APEXSCII's raster split
+  - the engine shows 38 columns, so the border hides the outer 7 and 9 pixels
 - **Drawing:**
   - each ray's half height becomes a 9-state value per cell (empty, or wall shade A or B at 2/4/6/8 pixels)
   - the two rays in a column pick the screen code `$40 + 9 × left + right` above the horizon, and `$91 + …` below it
   - the bottom half mirrors the top half, so one height gives both
   - east/west faces are shade B, as in Wolfenstein
 - **Multicolor colours:**
-  - ceiling: `$D021`
-  - floor: `$D022`
+  - ceiling: `$D021`, shaded towards the horizon in the engine (see the gradient below)
+  - floor: `$D022`, likewise
   - wall A: `$D023`
   - wall B: colour RAM
   
@@ -115,7 +118,7 @@ node showcase/walk.js --rom "C:\path\to\GTK3VICE-3.10-win64\C64\chargen-901225-0
 ```
 
 This writes the following to `showcase/out/`:
-- `walk-mc.mp4` and `walk-hires.mp4`: 38 seconds at 25 fps
+- `walk-mc.mp4` and `walk-hires.mp4`: 38 seconds at 25 fps; the multicolor one looks as the engine does, with its gradient and 38 columns
 - ten runnable `.prg` stills
 - `walk.png`
 
@@ -126,14 +129,23 @@ It needs ffmpeg. `--rom` shows the status panel in the real C64 ROM font.
 `c64/apex.s` and `c64/sprites.s` are the engine in 6502 assembly, about 3.5KB of code. `c64/gen.js` generates all its tables from the reference: 1/cos, column angles, wall heights, screen codes, the status panel, and the objects' pre-scaled images. Because both use the same tables and the same integer steps, every ray, wall height and sprite comes out exactly the same.
 
 Each frame:
-1. **Controls:** they run once for every 50 Hz tick since the last frame, so walking and turning speed don't depend on the frame rate.
-2. **Rays:** all 80 are cast. The DDA keeps the map column in the Y register, so a step east or west is one `INY` or `DEY`, patched in for each ray. Multiplications use quarter-square tables, built at start-up at `$C000`. Wall heights come from a table lookup instead of a division.
+1. **Controls:** they run once for every 50 Hz tick since the last frame, so walking and turning speed don't depend on the frame rate. If the player hasn't moved or turned, the screen showing is already right, and the frame stops here.
+2. **Rays:** the even rays and the last are cast, then each odd ray is interpolated or cast, as in the reference. The DDA keeps the map column in the Y register, so a step east or west is one `INY` or `DEY`. Multiplications use quarter-square tables, built at start-up at `$C000`. The distance from the player to the next grid line is the same for every ray in a quadrant, so its multiplies, the steps and the 1/cos tables are patched in once per quadrant, not per ray. Wall heights come from a table lookup instead of a division.
 3. **Objects:** each is projected, using signed multiplies and a 32÷16 divide, and sorted nearest first.
 4. **Wait:** the engine waits until the last frame is showing.
 5. **Draw:** the view is drawn into the hidden screen, 400 cells of two lookups each. The objects' masked tiles go into that screen's sprite blocks, along with the status numbers.
-6. **Swap:** the screens swap. The IRQ at the top of the frame shows the new screen and loads its sprite registers from a shadow copy, so walls and sprites always change together. A second IRQ switches to the ROM font for the status panel.
+6. **Swap:** the screens swap. The IRQ at the top of the frame shows the new screen and loads its sprite registers from a shadow copy, so walls and sprites always change together. A last IRQ switches to the ROM font for the status panel.
 
-It runs at about 8–9 frames a second on a PAL C64: most of each frame is the 80 rays. Memory:
+**Gradient.** The ceiling and floor darken towards the horizon, with dithered stripes between shades. Raster IRQs, generated from the reference's `GRADIENT`, change `$D021` and `$D022` in the right border of the line before each change. Top glyphs never use the floor colour and bottom glyphs never the ceiling colour, so each register only has to be on time in its own half. Three things keep the writes in the border:
+- **No bad lines:** no change falls on a bad line or the line after one.
+- **A line between changes:** every wait starts before its line does.
+- **38-column mode:** the border hides the leftmost 7 and rightmost 9 pixels. Polling jitter and the VIC's sprite fetches can land a write a cycle early or late, and those pixels are where it would show.
+
+The write delay was found in VICE: 49 to 52 cycles draw every test frame exactly on PAL and NTSC, and the engine uses 50. The IRQs spin about 2,300 cycles of each 50 Hz frame, about 11% of the CPU.
+
+**Speed.** On the benchmark's quarter turn past the guards, a frame takes 124,553 cycles, 7.9 frames a second on PAL. Without the gradient it is 112,194 (8.8 fps); before interpolation and the per-quadrant set-up it was 144,208 (6.8 fps). With guards in view, projecting and cutting the sprites takes about as long as the rays. Standing still costs nothing.
+
+Memory:
 
 | Address | Contents |
 |---------|----------|
@@ -174,7 +186,7 @@ node test/c64-check.js "C:\path\to\GTK3VICE-3.10-win64"
 node test/c64-bench.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
-`test/c64-bench.js` builds a version that turns for 64 frames. It times them with the VICE monitor's stopwatch and prints cycles per frame and frames per second.
+`test/c64-bench.js` builds a version that turns 4/1024 of a turn every frame for 64 frames: a quarter turn from the start, past the guards. Each frame turns the same amount however long it takes, so every build draws the same frames. It times them with the VICE monitor's stopwatch and prints cycles per frame and frames per second.
 
 ## Roadmap
 
@@ -182,7 +194,7 @@ node test/c64-bench.js "C:\path\to\GTK3VICE-3.10-win64"
    - doors
    - enemy behaviour and animation frames
    - a sprite multiplexer for more than 8 sprites
-2. **Speed:** fewer cycles per ray. Most of each ray's time is fixed set-up, not the grid walk.
+2. **Speed:** objects. Projecting each one takes a 32÷16 divide, and cutting their sprites is now as costly as the rays when guards are close.
 3. **Other machines:** 16-, 32- and 64-bit ports share `core/` and `levels/` and add bitmap rendering with textured walls.
 
 ## Licence

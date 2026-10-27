@@ -58,7 +58,7 @@ for (const c of cases) {
   const want = VIEW.frame(map, c.pose, 'mc', VIEW.statusLines(map, c.pose));
   const label = c.name.padEnd(14);
   if (!screenshot(exe, prg, shot, { ntsc, cycles: 30000000 })) { console.log(`${label} no screenshot (did VICE start?)`); failures++; continue; }
-  const r = compare(shot, want.rgba(rom), want.opts.border, APEXSCII.PALETTE);
+  const r = compare(shot, want.rgba(rom, true), want.opts.border, APEXSCII.PALETTE);
   console.log(`${label} ${r.bad ? `${r.bad} pixels differ, first at ${r.first}` : 'all 64000 pixels match'}${r.borderOk ? '' : ' · border colour WRONG'}`);
   if (r.bad || !r.borderOk) failures++;
 }

@@ -77,7 +77,7 @@ if (require.main === module) {
       '-i', '-', '-vf', 'scale=iw*2:ih*2:flags=neighbor', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', file],
     { input: Buffer.concat(route.map(p => {
       const f = frameAt(p, mode), buf = Buffer.alloc(FW * FH * 3);
-      bordered(f.rgba(rom), f.opts.border, buf, FW, 0, 0);
+      bordered(f.rgba(rom, true), f.opts.border, buf, FW, 0, 0);
       return buf;
     })), maxBuffer: 1 << 30 });
     if (ff.status) throw new Error('ffmpeg failed: ' + ff.stderr);

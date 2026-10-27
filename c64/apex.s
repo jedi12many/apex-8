@@ -1643,29 +1643,30 @@ walk:
     sta py+1
 :   rts
 
-; Carry clear if a quarter-tile square around (nx, ny) is all open floor.
+; Carry clear if the square WALL_RADIUS around (nx, ny) is all open floor and no object is nearer
+; than OBJ_RADIUS on both axes, so the eye never comes near a wall or an object.
 clear:
     sec
     lda nx
-    sbc #64
+    sbc #WALL_RADIUS
     lda nx+1
     sbc #0
     sta xl
     clc
     lda nx
-    adc #64
+    adc #WALL_RADIUS
     lda nx+1
     adc #0
     sta xh
     sec
     lda ny
-    sbc #64
+    sbc #WALL_RADIUS
     lda ny+1
     sbc #0
     sta yl
     clc
     lda ny
-    adc #64
+    adc #WALL_RADIUS
     lda ny+1
     adc #0
     sta yh
@@ -1687,6 +1688,39 @@ clear:
     sta tc
     jsr tile
     bne @no
+.if NOBJ > 0
+    ldx #NOBJ - 1           ; and no object within OBJ_RADIUS on both axes: -R <= n - o < R
+@obj:
+    sec
+    lda nx
+    sbc OBJXLO,x
+    sta t0
+    lda nx+1
+    sbc OBJXHI,x
+    sta t1
+    clc
+    lda t0
+    adc #OBJ_RADIUS
+    lda t1
+    adc #0
+    bne @far
+    sec
+    lda ny
+    sbc OBJYLO,x
+    sta t0
+    lda ny+1
+    sbc OBJYHI,x
+    sta t1
+    clc
+    lda t0
+    adc #OBJ_RADIUS
+    lda t1
+    adc #0
+    beq @no
+@far:
+    dex
+    bpl @obj
+.endif
     clc
     rts
 @no:

@@ -47,13 +47,13 @@ Platforms get their own folder: `c64/` now, and others as they're added.
   - its distance gets a per-column fisheye correction
 - **Half wall height** is `scale × 256 / distance`, capped at half the view.
 
-Rays are spaced evenly across the screen, not in angle, so walls stay straight.
+Rays are spaced evenly across the screen, not in angle, so walls stay straight. With `angleStep`, they are that many angle units apart instead (the field of view is `rays × angleStep`). Turning by a multiple of it then shifts the rays, so a port can keep the ones it has. Walls bow a little at the sides, and `project()` places objects by angle, through the table `ATAN_COL`.
 
 With `interpolate`, only the even rays and the last are cast. An odd ray whose two neighbours hit the same face of the same tile takes the mean of their heights and distances. On a flat wall, 1/distance changes linearly across the screen, so the mean is within 2 pixels of a cast. Any other odd ray is cast. Along the E1M1 walk this casts 47.5 of the 80 rays a frame, and about 3 rays a frame differ from a full cast, by 2 pixels.
 
 With `fog`, a wall whose half height would be `fog` pixels or less is too far away to see. Its ray returns no wall (`halfH` 0, `dist` 0xFFFF), and `project()` leaves out objects at that depth or more. `FOG_PERP` is the nearest distance where that happens, so a port can stop each ray's walk there.
 
-`makeCaster({ rays, fov, scale, maxH, interpolate, fog })` builds the tables for one view. `cast(map, x, y, angle)` returns one result per ray:
+`makeCaster({ rays, fov, angleStep, scale, maxH, interpolate, fog })` builds the tables for one view. `cast(map, x, y, angle)` returns one result per ray:
 - `halfH`: the half wall height
 - `side`: 0 when the ray hits an east/west face, 1 for north/south
 - `tile`: the wall type
@@ -83,7 +83,7 @@ Lines starting with `;` are comments, and the first comment names the level. See
 ## C64 view
 
 - **Layout:**
-  - the view is 320×160 on rows 0–19, with 80 rays, two per character column
+  - the view is 320×160 on rows 0–19, with 80 rays, two per character column, 2 angle units apart: a 56° view at scale 120
   - rows 20–24 are a status panel in the ROM font, shown through APEXSCII's raster split
   - the engine shows 38 columns, so the border hides the outer 7 and 9 pixels
 - **Drawing:**
@@ -132,9 +132,9 @@ It needs ffmpeg. `--rom` shows the status panel in the real C64 ROM font.
 `c64/apex.s` and `c64/sprites.s` are the engine in 6502 assembly, about 3.5KB of code. `c64/gen.js` generates all its tables from the reference: 1/cos, column angles, wall heights, screen codes, the status panel, and the objects' pre-scaled images. Because both use the same tables and the same integer steps, every ray, wall height and sprite comes out exactly the same.
 
 Each frame:
-1. **Controls:** they run once for every 50 Hz tick since the last frame, so walking and turning speed don't depend on the frame rate. If the player hasn't moved or turned, the screen showing is already right, and the frame stops here.
-2. **Rays:** the even rays and the last are cast, then each odd ray is interpolated or cast, as in the reference. The DDA keeps the map column in the Y register, so a step east or west is one `INY` or `DEY`. Multiplications use quarter-square tables, built at start-up at `$C000`. The distance from the player to the next grid line is the same for every ray in a quadrant, so its multiplies, the steps and the 1/cos tables are patched in once per quadrant, not per ray. Wall heights come from a table lookup instead of a division.
-3. **Objects:** each is projected, using signed multiplies and a 32÷16 divide, and sorted nearest first.
+1. **Controls:** they run once for every 50 Hz tick since the last frame, so walking and turning speed don't depend on the frame rate. The player keeps 3/8 of a tile from walls and half a tile from an object's centre, on each axis, sliding along both; the test scripts check this against the same moves in JavaScript. If the player hasn't moved or turned, the screen showing is already right, and the frame stops here.
+2. **Rays:** the even rays and the last are cast, then each odd ray is interpolated or cast, as in the reference. When the player has only turned, ray c is the ray c + turn / 2 was, so what its walk found (distance, face, `u`) shifts across, and only its corrected distance and height are worked out again. Only the rays coming in at the edge are cast. A fog ray keeps a lower bound on its distance, and is cast again if a column with a nearer fog line needs it. The DDA keeps the map column in the Y register, so a step east or west is one `INY` or `DEY`. Multiplications use quarter-square tables, built at start-up at `$C000`. The distance from the player to the next grid line is the same for every ray in a quadrant, so its multiplies, the steps and the 1/cos tables are patched in once per quadrant, not per ray. Wall heights come from a table lookup instead of a division.
+3. **Objects:** each is projected, using signed multiplies, a 32÷16 divide and the angle table, and sorted nearest first.
 4. **Wait:** the engine waits until the last frame is showing.
 5. **Draw:** the view is drawn into the hidden screen, 400 cells of two lookups each. The objects' masked tiles go into that screen's sprite blocks, along with the status numbers.
 6. **Swap:** the screens swap. The IRQ at the top of the frame shows the new screen and loads its sprite registers from a shadow copy, so walls and sprites always change together. A last IRQ switches to the ROM font for the status panel.
@@ -150,16 +150,18 @@ The write delay was found in VICE: 49 to 52 cycles draw every test frame exactly
 
 **Bricks.** At each hit the engine works out `u` with one more quarter-square multiply. After the cast, a pass gives each ray its joint (a table of ceil(u / 64)) and packs j, shade and joint into one byte. The draw looks up per-row tables for the left and right states, then a pair table for each half's screen code; as the bottom mirrors the top, one lookup serves both. The tables take 5KB, and the program is now 31KB.
 
-**Speed.** On the benchmark's quarter turn past the guards, a frame takes 126,495 cycles, 7.8 frames a second on PAL:
+**Speed.** On PAL, turning a quarter turn past the guards and walking along the first corridor:
 
-| Build | Cycles a frame | Frames a second |
-|-------|----------------|-----------------|
-| Before interpolation and per-quadrant set-up | 144,208 | 6.8 |
-| With them | 112,194 | 8.8 |
-| Plus the gradient | 124,553 | 7.9 |
-| Plus fog | 106,285 | 9.3 |
-| Plus bricks | 126,495 | 7.8 |
-| Bricks only within about 3 tiles (`TEX_NEAR` 20) | 119,608 | 8.2 |
+| Build | Turning | Walking |
+|-------|---------|---------|
+| Before interpolation and per-quadrant set-up | 144,208 (6.8 fps) | |
+| With them | 112,194 (8.8 fps) | |
+| Plus the gradient | 124,553 (7.9 fps) | |
+| Plus fog | 106,285 (9.3 fps) | |
+| Plus bricks | 126,495 (7.8 fps) | 126,040 (7.8 fps) |
+| Rays 2 angle units apart, kept when turning | 86,266 (11.4 fps) | 127,791 (7.7 fps) |
+
+Bricks only on walls within about 3 tiles (`TEX_NEAR` 20) ran at 8.2 fps turning before ray reuse, and scale 160 (in proportion at 56°) at 9.4 turning and 7.4 walking. Neither was worth it.
 
 With guards close by, projecting and cutting their sprites takes about as long as the rays. Standing still costs nothing.
 
@@ -197,14 +199,14 @@ node test/vice-check.js "C:\path\to\GTK3VICE-3.10-win64"
 
 `--ntsc` runs on an NTSC machine. `--cycles 12000000,15000017` screenshots at each listed cycle count. The script ends with PASS or FAIL.
 
-`test/c64-check.js` tests the 6502 engine itself. It builds the engine in test mode at 11 poses along the walk, so each build draws one frame and stops. Two more builds play scripted controls: turning, walking, and sliding along and into walls. Their final position must match the same moves made in JavaScript. Every frame the C64 draws must match the reference pixel for pixel, sprites included. Pass `--ntsc` to test on NTSC too.
+`test/c64-check.js` tests the 6502 engine itself. It builds the engine in test mode at 11 poses along the walk, so each build draws one frame and stops. Three more builds play scripted controls: turning (which reuses rays), walking, and sliding along and into walls and a guard. Their final position must match the same moves made in JavaScript. Every frame the C64 draws must match the reference pixel for pixel, sprites included. Pass `--ntsc` to test on NTSC too.
 
 ```bash
 node test/c64-check.js "C:\path\to\GTK3VICE-3.10-win64"
 node test/c64-bench.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
-`test/c64-bench.js` builds a version that turns 4/1024 of a turn every frame for 64 frames: a quarter turn from the start, past the guards. Each frame turns the same amount however long it takes, so every build draws the same frames. It times them with the VICE monitor's stopwatch and prints cycles per frame and frames per second.
+`test/c64-bench.js` builds a version that turns 4/1024 of a turn every frame for 64 frames: a quarter turn from the start, past the guards. Each frame turns the same amount however long it takes, so every build draws the same frames. `--walk` walks along the first corridor instead. It times them with the VICE monitor's stopwatch and prints cycles per frame and frames per second.
 
 ## Roadmap
 

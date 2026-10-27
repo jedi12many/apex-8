@@ -13,6 +13,8 @@ const SPRITES = require('./sprites.js');
 const LEVEL_STRIDE = 32;          // map rows are padded to 32 tiles, so row offsets are a shift
 const MOVE_SPEED = 6;             // 8.8 tiles per 50 Hz tick
 const HEADING_STEP = 4;           // the player's angle is always a multiple of this
+const WALL_RADIUS = 96;           // the player keeps 3/8 of a tile from walls on each axis
+const OBJ_RADIUS = 128;           // and half a tile from an object's centre, on one axis at least
 
 const hex = v => '$' + (v & 0xff).toString(16).padStart(2, '0');
 const bytes = (label, arr, per = 16) => {
@@ -110,7 +112,7 @@ function gen(map, outDir, testPose) {
     bytes('DEC0', Array.from({ length: 33 }, (_, n) => digits(String(n).padStart(2, '0'))[0])),
     bytes('DEC1', Array.from({ length: 33 }, (_, n) => digits(String(n).padStart(2, '0'))[1])),
     bytes('LEVEL', LEVEL, LEVEL_STRIDE),
-    `NOBJ = ${objects.length}`, `NSIZES = ${SPRITES.SIZES.length}`,
+    `NOBJ = ${objects.length}`, `WALL_RADIUS = ${WALL_RADIUS}`, `OBJ_RADIUS = ${OBJ_RADIUS}`, `NSIZES = ${SPRITES.SIZES.length}`,
     `FOCAL = ${Math.round(((rays / 2) * 256) / Math.tan((o.fov * Math.PI) / 360))}`, `SCALE = ${SCALE}`,
     `SPR_MC1 = ${SPRITES.SHARED.mc1}`, `SPR_MC2 = ${SPRITES.SHARED.mc2}`,
     '.segment "HIGH"',
@@ -170,7 +172,7 @@ function draw() {
 // Changes up to 4 lines apart share one IRQ, which starts 3 lines before the first (an IRQ can arrive
 // almost 2 lines late: a bad line and sprite fetches can hold the CPU before it starts). The last IRQ hands
 // on to the status panel's split; irq_top sets the first colours and starts the chain at GRAD_TRIGGER.
-const GRAD_DELAY = +(process.env.APEX_GRAD_DELAY || 48);
+const GRAD_DELAY = +(process.env.APEX_GRAD_DELAY || 50);
 const delay = n => {
   const out = [];
   if (n >= 11) { const k = Math.floor((n - 1) / 5) - (((n - 1) % 5) === 1 ? 1 : 0); out.push(`    ldx #${k}`, ':   dex', '    bne :-'); n -= 5 * k + 1; }
@@ -204,4 +206,4 @@ function gradient() {
   return out.join('\n') + '\n';
 }
 
-module.exports = { gen, MOVE_SPEED, HEADING_STEP };
+module.exports = { gen, MOVE_SPEED, HEADING_STEP, WALL_RADIUS, OBJ_RADIUS };

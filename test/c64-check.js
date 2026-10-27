@@ -11,7 +11,7 @@ const { findVice, screenshot, compare } = require('./vice-lib.js');
 const APEXSCII = require('../apexscii/apexscii.js');
 const APEXRAY = require('../core/raycast.js');
 const VIEW = require('../c64/view.js');
-const { MOVE_SPEED, HEADING_STEP } = require('../c64/gen.js');
+const { MOVE_SPEED, HEADING_STEP, WALL_RADIUS, OBJ_RADIUS } = require('../c64/gen.js');
 const { map, build } = require('../c64/build.js');
 const walk = require('../showcase/walk.js');
 
@@ -21,10 +21,13 @@ const ntsc = args.includes('--ntsc');
 if (!viceDir) { console.error('usage: node test/c64-check.js <VICE folder> [--ntsc]'); process.exit(2); }
 
 // The engine's controls, tick by tick from the start: turn by HEADING_STEP, or step MOVE_SPEED along
-// the heading (backwards negates the step), each axis only if a quarter-tile square stays clear.
+// the heading (backwards negates the step), each axis only if the square WALL_RADIUS around the
+// new position is clear of walls and no object is within OBJ_RADIUS on both axes.
 function play(script) {
   const solid = (tx, ty) => tx < 0 || ty < 0 || tx >= map.w || ty >= map.h || map.cells[ty * map.w + tx];
-  const clear = (x, y) => [[-64, -64], [64, -64], [-64, 64], [64, 64]].every(([ox, oy]) => !solid((x + ox) >> 8, (y + oy) >> 8));
+  const R = WALL_RADIUS, near = d => d >= -OBJ_RADIUS && d < OBJ_RADIUS;
+  const clear = (x, y) => [[-R, -R], [R, -R], [-R, R], [R, R]].every(([ox, oy]) => !solid((x + ox) >> 8, (y + oy) >> 8)) &&
+    !(map.objects || []).some(o => near(x - o.x) && near(y - o.y));
   const p = { ...map.start };
   for (const [bits, n] of script) for (let k = 0; k < n; k++) {
     if (bits & 4) p.a = (p.a - HEADING_STEP) & 1023;
@@ -41,6 +44,7 @@ function play(script) {
 const SCRIPTS = [
   ['turn and walk', [[8, 32], [1, 120], [4, 64], [1, 90]]],
   ['into a wall', [[1, 200], [8, 20], [1, 150], [2, 40]]],
+  ['into a guard', [[8, 32], [1, 150]]],
 ];
 
 const { exe, rom } = findVice(viceDir);

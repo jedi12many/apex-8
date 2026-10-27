@@ -51,6 +51,7 @@ savedy:  .res 2
 front:   .res 1             ; 0 = screen A showing, 1 = screen B
 ticks:   .res 1             ; counts frames (the top-of-frame IRQ)
 flipt:   .res 1             ; ticks when the last flip was asked for
+shbuf:   .res 1             ; whose sprite registers the IRQ loads: 0 = screen A, 1 = B
 last:    .res 1
 nt:      .res 1
 d018top: .res 1             ; $D018 above and below the split, for the screen showing
@@ -157,6 +158,16 @@ start:
 .endif
 
     jsr init_squares
+    lda #$ff                ; sprites: all multicolor, in front, shared colours
+    sta $d01c
+    lda #0
+    sta $d01b
+    sta $d015
+    sta shbuf
+    lda #SPR_MC1
+    sta $d025
+    lda #SPR_MC2
+    sta $d026
 .ifdef SCRIPT
     lda #0
     sta sidx
@@ -165,7 +176,11 @@ start:
 
     ; The first frame goes straight into screen A, then the split starts.
     jsr cast
+    jsr project
+    lda #0
+    sta buf
     jsr draw_a
+    jsr cut_all
     jsr status_a
     lda #D018_A
     sta d018top
@@ -203,27 +218,37 @@ park:
 main:
     jsr control
     jsr cast
+    jsr project
     lda flipt               ; the last flip must be showing before drawing over the other screen
 :   cmp ticks
     beq :-
     lda front
     bne @into_a
+    lda #1
+    sta buf
     jsr draw_b
+    jsr cut_all
     jsr status_b
     lda #D018_B
     ldx #D018_ROM_B
     ldy #1
     bne @flip
 @into_a:
+    lda #0
+    sta buf
     jsr draw_a
+    jsr cut_all
     jsr status_a
     lda #D018_A
     ldx #D018_ROM_A
     ldy #0
 @flip:
+    sei                     ; the screen and its sprites switch together
     sty front
+    sty shbuf
     stx d018rom
     sta d018top
+    cli
     lda ticks               ; the top-of-frame IRQ after this one shows it
     sta flipt
 .ifdef BENCH
@@ -263,6 +288,27 @@ irq_split:
 irq_top:
     lda d018top
     sta $d018
+    lda shbuf               ; that screen's sprites
+    asl
+    asl
+    asl
+    tax
+.repeat 8, I
+    lda SHX+I,x
+    sta $d000 + 2 * I
+    lda SHY+I,x
+    sta $d001 + 2 * I
+    lda SHC+I,x
+    sta $d027 + I
+.endrepeat
+    ldx shbuf
+    lda SHMSB,x
+    sta $d010
+    lda SHEXP,x
+    sta $d017
+    sta $d01d
+    lda SHEN,x
+    sta $d015
     inc ticks
     lda #SPLIT_LINE - 2
     sta $d012
@@ -527,6 +573,11 @@ cast:
     sta m_b+1
     lda COLCOS,x
     jsr mul8x16
+    ldx ray                 ; kept for the sprites' wall test
+    lda m_r+1
+    sta PERPLO,x
+    lda m_r+2
+    sta PERPHI,x
 
     ; j: JT gives the largest j for the start of perp's 32-wide bucket; step down while perp > TE[j].
     lda m_r+2
@@ -974,6 +1025,8 @@ tile:
     lda (tp),y
     rts
 .endif
+
+.include "sprites.s"
 
 .segment "RODATA"
 XSTEP_OP: .byte $c8, $88, $88, $c8 ; per quadrant of the ray angle: INY (east) or DEY (west)

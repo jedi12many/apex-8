@@ -3,11 +3,15 @@
  *
  * Each frame, every visible object goes through these steps:
  *   1. projected with the reference raycaster
- *   2. scaled to its depth from multicolor source art
- *   3. masked column by column against the rays, so it disappears behind nearer walls
- *   4. cut into 24x21 sprites; an object uses X/Y expansion when that takes fewer sprites
+ *   2. given the image for its height: heights are rounded down to one of SIZES, and each size's
+ *      image is scaled from multicolor source art once (on the C64, at start-up)
+ *   3. masked column by column against the rays, so it disappears behind nearer walls, and row by row
+ *      to the view
+ *   4. cut into 24x21 sprites on a fixed grid; an object uses X/Y expansion when that takes fewer
+ *      sprites. The grid starts at the first byte-aligned column a sprite can reach on the left (VIC
+ *      x >= 0) and at the top of the view, so the C64 copies whole bytes and never shifts pixels.
  * The nearest objects claim the VIC's 8 sprites first, and an object that doesn't fit whole is skipped.
- * A C64 engine does the same work each frame: the masked copy is a few hundred bytes.
+ * c64/apex.s does exactly this each frame, and the VICE test checks it pixel for pixel.
  *
  * Source art: '.' transparent, 'a' $D025 (black outline), 'b' the object's own colour,
  * 'c' $D026 (light red: skin, highlights). One fat pixel is two screen pixels wide.
@@ -48,8 +52,46 @@ for (const [name, t] of Object.entries(TYPES)) {
   if (t.art.some(r => r.length !== t.art[0].length)) throw new Error(`sprite art for ${name} has ragged rows`);
 }
 
+// The heights an object can have on screen, in pixels: about 12% apart, from 4 up.
+const SIZES = [];
+for (let h = 4; h <= 210; h = Math.max(h + 1, Math.floor(h * 1.125))) SIZES.push(h);
+
+// One type's image at one of SIZES: expansion, fat pixels per row, rows and the 2-bit pixels.
+const IMAGES = new Map();
+function image(type, H) {
+  const key = type.art + H;
+  if (IMAGES.has(key)) return IMAGES.get(key);
+  const art = type.art, artW = art[0].length, artH = art.length;
+  const W = Math.max(2, Math.round((H * artW * 2) / artH));
+  // Fewer sprites wins; on a tie, unexpanded (finer pixels).
+  const count = e => Math.ceil(W / (24 * (1 + e))) * Math.ceil(H / (21 * (1 + e)));
+  const e = count(1) < count(0) ? 1 : 0, u = 2 * (1 + e), ey = 1 + e;
+  const fatW = Math.max(1, Math.round(W / u)), rows = Math.max(1, Math.round(H / ey));
+  const px = new Uint8Array(fatW * rows);
+  for (let ry = 0; ry < rows; ry++) {
+    const src = art[Math.floor((ry * artH) / rows)];
+    for (let fx = 0; fx < fatW; fx++) px[ry * fatW + fx] = '.abc'.indexOf(src[Math.floor((fx * artW) / fatW)]);
+  }
+  const img = { e, u, ey, fatW, rows, px };
+  IMAGES.set(key, img);
+  return img;
+}
+// The largest of SIZES not above H, or -1 when H is below the smallest.
+const sizeIndex = H => { let k = -1; while (k + 1 < SIZES.length && SIZES[k + 1] <= H) k++; return k; };
+// A type's largest size: the last one whose whole image fits in the VIC's 8 sprites. Closer objects
+// stay at that size.
+function maxSize(type) {
+  let k = 0;
+  while (k + 1 < SIZES.length) {
+    const im = image(type, SIZES[k + 1]);
+    if (Math.ceil(im.fatW / 12) * Math.ceil(im.rows / 21) > 8) break;
+    k++;
+  }
+  return k;
+}
+
 // The sprite set for one frame. view: { horizon, rows (pixel rows of the view), pxPerRay }.
-// Returns { mc1, mc2, frames, list } as overlaySprites and spritePrg take it.
+// Returns { mc1, mc2, frames, list } as overlay and prg take it.
 function place(caster, rays, objects, player, view) {
   const seen = [];
   for (const o of objects) {
@@ -69,39 +111,30 @@ function place(caster, rays, objects, player, view) {
 
 // One object's masked sprites: [{ x, y, mc, xx, yy, data }].
 function cut(type, pr, rays, view) {
-  const art = type.art, artW = art[0].length, artH = art.length;
-  const H = (2 * pr.halfH * type.height) >> 8;
-  if (H < 4) return [];
-  const W = Math.max(2, Math.round((H * artW * 2) / artH));
-  // Fewer sprites wins; on a tie, unexpanded (finer pixels).
-  const count = e => Math.ceil(W / (24 * (1 + e))) * Math.ceil(H / (21 * (1 + e)));
-  const e = count(1) < count(0) ? 1 : 0, u = 2 * (1 + e), ey = 1 + e;
-  const fatW = Math.max(1, Math.round(W / u)), rows = Math.max(1, Math.round(H / ey));
-  const centre = Math.floor((pr.col * view.pxPerRay) / 256);
-  const left = centre - ((fatW * u) >> 1), bottom = view.horizon + pr.halfH, top = bottom - rows * ey;
-  // The scaled, masked image, in fat pixels.
-  const img = [];
-  let fx0 = Infinity, fx1 = -1, ry0 = Infinity, ry1 = -1;
-  for (let ry = 0; ry < rows; ry++) {
-    const line = new Uint8Array(fatW), Y = top + ry * ey;
-    const src = art[Math.floor((ry * artH) / rows)];
-    for (let fx = 0; fx < fatW; fx++) {
-      const Xc = left + fx * u + (u >> 1), ray = Math.floor(Xc / view.pxPerRay);
-      if (Y < 0 || Y + ey > view.rows || Xc < 0 || ray >= rays.length || pr.depth >= rays[ray].dist) continue;
-      const v = '.abc'.indexOf(src[Math.floor((fx * artW) / fatW)]);
-      if (!v) continue;
-      line[fx] = v;
-      fx0 = Math.min(fx0, fx); fx1 = Math.max(fx1, fx); ry0 = Math.min(ry0, ry); ry1 = Math.max(ry1, ry);
-    }
-    img.push(line);
-  }
+  let k = sizeIndex((2 * pr.halfH * type.height) >> 8);
+  if (k < 0) return [];
+  k = Math.min(k, maxSize(type));
+  const { e, u, ey, fatW, rows, px } = image(type, SIZES[k]);
+  const left = ((pr.col * view.pxPerRay) >> 8) - ((fatW * u) >> 1), top = view.horizon + pr.halfH - rows * ey;
+  // Where the grid starts: columns in steps of 4 (one byte) until VIC x >= 0; rows at the view's top.
+  let k0 = 0;
+  while (left + k0 * u < -24) k0 += 4;
+  const r0 = top >= 0 ? 0 : Math.ceil(-top / ey);
+  const colOn = Array.from({ length: fatW }, (_, fx) => {
+    const Xc = left + fx * u + (u >> 1);
+    return Xc >= 0 && Xc < view.pxPerRay * rays.length && pr.depth < rays[Xc >> 2].dist;
+  });
+  const rowOn = ry => { const Y = top + ry * ey; return Y >= 0 && Y + ey <= view.rows; };
   const out = [];
-  for (let ty = ry0; ty <= ry1; ty += 21) for (let tx = fx0; tx <= fx1; tx += 12) {
+  for (let ty = r0; ty < rows; ty += 21) for (let tx = k0; tx < fatW; tx += 12) {
     const data = new Uint8Array(64);
     let any = false;
-    for (let y = 0; y < 21 && ty + y < rows; y++) for (let x = 0; x < 12 && tx + x < fatW; x++) {
-      const v = img[ty + y][tx + x];
-      if (v) { data[y * 3 + (x >> 2)] |= v << (6 - 2 * (x & 3)); any = true; }
+    for (let y = 0; y < 21 && ty + y < rows; y++) {
+      if (!rowOn(ty + y)) continue;
+      for (let x = 0; x < 12 && tx + x < fatW; x++) {
+        const v = colOn[tx + x] ? px[(ty + y) * fatW + tx + x] : 0;
+        if (v) { data[y * 3 + (x >> 2)] |= v << (6 - 2 * (x & 3)); any = true; }
+      }
     }
     if (any) out.push({ x: left + tx * u, y: top + ty * ey, mc: true, xx: !!e, yy: !!e, data });
   }
@@ -159,4 +192,4 @@ function prg(chars, screen, color, opts, sprites) {
   return out;
 }
 
-module.exports = { SHARED, TYPES, place, cut, overlay, prg };
+module.exports = { SHARED, TYPES, SIZES, image, sizeIndex, maxSize, place, cut, overlay, prg };

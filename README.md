@@ -13,6 +13,8 @@ Each port draws in its own way, and is tested pixel for pixel against the refere
 git clone --recurse-submodules https://github.com/jedi12many/apex.git
 ```
 
+To play on a C64 or in VICE, load `c64/out/apex.prg` with `LOAD"*",8,1`, then `RUN`. Use a joystick in port 2, or W and S to walk and A and D to turn. `showcase/out/c64-e1m1.mp4` is a recording of it running in VICE.
+
 ## Layout
 
 | Path | What it is |
@@ -22,8 +24,14 @@ git clone --recurse-submodules https://github.com/jedi12many/apex.git
 | `levels/` | Levels, as text grids |
 | `c64/view.js` | The C64 view: 80 rays drawn with APEXSCII glyphs, plus a ROM-font status panel |
 | `c64/sprites.js` | Guards, barrels and treasure as hardware sprites, scaled and hidden behind walls |
-| `showcase/walk.js` | A walk through E1M1 as videos, runnable stills and a contact sheet |
-| `test/vice-check.js` | Runs the stills in VICE and checks every pixel |
+| `c64/apex.s`, `c64/sprites.s` | The C64 engine in 6502 assembly |
+| `c64/gen.js`, `c64/build.js` | Generate the engine's tables from the reference, then assemble it with cc65 |
+| `c64/out/apex.prg` | The engine with E1M1, ready to run |
+| `showcase/walk.js` | A walk through E1M1 rendered by the reference, as videos, runnable stills and a contact sheet |
+| `showcase/c64-video.js` | Records the real engine running in VICE |
+| `test/vice-check.js` | Runs the reference stills in VICE and checks every pixel |
+| `test/c64-check.js` | Runs frames drawn by the 6502 engine in VICE and checks every pixel against the reference |
+| `test/c64-bench.js` | Measures the engine's frame rate in VICE |
 | `apexscii/` | The character sets (submodule) |
 
 Platforms get their own folder: `c64/` now, and others as they're added.
@@ -90,11 +98,11 @@ Lines starting with `;` are comments, and the first comment names the level. See
 
 Guards, barrels and treasure are multicolor hardware sprites, so they keep their own colours and use no character slots. Each frame, `c64/sprites.js` does this for every object:
 1. **Project** it with `project()`.
-2. **Scale** it from its source art to its height at that depth, with feet on the floor.
-3. **Mask** it column by column wherever the ray in that column hit a wall nearer than the object. It disappears behind corners and doorways exactly, with no sprite-priority tricks.
-4. **Cut** what's left into 24×21 sprites. When X/Y expansion takes fewer sprites, it uses that, so a guard close up is 6 expanded sprites.
+2. **Size** it: its height at that depth is rounded down to one of 36 fixed sizes, about 12% apart. Each size has an image scaled once from the source art. A type stops growing at the largest size that fits in 8 sprites: 144 pixels for a guard.
+3. **Mask** it column by column wherever the ray in that column hit a wall nearer than the object. It disappears behind corners and doorways exactly, with no sprite-priority tricks. Rows outside the view are masked too.
+4. **Cut** it into 24×21 sprites on a fixed grid. The grid starts at the first whole byte of columns that a sprite can reach at the left edge, and at the top of the view, so the C64 only copies and masks whole bytes. When X/Y expansion takes fewer sprites, it uses that, so a guard close up is 6 expanded sprites.
 
-The nearest objects claim the VIC's 8 sprites first, and an object that doesn't fit whole waits. On the C64 that work is a masked copy of a few hundred bytes per frame.
+The nearest objects claim the VIC's 8 sprites first, and an object that doesn't fit whole waits.
 
 Shared colours:
 - `$D025`: black outlines
@@ -113,6 +121,42 @@ This writes the following to `showcase/out/`:
 
 It needs ffmpeg. `--rom` shows the status panel in the real C64 ROM font.
 
+## The C64 engine
+
+`c64/apex.s` and `c64/sprites.s` are the engine in 6502 assembly, about 3.5KB of code. `c64/gen.js` generates all its tables from the reference: 1/cos, column angles, wall heights, screen codes, the status panel, and the objects' pre-scaled images. Because both use the same tables and the same integer steps, every ray, wall height and sprite comes out exactly the same.
+
+Each frame:
+1. **Controls:** they run once for every 50 Hz tick since the last frame, so walking and turning speed don't depend on the frame rate.
+2. **Rays:** all 80 are cast. The DDA keeps the map column in the Y register, so a step east or west is one `INY` or `DEY`, patched in for each ray. Multiplications use quarter-square tables, built at start-up at `$C000`. Wall heights come from a table lookup instead of a division.
+3. **Objects:** each is projected, using signed multiplies and a 32÷16 divide, and sorted nearest first.
+4. **Wait:** the engine waits until the last frame is showing.
+5. **Draw:** the view is drawn into the hidden screen, 400 cells of two lookups each. The objects' masked tiles go into that screen's sprite blocks, along with the status numbers.
+6. **Swap:** the screens swap. The IRQ at the top of the frame shows the new screen and loads its sprite registers from a shadow copy, so walls and sprites always change together. A second IRQ switches to the ROM font for the status panel.
+
+It runs at about 8–9 frames a second on a PAL C64: most of each frame is the 80 rays. Memory:
+
+| Address | Contents |
+|---------|----------|
+| `$0400` | screen A |
+| `$0801–$2FFF` | code and tables |
+| `$3000` | 16 sprite blocks, 8 per screen |
+| `$3400` | screen B |
+| `$3800` | the APEXSCII raycast set |
+| `$4000` | object images, movement and status tables |
+| `$C000` | multiply tables |
+
+```bash
+node c64/build.js
+```
+
+This needs [cc65](https://cc65.github.io/) on the PATH, and writes `c64/out/apex.prg`.
+
+```bash
+node showcase/c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
+```
+
+This records the engine in VICE, playing a scripted walk with the same controls a joystick gives. It takes a screenshot of every second frame through the remote monitor and joins them into `showcase/out/c64-e1m1.mp4`.
+
 ## Testing
 
 `test/vice-check.js` writes each still as a `.prg`, runs it in [VICE](https://vice-emu.sourceforge.io/), and compares all 64,000 display pixels with the reference renderer.
@@ -123,14 +167,22 @@ node test/vice-check.js "C:\path\to\GTK3VICE-3.10-win64"
 
 `--ntsc` runs on an NTSC machine. `--cycles 12000000,15000017` screenshots at each listed cycle count. The script ends with PASS or FAIL.
 
+`test/c64-check.js` tests the 6502 engine itself. It builds the engine in test mode at 11 poses along the walk, so each build draws one frame and stops. Two more builds play scripted controls: turning, walking, and sliding along and into walls. Their final position must match the same moves made in JavaScript. Every frame the C64 draws must match the reference pixel for pixel, sprites included. Pass `--ntsc` to test on NTSC too.
+
+```bash
+node test/c64-check.js "C:\path\to\GTK3VICE-3.10-win64"
+node test/c64-bench.js "C:\path\to\GTK3VICE-3.10-win64"
+```
+
+`test/c64-bench.js` builds a version that turns for 64 frames. It times them with the VICE monitor's stopwatch and prints cycles per frame and frames per second.
+
 ## Roadmap
 
-1. **C64 engine in 6502:** the same raycaster, using the same tables, assembled with cc65's ca65. The VICE test then checks the frames it draws itself against the reference.
-2. **Game:**
-   - movement and collision on the C64
+1. **Game:**
    - doors
    - enemy behaviour and animation frames
    - a sprite multiplexer for more than 8 sprites
+2. **Speed:** fewer cycles per ray. Most of each ray's time is fixed set-up, not the grid walk.
 3. **Other machines:** 16-, 32- and 64-bit ports share `core/` and `levels/` and add bitmap rendering with textured walls.
 
 ## Licence

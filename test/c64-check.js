@@ -5,7 +5,7 @@
 //
 //   node test/c64-check.js <path to VICE folder> [--ntsc]
 //
-// Needs cc65 (ca65, ld65) on the PATH. Objects are left out; the 6502 engine draws walls only so far.
+// Needs cc65 (ca65, ld65) on the PATH.
 const fs = require('fs'), os = require('os'), path = require('path');
 const { findVice, screenshot, compare } = require('./vice-lib.js');
 const APEXSCII = require('../apexscii/apexscii.js');
@@ -55,7 +55,7 @@ let failures = 0;
 for (const c of cases) {
   const prg = path.join(shots, `${c.name.replace(/\W+/g, '-')}.prg`), shot = prg.replace(/\.prg$/, '.png');
   fs.writeFileSync(prg, c.prg());
-  const want = VIEW.frame({ ...map, objects: [] }, c.pose, 'mc', VIEW.statusLines(map, c.pose));
+  const want = VIEW.frame(map, c.pose, 'mc', VIEW.statusLines(map, c.pose));
   const label = c.name.padEnd(14);
   if (!screenshot(exe, prg, shot, { ntsc, cycles: 30000000 })) { console.log(`${label} no screenshot (did VICE start?)`); failures++; continue; }
   const r = compare(shot, want.rgba(rom), want.opts.border, APEXSCII.PALETTE);

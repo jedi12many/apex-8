@@ -2,8 +2,8 @@
 // compare a screenshot pixel-for-pixel with an expected 320x200 RGBA screen.
 // VICE uses its own palette, so each expected colour may map to exactly one VICE colour; any wrong
 // character, colour, sprite or misplaced raster split shows up as differing pixels.
-const fs = require('fs'), path = require('path'), zlib = require('zlib');
-const { spawnSync } = require('child_process');
+const fs = require('fs'), path = require('path'), zlib = require('zlib'), net = require('net');
+const { spawn, spawnSync } = require('child_process');
 
 function findVice(dir) {
   const exe = ['x64sc.exe', 'x64sc'].map(f => path.join(dir, 'bin', f)).find(f => fs.existsSync(f));
@@ -74,4 +74,49 @@ function compare(shot, rgba, border, palette) {
   return { bad: r.bad, first: r.first, borderOk };
 }
 
-module.exports = { findVice, screenshot, decodePng, compare };
+// Runs prg in VICE, stopping when `from` first executes, and returns the CPU cycles from there to the
+// first time `to` executes (the monitor's stopwatch).
+function cyclesBetween(exe, prg, from, to, { ntsc = false } = {}) {
+  const hex = a => a.toString(16).padStart(4, '0');
+  return new Promise((resolve, reject) => {
+    const vice = spawn(exe, ['-default', '-warp', '-sounddev', 'dummy', '+confirmonexit', '-autostartprgmode', '1',
+      ...(ntsc ? ['-ntsc'] : []), '-initbreak', '0x' + hex(from),
+      '-remotemonitor', '-remotemonitoraddress', 'ip4://127.0.0.1:6510', '-autostart', prg], { stdio: 'ignore' });
+    // The monitor takes one command per prompt: each step waits for `until` in the output, then sends.
+    const steps = [
+      { until: `(c:$${hex(from)})`, send: 'sw reset' },
+      { until: 'stopwatch', send: 'delete' },
+      { until: '', send: `break ${hex(to)}` },
+      { until: 'break', send: 'x' },
+      { until: `exec ${hex(to)})`, send: 'sw' },
+    ];
+    let out = '';
+    const done = (err, v) => { clearTimeout(timer); vice.kill(); err ? reject(err) : resolve(v); };
+    const timer = setTimeout(() => done(new Error('VICE never reached the breakpoints')), 120000);
+    const connect = () => {
+      const s = net.connect(6510, '127.0.0.1');
+      s.on('error', () => setTimeout(connect, 300));
+      s.on('data', d => {
+        out += d;
+        if (!/\(C:\$[0-9a-f]{4}\) $/i.test(out)) return; // wait for the prompt
+        const step = steps[0];
+        if (step && out.toLowerCase().includes(step.until)) {
+          steps.shift(); out = '';
+          s.write(step.send + '\n');
+        } else if (!step) {
+          const m = out.match(/(\d+)\s*cycles/i) || out.match(/Stopwatch[^\d]*(\d+)/i);
+          if (m) { s.write('quit\n'); setTimeout(() => done(null, +m[1]), 300); }
+        }
+      });
+    };
+    setTimeout(connect, 500);
+  });
+}
+
+// A ld65 -Ln label file as { name: address }.
+function labels(file) {
+  return Object.fromEntries(fs.readFileSync(file, 'utf8').split('\n').map(l => l.trim().split(/\s+/))
+    .filter(p => p.length === 3).map(([, a, n]) => [n.replace(/^\./, ''), parseInt(a, 16)]));
+}
+
+module.exports = { findVice, screenshot, decodePng, compare, cyclesBetween, labels };

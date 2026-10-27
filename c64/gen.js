@@ -109,13 +109,13 @@ function gen(map, outDir, testPose) {
     bytes('TE_LO', TE.map(v => v & 255)), bytes('TE_HI', TE.map(v => v >> 8)),
     bytes('DEC0', Array.from({ length: 33 }, (_, n) => digits(String(n).padStart(2, '0'))[0])),
     bytes('DEC1', Array.from({ length: 33 }, (_, n) => digits(String(n).padStart(2, '0'))[1])),
-    bytes('PANEL', PANEL, 40), bytes('PANELC', PANELC, 40),
     bytes('LEVEL', LEVEL, LEVEL_STRIDE),
     `NOBJ = ${objects.length}`, `NSIZES = ${SPRITES.SIZES.length}`,
     `FOCAL = ${Math.round(((rays / 2) * 256) / Math.tan((o.fov * Math.PI) / 360))}`, `SCALE = ${SCALE}`,
     `SPR_MC1 = ${SPRITES.SHARED.mc1}`, `SPR_MC2 = ${SPRITES.SHARED.mc2}`,
     '.segment "HIGH"',
     bytes('MOVX', MOVX.map(v => v & 255)), bytes('MOVY', MOVY.map(v => v & 255)),
+    bytes('PANEL', PANEL, 40), bytes('PANELC', PANELC, 40),
     bytes('TENTHD', Array.from({ length: 256 }, (_, f) => digits(String(tenths(f) % 10))[0])),
     bytes('TENTHC', Array.from({ length: 256 }, (_, f) => (tenths(f) === 10 ? 1 : 0))),
     bytes('HEAD0', HEAD.map(d => d[0])), bytes('HEAD1', HEAD.map(d => d[1])), bytes('HEAD2', HEAD.map(d => d[2])),
@@ -127,6 +127,7 @@ function gen(map, outDir, testPose) {
     bytes('META_ROWS', meta.map(m => m.rows)), bytes('META_BPR', meta.map(m => m.bpr)),
     bytes('META_HALFW', meta.map(m => m.halfW)), bytes('META_HPX', meta.map(m => m.hpx)),
     ...metaWord('META_IMG', m => m.off),
+    bytes('ATLO', C.ATAN_COL.map(v => v & 255)), bytes('ATHI', C.ATAN_COL.map(v => v >> 8)),
     ...sw('COS', Array.from({ length: 256 }, (_, i) => APEXRAY.cos(i * HEADING_STEP))),
     ...sw('SIN', Array.from({ length: 256 }, (_, i) => APEXRAY.sin(i * HEADING_STEP))),
     bytes('IMAGES', images),
@@ -169,7 +170,7 @@ function draw() {
 // Changes up to 4 lines apart share one IRQ, which starts 3 lines before the first (an IRQ can arrive
 // almost 2 lines late: a bad line and sprite fetches can hold the CPU before it starts). The last IRQ hands
 // on to the status panel's split; irq_top sets the first colours and starts the chain at GRAD_TRIGGER.
-const GRAD_DELAY = +(process.env.APEX_GRAD_DELAY || 50);
+const GRAD_DELAY = +(process.env.APEX_GRAD_DELAY || 48);
 const delay = n => {
   const out = [];
   if (n >= 11) { const k = Math.floor((n - 1) / 5) - (((n - 1) % 5) === 1 ? 1 : 0); out.push(`    ldx #${k}`, ':   dex', '    bne :-'); n -= 5 * k + 1; }

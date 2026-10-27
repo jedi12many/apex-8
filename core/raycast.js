@@ -50,9 +50,13 @@
 // is 0 for rays whose halfH / 2 is less).
   function makeCaster(opts = {}) {
     const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64, interpolate: false, fog: 0, uNear: 0 }, opts);
+    // With angleStep, rays are angleStep apart (the field of view is rays * angleStep), so turning by a
+    // multiple of it shifts the rays, and a port can keep the ones it has; walls bow a little at the
+    // sides. Otherwise rays are evenly spaced on the screen plane, which keeps walls straight.
+    if (o.angleStep) o.fov = (o.rays * o.angleStep * 360) / ANG;
     const t = Math.tan((o.fov * Math.PI) / 360);
-    // Each ray's angle relative to the view direction: evenly spaced on the screen plane, not in angle.
-    const COL_ANGLE = Array.from({ length: o.rays }, (_, c) =>
+    // Each ray's angle relative to the view direction.
+    const COL_ANGLE = Array.from({ length: o.rays }, (_, c) => o.angleStep ? ((2 * c + 1 - o.rays) * o.angleStep) / 2 :
       Math.round((Math.atan((((c + 0.5) * 2) / o.rays - 1) * t) * ANG) / (2 * Math.PI)));
     // Fisheye correction: cos of that angle, 0.8 fixed, capped at 255.
     const COL_COS = COL_ANGLE.map(a => Math.min(255, Math.round(Math.cos(rad(a)) * ONE)));
@@ -109,14 +113,18 @@
     // dist), col its screen position in ray columns (8.8, 0 = left edge) and halfH the half height of a
     // wall at that depth, uncapped. Null when it is behind the player or closer than an eighth of a tile.
     const FOCAL = Math.round(((o.rays / 2) * ONE) / t);
+    // With angleStep, an object |lat| / depth to the side (r = that * 256, up to 512) is ATAN_COL[r]
+    // ray columns (8.8) from the centre.
+    const ATAN_COL = Array.from({ length: 513 }, (_, r) => Math.floor((Math.atan(r / ONE) * ANG * ONE) / (2 * Math.PI * (o.angleStep || 1))));
     function project(p, x, y) {
       const dx = x - p.x, dy = y - p.y, c = cos(p.a), s = sin(p.a);
       const depth = (dx * c + dy * s) >> 8, lat = (dy * c - dx * s) >> 8;
       if (depth < 32 || depth >= FOG_PERP) return null;
-      return { depth, col: (o.rays / 2) * ONE + Math.floor((lat * FOCAL) / depth), halfH: Math.floor(SCALE / depth) };
+      const col = o.angleStep ? (lat < 0 ? -1 : 1) * ATAN_COL[Math.min(512, Math.floor((Math.abs(lat) * ONE) / depth))] : Math.floor((lat * FOCAL) / depth);
+      return { depth, col: (o.rays / 2) * ONE + col, halfH: Math.floor(SCALE / depth) };
     }
 
-    return { opts: o, COL_ANGLE, COL_COS, FOG_PERP, cast, project };
+    return { opts: o, COL_ANGLE, COL_COS, FOG_PERP, ATAN_COL, cast, project };
   }
 
   // Move by `speed` (8.8 tiles) along angle a, sliding along walls; keeps `radius` (8.8) clear of them.

@@ -210,12 +210,20 @@ node test/c64-bench.js "C:\path\to\GTK3VICE-3.10-win64"
 
 ## Roadmap
 
-1. **Game:**
-   - doors
-   - enemy behaviour and animation frames
-   - a sprite multiplexer for more than 8 sprites
-2. **Speed:** objects. Projecting each one takes a 32÷16 divide, and cutting their sprites is now as costly as the rays when guards are close.
-3. **Other machines:** 16-, 32- and 64-bit ports share `core/` and `levels/` and add bitmap rendering with textured walls.
+The raycaster is a renderer so far. These are what a game built on it would need, in a sensible order. None is planned yet.
+
+1. **Doors:** door tiles drawn as a thin wall in the middle of the tile, sliding open, with a state per door (opening, open, closing) and collision while shut. Rays that reach a door tile take one more step. Locked doors need keys.
+2. **Game state:** health, ammo, score, keys and lives; pickups that disappear; an exit tile and level end. Objects become live entries rather than fixed tables.
+3. **Actions:** a fire button whose hit is the nearest object in the centre column in front of the wall there (one ray and a depth check), with damage and a cooldown.
+4. **Actors:** state machines (stand, notice, chase, attack, hurt, die), line of sight with one ray, moving along tile centres with the player's collision rules, updated every few ticks.
+5. **Sprite memory:** animation frames are the real limit. Each object type is stored at up to 36 sizes, about 2KB a type, so a guard with 6 frames would need about 13KB. The options are fewer sizes, small sizes only for some frames, scaling at run time, or the RAM under the BASIC and KERNAL ROMs.
+6. **HUD and held item:** status in the panel; a held item at the bottom of the view, as sprites or characters.
+7. **Sound:** SID effects from the top-of-frame IRQ, perhaps music; about 1–3% of the CPU for effects.
+8. **Levels:** loading from disk with light compression, a title screen, restart and level end.
+9. **Sprite multiplexer:** more than 8 sprites, by reusing them further down the screen, fitted around the gradient's raster IRQs.
+10. **Speed:** objects. Projecting each one takes a 32÷16 divide, and cutting their sprites costs as much as the rays when they are close; more actors make this the first thing to speed up.
+11. **Game logic in `core/`:** the rules as integer JavaScript with a tick function, like the raycaster, so every port must reach the same game state from the same input; the scripted C64 tests already check movement this way.
+12. **Other machines:** 16-, 32- and 64-bit ports share `core/` and `levels/` and add bitmap rendering with textured walls.
 
 ## Licence
 

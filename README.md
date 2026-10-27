@@ -91,6 +91,7 @@ Lines starting with `;` are comments, and the first comment names the level. See
   - the two rays in a column pick the screen code `$40 + 9 × left + right` above the horizon, and `$91 + …` below it
   - the bottom half mirrors the top half, so one height gives both
   - east/west faces are shade B, as in Wolfenstein
+- **Bricks** (multicolor): each ray carries `u`, where along the face it hit. A wall is 4 courses of bricks, mirrored about the horizon: mortar lines at 80 − j and 80 + j (j is half the half height), a double line either side of the horizon, and staggered joints. Cells that are solid wall of one shade for both rays use 44 brick glyphs (22, and the same upside down) at the start of the set, leaving `$20` blank; the mortar is the other wall shade. In a brick cell the left ray decides the mortar line, which runs across the cell, and either ray can be a joint. `TEX_NEAR` can limit bricks to near walls. `c64/view.js` defines the rules, and the engine's tables are generated from them.
 - **Multicolor colours:**
   - ceiling: `$D021`, shaded towards the horizon in the engine (see the gradient below)
   - floor: `$D022`, likewise
@@ -147,7 +148,9 @@ The write delay was found in VICE: 49 to 52 cycles draw every test frame exactly
 
 **Fog.** The 16 lines each side of the horizon are black, and a wall that would fit inside them, more than about 7 tiles away, is left out: it looks like darkness. The engine starts each ray's side distances that far below $10000 (a per-ray table), so they overflow exactly at the fog. The walk already handles overflow, so the fog costs nothing per grid step: a ray ends when both directions have overflowed. Objects in the fog are skipped before their divide. A 24-line band was tried too: about 3% faster, but walls and guards vanished under 5 tiles away.
 
-**Speed.** On the benchmark's quarter turn past the guards, a frame takes 106,285 cycles, 9.3 frames a second on PAL:
+**Bricks.** At each hit the engine works out `u` with one more quarter-square multiply. After the cast, a pass gives each ray its joint (a table of ceil(u / 64)) and packs j, shade and joint into one byte. The draw looks up per-row tables for the left and right states, then a pair table for each half's screen code; as the bottom mirrors the top, one lookup serves both. The tables take 5KB, and the program is now 31KB.
+
+**Speed.** On the benchmark's quarter turn past the guards, a frame takes 126,495 cycles, 7.8 frames a second on PAL:
 
 | Build | Cycles a frame | Frames a second |
 |-------|----------------|-----------------|
@@ -155,6 +158,8 @@ The write delay was found in VICE: 49 to 52 cycles draw every test frame exactly
 | With them | 112,194 | 8.8 |
 | Plus the gradient | 124,553 | 7.9 |
 | Plus fog | 106,285 | 9.3 |
+| Plus bricks | 126,495 | 7.8 |
+| Bricks only within about 3 tiles (`TEX_NEAR` 20) | 119,608 | 8.2 |
 
 With guards close by, projecting and cutting their sprites takes about as long as the rays. Standing still costs nothing.
 

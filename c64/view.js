@@ -51,15 +51,112 @@ const GRADIENT = {
 };
 if (GRADIENT.ceiling.length !== HALF_ROWS * 8 || GRADIENT.floor.length !== HALF_ROWS * 8) throw new Error('GRADIENT must cover each half');
 
-const caster = APEXRAY.makeCaster({ rays: 80, fov: 66, scale: 120, maxH: HALF_ROWS * 8, even: true, interpolate: true, fog: DARK });
+// Bricks only on walls with j (half height / 2) at least TEX_NEAR; 0 for every wall. 20 (about 3
+// tiles) was tried: 5% faster, but bricks popped in too close. See below.
+const TEX_NEAR = 0;
+const caster = APEXRAY.makeCaster({ rays: 80, fov: 66, scale: 120, maxH: HALF_ROWS * 8, even: true, interpolate: true, fog: DARK, uNear: TEX_NEAR - 4 });
 
-// The screen codes for one frame of rays (80 entries from cast()).
-function viewCodes(rays) {
+// Bricks (multicolor only). A wall of half height h = 2j is 4 courses of bricks, mirrored about the
+// horizon (80) so the bottom half is the top half upside down: mortar lines at 80 - j and 80 + j, and
+// a double line either side of the horizon. Joints sit at u = 0 and 128 on the outer courses and 64
+// and 192 on the inner two. Rays nearer than TEX_NEAR (in j) carry u; others have plain walls.
+//
+// Cells that are solid wall of one shade for both rays get brick glyphs, other cells the raycast set's.
+// In a brick cell the left ray's strip is plain, a joint, or has a mortar line at line 1, 3, 5 or 7
+// (rounded up to odd) that runs across the whole cell; the right ray's strip is plain or a joint.
+// Mortar is the other wall shade. A ray is a joint on a course when a multiple of 64 of that parity
+// lies between its u and the next ray's (the same face, both with u; the last ray extrapolates).
+//
+// The engine works from one byte per ray, stored = j + 41 * (shadeB + 2 * joint), where joint is 0, 1
+// (an outer-course joint) or 2 (inner). Per row, tables give the left ray's state (0-18) and the right
+// ray's (0-10), and PAIRT / PAIRB[11 * left + right] the top and bottom screen codes; see c64/gen.js.
+// The brick glyphs go at the start of the set, which the view never uses, except $20: the status
+// panel's first line is spaces, and the font switch can land a few cycles into it, so $20 stays blank.
+const TEX_CODES = Array.from({ length: 44 }, (_, i) => (i < 0x20 ? i : i + 1));
+const PLAIN = 0, JOINT = 5; // left strip types; 1-4 are a mortar line at line 1, 3, 5, 7
+
+const sameFace = (a, b) => a.mapX === b.mapX && a.mapY === b.mapY && a.side === b.side;
+function jointCodes(rays) {
+  return rays.map((r, c) => {
+    if (!r.u) return 0;
+    let lo = r.u, hi;
+    if (c + 1 < rays.length) { if (!sameFace(r, rays[c + 1])) return 0; hi = rays[c + 1].u; }
+    else { if (!sameFace(r, rays[c - 1])) return 0; hi = Math.max(0, Math.min(255, 2 * r.u - rays[c - 1].u)); }
+    if (hi < lo) [lo, hi] = [hi, lo];
+    const ga = (lo + 63) >> 6, gb = (hi + 63) >> 6;
+    return ga === gb ? 0 : 1 + (ga & 1);
+  });
+}
+
+// A ray's strip type in row b (0 = next to the horizon) of either half, when the cell is solid wall:
+// a mortar line (1-4), else a joint on this cell's course, else plain.
+function stripType(b, j, joint) {
+  if (j < TEX_NEAR) return PLAIN;
+  let line = -1;
+  if (j >= 8 * b + 1 && j <= 8 * b + 8) line = 8 * b + 8 - j;
+  else if (b === 0) line = 7;
+  if (line >= 0) return 1 + (line >> 1);
+  const course = Math.floor((2 * j - 8 * b - 4) / j);
+  return joint === 1 + (course & 1) ? JOINT : PLAIN;
+}
+// Left states: 0 empty, 1-3 shade A wall end 2/4/6 pixels, 4-6 shade B, 7-12 solid A by strip type,
+// 13-18 solid B. Right states: the same up to 6, then 7/8 solid A plain/joint, 9/10 solid B.
+function leftState(b, j, shadeB, joint) {
+  const rem = 2 * j - 8 * b;
+  if (rem <= 0) return 0;
+  if (rem < 8) return 1 + 3 * shadeB + (rem >> 1) - 1;
+  return 7 + 6 * shadeB + stripType(b, j, joint);
+}
+function rightState(b, j, shadeB, joint) {
+  const s = leftState(b, j, shadeB, joint);
+  return s < 7 ? s : 7 + 2 * shadeB + ((s - 7) % 6 === JOINT ? 1 : 0);
+}
+// The brick glyph for a shade and left / right strip types (the top half's way up), and its code;
+// the bottom half's are the same upside down, 22 codes on.
+const texCode = (top, shadeB, tl, tr) => TEX_CODES[(top ? 0 : 22) + 11 * shadeB + 2 * tl + tr - 1];
+function texGlyph(top, shadeB, tl, tr) {
+  const wall = shadeB ? 3 : 2, mortar = 5 - wall;
+  const g = Array.from({ length: 8 }, (_, line) => {
+    const across = tl >= 1 && tl <= 4 && line === 2 * tl - 1;
+    const L = tl === JOINT || across ? mortar : wall, R = tr === 1 || across ? mortar : wall;
+    return (L << 6) | (L << 4) | (R << 2) | R;
+  });
+  return Uint8Array.from(top ? g : g.reverse());
+}
+// The screen code for a cell from its left and right states.
+function pairCode(top, sl, sr) {
+  const fullL = sl >= 7, fullR = sr >= 7;
+  const shL = fullL ? +(sl >= 13) : +(sl >= 4), shR = fullR ? +(sr >= 9) : +(sr >= 4);
+  if (fullL && fullR && shL === shR) {
+    const tl = (sl - 7) % 6, tr = (sr - 7) & 1;
+    if (tl || tr) return texCode(top, shL, tl, tr);
+  }
+  const old = (s, full, sh) => (s === 0 ? 0 : RAY.state(sh, full ? 8 : 2 * (s - 3 * sh)));
+  return (top ? RAY.top : RAY.bottom) + 9 * old(sl, fullL, shL) + old(sr, fullR, shR);
+}
+// The multicolor raycast set with the brick glyphs added.
+function charset() {
+  const chars = APEXSCII.buildDefault('mc', 'ray').glyphs.map(g => Uint8Array.from(g));
+  for (const top of [true, false]) for (let sh = 0; sh < 2; sh++) for (let tl = 0; tl < 6; tl++) for (let tr = 0; tr < 2; tr++)
+    if (tl || tr) chars[texCode(top, sh, tl, tr)] = texGlyph(top, sh, tl, tr);
+  return chars;
+}
+
+// The screen codes for one frame of rays (80 entries from cast()); bricks when textured.
+function viewCodes(rays, textured = false) {
   const screen = new Uint8Array(VIEW_ROWS * 40);
   const state = (ray, below) => RAY.state(ray.side === 0 ? 1 : 0, Math.max(0, Math.min(8, ray.halfH - 8 * below)));
+  const joints = textured && jointCodes(rays);
   for (let cx = 0; cx < 40; cx++) {
     const L = rays[2 * cx], R = rays[2 * cx + 1];
+    const d = (ray, k) => [ray.halfH >> 1, ray.side === 0 ? 1 : 0, joints[k]];
     for (let r = 0; r < HALF_ROWS; r++) {
+      if (textured) {
+        const sl = leftState(r, ...d(L, 2 * cx)), sr = rightState(r, ...d(R, 2 * cx + 1));
+        screen[(HALF_ROWS - 1 - r) * 40 + cx] = pairCode(true, sl, sr);
+        screen[(HALF_ROWS + r) * 40 + cx] = pairCode(false, sl, sr);
+        continue;
+      }
       const sl = state(L, r), sr = state(R, r), code = 9 * sl + sr;
       screen[(HALF_ROWS - 1 - r) * 40 + cx] = RAY.top + code;
       screen[(HALF_ROWS + r) * 40 + cx] = RAY.bottom + code;
@@ -74,7 +171,7 @@ function frame(map, player, mode = 'mc', status = []) {
   const C = COLOURS[mode], mc = mode === 'mc';
   const screen = new Uint8Array(1000).fill(0x20), color = new Uint8Array(1000).fill(C.text);
   const rays = caster.cast(map, player.x, player.y, player.a);
-  screen.set(viewCodes(rays));
+  screen.set(viewCodes(rays, mc));
   const sprites = SPRITES.place(caster, rays, map.objects || [], player, { horizon: HALF_ROWS * 8, rows: VIEW_ROWS * 8, pxPerRay: 4 });
   color.fill(mc ? 8 | C.wallB : C.ink, 0, VIEW_ROWS * 40);
   status.slice(0, STATUS_ROWS).forEach((line, k) => {
@@ -87,7 +184,7 @@ function frame(map, player, mode = 'mc', status = []) {
       color[at] = rev ? C.accent : C.text;
     }
   });
-  const chars = APEXSCII.buildDefault(mode, 'ray').glyphs;
+  const chars = mc ? charset() : APEXSCII.buildDefault(mode, 'ray').glyphs;
   const opts = mc
     ? { mode, bg: C.bg, mc1: C.mc1, mc2: C.mc2, border: C.border, romRows: STATUS_ROWS }
     : { mode, bg: C.bg, border: C.border, romRows: STATUS_ROWS };
@@ -139,4 +236,5 @@ function statusLines(map, p) {
   return ['', `{ APEX } ${map.name.toUpperCase()}`, '', `X ${num(p.x)}  Y ${num(p.y)}  HEADING ${deg}`, ''];
 }
 
-module.exports = { VIEW_ROWS, STATUS_ROWS, COLOURS, DARK, GRADIENT, caster, viewCodes, frame, statusLines };
+module.exports = { VIEW_ROWS, STATUS_ROWS, COLOURS, DARK, GRADIENT, caster, viewCodes, frame, statusLines,
+  TEX_NEAR, charset, leftState, rightState, pairCode };

@@ -8,7 +8,8 @@
  *   - per ray, a DDA walk over the grid using sec() tables, then a fisheye correction per column
  *
  * makeCaster(opts) builds the tables for one view (ray count, field of view, wall scale); cast()
- * returns one { halfH, side, tile, dist } per ray. Platforms turn those into pixels their own way.
+ * returns one { halfH, side, tile, dist, u } per ray, where u (0-255) is where along the wall face the ray
+ * hit, left to right as seen. Platforms turn those into pixels their own way.
  *
  * With opts.interpolate, only the even rays (and the last) are cast. An odd ray whose neighbours hit
  * the same face of the same tile takes the mean of their heights and distances instead: on a flat wall
@@ -45,9 +46,10 @@
 
   // opts: rays (columns), fov (degrees), scale (half-wall height in pixels at one tile), maxH (half the
   // view height in pixels), even (round half-heights down to even pixels), maxSteps (DDA limit),
-  // interpolate (cast every other ray where it can, see above), fog (see above; 0 for none).
+  // interpolate (cast every other ray where it can, see above), fog (see above; 0 for none), uNear (u
+// is 0 for rays whose halfH / 2 is less).
   function makeCaster(opts = {}) {
-    const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64, interpolate: false, fog: 0 }, opts);
+    const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64, interpolate: false, fog: 0, uNear: 0 }, opts);
     const t = Math.tan((o.fov * Math.PI) / 360);
     // Each ray's angle relative to the view direction: evenly spaced on the screen plane, not in angle.
     const COL_ANGLE = Array.from({ length: o.rays }, (_, c) =>
@@ -78,10 +80,13 @@
           if (tile) break;
         }
         const perp = (dist * COL_COS[c]) >> 8;
-        if (perp >= FOG_PERP) { out[c] = { halfH: 0, side: 0, tile: 0, dist: 0xffff, mapX: -1, mapY: -1 }; return; }
+        if (perp >= FOG_PERP) { out[c] = { halfH: 0, side: 0, tile: 0, dist: 0xffff, mapX: -1, mapY: -1, u: 0 }; return; }
         let halfH = perp ? Math.min(o.maxH, Math.floor(SCALE / perp)) : o.maxH;
         if (o.even) halfH &= ~1;
-        out[c] = { halfH, side, tile, dist: perp, mapX, mapY };
+        // u: where along the wall face the ray hit, 0-255 across one tile, left to right as seen.
+        const along = side === 0 ? py + ((dist * sin(a)) >> 8) : px + ((dist * cos(a)) >> 8);
+        const u = halfH >> 1 < o.uNear ? 0 : side === 0 ? (stepX > 0 ? along & 255 : 255 - (along & 255)) : (stepY > 0 ? 255 - (along & 255) : along & 255);
+        out[c] = { halfH, side, tile, dist: perp, mapX, mapY, u };
       };
       if (!o.interpolate) {
         for (let c = 0; c < o.rays; c++) ray(c);
@@ -94,7 +99,8 @@
         if (l.mapX !== r.mapX || l.mapY !== r.mapY || l.side !== r.side) { ray(c); continue; }
         let halfH = (l.halfH + r.halfH) >> 1;
         if (o.even) halfH &= ~1;
-        out[c] = { halfH, side: l.side, tile: l.tile, dist: (l.dist + r.dist) >> 1, mapX: l.mapX, mapY: l.mapY, interpolated: true };
+        const u = (l.u + r.u) >> 1;
+        out[c] = { halfH, side: l.side, tile: l.tile, dist: (l.dist + r.dist) >> 1, mapX: l.mapX, mapY: l.mapY, u, interpolated: true };
       }
       return out;
     }

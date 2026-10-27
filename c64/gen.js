@@ -43,6 +43,8 @@ function gen(map, outDir, testPose) {
     return 0;
   });
   const CL9 = CL.map(s => APEXSCII.RAY.top + 9 * s);
+  // Sine for u, 0-256 by quadrant angle: SIN[k] and mirrored SIN[256 - k].
+  const SINQ = Array.from({ length: 256 }, (_, k) => APEXRAY.SIN[k]), SINM = Array.from({ length: 256 }, (_, k) => APEXRAY.SIN[256 - k]);
   // Fog: per ray, the nearest walk distance whose corrected distance reaches FOG_PERP. The engine
   // starts the side distances that far below $10000, so they overflow (saturate) exactly there.
   if (!Number.isFinite(C.FOG_PERP)) throw new Error('the C64 engine needs fog');
@@ -99,7 +101,7 @@ function gen(map, outDir, testPose) {
     '.segment "TABLES"',
     bytes('SEC0LO', SEC0.map(v => v & 255)), bytes('SEC0HI', SEC0.map(v => v >> 8)),
     bytes('SEC1LO', SEC1.map(v => v & 255)), bytes('SEC1HI', SEC1.map(v => v >> 8)),
-    bytes('CL', CL), bytes('CL9', CL9), bytes('JT0', JT.slice(0, 256)), bytes('JT1', JT.slice(256)),
+    bytes('JT0', JT.slice(0, 256)), bytes('JT1', JT.slice(256)),
     '.segment "RODATA"',
     bytes('COLANG_LO', C.COL_ANGLE.map(v => v & 255)), bytes('COLANG_HI', C.COL_ANGLE.map(v => (v >> 8) & 255)),
     bytes('COLCOS', C.COL_COS),
@@ -128,11 +130,34 @@ function gen(map, outDir, testPose) {
     ...sw('COS', Array.from({ length: 256 }, (_, i) => APEXRAY.cos(i * HEADING_STEP))),
     ...sw('SIN', Array.from({ length: 256 }, (_, i) => APEXRAY.sin(i * HEADING_STEP))),
     bytes('IMAGES', images),
+    bytes('USINLO', SINQ.map(v => v & 255)), bytes('USINHI', SINQ.map(v => v >> 8)),
+    bytes('USINMLO', SINM.map(v => v & 255)), bytes('USINMHI', SINM.map(v => v >> 8)),
+    ...draw(),
     '',
   ];
   fs.writeFileSync(path.join(outDir, 'gen.inc'), inc.join('\n'));
   fs.writeFileSync(path.join(outDir, 'grad.inc'), gradient());
-  fs.writeFileSync(path.join(outDir, 'charset.bin'), Buffer.from(APEXSCII.flatten(APEXSCII.buildDefault('mc', 'ray').glyphs)));
+  fs.writeFileSync(path.join(outDir, 'charset.bin'), Buffer.from(APEXSCII.flatten(VIEW.charset())));
+}
+
+// The draw's tables (page-aligned): per row r (both halves, as the bricks are mirrored), the left
+// ray's state times 11 (LT r) and the right ray's (RT r) by its byte j + 41 * (shadeB + 2 * joint), and
+// the top and bottom screen codes PAIRT / PAIRB by 11 * left + right.
+function draw() {
+  const out = ['.segment "DRAWTAB"'], page = (label, arr) => bytes(label, Array.from({ length: 256 }, (_, i) => arr[i] || 0));
+  const decode = v => [v % 41, Math.floor(v / 41) & 1, Math.floor(v / 82)];
+  for (let r = 0; r < VIEW.VIEW_ROWS / 2; r++) {
+    const L = [], R = [];
+    for (let v = 0; v < 246; v++) { const [j, sh, jn] = decode(v); L[v] = 11 * VIEW.leftState(r, j, sh, jn); R[v] = VIEW.rightState(r, j, sh, jn); }
+    out.push(page(`LT${r}`, L), page(`RT${r}`, R));
+  }
+  for (const [top, T] of [[true, 'T'], [false, 'B']]) {
+    const P = [];
+    for (let l = 0; l < 19; l++) for (let r = 0; r < 11; r++) P[11 * l + r] = VIEW.pairCode(top, l, r);
+    out.push(page(`PAIR${T}`, P));
+  }
+  out.push('.segment "RODATA"', `U_NEAR = ${Math.max(0, VIEW.TEX_NEAR - 4)}`);
+  return out;
 }
 
 // The ceiling and floor gradient as raster IRQ code. Each change of $D021 (ceiling) or $D022 (floor)

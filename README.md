@@ -51,7 +51,9 @@ Rays are spaced evenly across the screen, not in angle, so walls stay straight.
 
 With `interpolate`, only the even rays and the last are cast. An odd ray whose two neighbours hit the same face of the same tile takes the mean of their heights and distances. On a flat wall, 1/distance changes linearly across the screen, so the mean is within 2 pixels of a cast. Any other odd ray is cast. Along the E1M1 walk this casts 47.5 of the 80 rays a frame, and about 3 rays a frame differ from a full cast, by 2 pixels.
 
-`makeCaster({ rays, fov, scale, maxH, interpolate })` builds the tables for one view. `cast(map, x, y, angle)` returns one result per ray:
+With `fog`, a wall whose half height would be `fog` pixels or less is too far away to see. Its ray returns no wall (`halfH` 0, `dist` 0xFFFF), and `project()` leaves out objects at that depth or more. `FOG_PERP` is the nearest distance where that happens, so a port can stop each ray's walk there.
+
+`makeCaster({ rays, fov, scale, maxH, interpolate, fog })` builds the tables for one view. `cast(map, x, y, angle)` returns one result per ray:
 - `halfH`: the half wall height
 - `side`: 0 when the ray hits an east/west face, 1 for north/south
 - `tile`: the wall type
@@ -143,7 +145,18 @@ Each frame:
 
 The write delay was found in VICE: 49 to 52 cycles draw every test frame exactly on PAL and NTSC, and the engine uses 50. The IRQs spin about 2,300 cycles of each 50 Hz frame, about 11% of the CPU.
 
-**Speed.** On the benchmark's quarter turn past the guards, a frame takes 124,553 cycles, 7.9 frames a second on PAL. Without the gradient it is 112,194 (8.8 fps); before interpolation and the per-quadrant set-up it was 144,208 (6.8 fps). With guards in view, projecting and cutting the sprites takes about as long as the rays. Standing still costs nothing.
+**Fog.** The 16 lines each side of the horizon are black, and a wall that would fit inside them, more than about 7 tiles away, is left out: it looks like darkness. The engine starts each ray's side distances that far below $10000 (a per-ray table), so they overflow exactly at the fog. The walk already handles overflow, so the fog costs nothing per grid step: a ray ends when both directions have overflowed. Objects in the fog are skipped before their divide. A 24-line band was tried too: about 3% faster, but walls and guards vanished under 5 tiles away.
+
+**Speed.** On the benchmark's quarter turn past the guards, a frame takes 106,285 cycles, 9.3 frames a second on PAL:
+
+| Build | Cycles a frame | Frames a second |
+|-------|----------------|-----------------|
+| Before interpolation and per-quadrant set-up | 144,208 | 6.8 |
+| With them | 112,194 | 8.8 |
+| Plus the gradient | 124,553 | 7.9 |
+| Plus fog | 106,285 | 9.3 |
+
+With guards close by, projecting and cutting their sprites takes about as long as the rays. Standing still costs nothing.
 
 Memory:
 

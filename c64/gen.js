@@ -43,6 +43,11 @@ function gen(map, outDir, testPose) {
     return 0;
   });
   const CL9 = CL.map(s => APEXSCII.RAY.top + 9 * s);
+  // Fog: per ray, the nearest walk distance whose corrected distance reaches FOG_PERP. The engine
+  // starts the side distances that far below $10000, so they overflow (saturate) exactly there.
+  if (!Number.isFinite(C.FOG_PERP)) throw new Error('the C64 engine needs fog');
+  const FOGD = C.COL_COS.map(cs => { let d = Math.ceil((C.FOG_PERP * 256) / cs) - 2; while (((d * cs) >> 8) < C.FOG_PERP) d++; return d; });
+  if (FOGD.some(d => d > 0xffff)) throw new Error('fog too far for 16-bit distances');
   // Movement per tick along each heading (index a >> 2), signed.
   const MOVX = Array.from({ length: 256 }, (_, i) => (APEXRAY.cos(i * HEADING_STEP) * MOVE_SPEED) >> 8);
   const MOVY = Array.from({ length: 256 }, (_, i) => (APEXRAY.sin(i * HEADING_STEP) * MOVE_SPEED) >> 8);
@@ -98,6 +103,7 @@ function gen(map, outDir, testPose) {
     '.segment "RODATA"',
     bytes('COLANG_LO', C.COL_ANGLE.map(v => v & 255)), bytes('COLANG_HI', C.COL_ANGLE.map(v => (v >> 8) & 255)),
     bytes('COLCOS', C.COL_COS),
+    bytes('FOGLO', FOGD.map(v => v & 255)), bytes('FOGHI', FOGD.map(v => v >> 8)), `FOG_PERP = ${C.FOG_PERP}`,
     bytes('TE_LO', TE.map(v => v & 255)), bytes('TE_HI', TE.map(v => v >> 8)),
     bytes('DEC0', Array.from({ length: 33 }, (_, n) => digits(String(n).padStart(2, '0'))[0])),
     bytes('DEC1', Array.from({ length: 33 }, (_, n) => digits(String(n).padStart(2, '0'))[1])),

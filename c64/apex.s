@@ -508,24 +508,53 @@ cr_yspecial:
     sta sidey+1
 cr_ydone:
 
+    ; Fog: both side distances start FOG[ray] below $10000, so a sum overflows exactly when the walk
+    ; reaches the fog. One already there starts saturated.
+    ldx ray
     lda #0
     sta satx
     sta saty
-    ldx py+1                ; the row and column the player is in
+    sec
+    lda sidex
+    sbc FOGLO,x
+    sta sidex
+    lda sidex+1
+    sbc FOGHI,x
+    sta sidex+1
+    bcc :+
+    lda #$ff
+    sta sidex
+    sta sidex+1
+    sta satx
+:   sec
+    lda sidey
+    sbc FOGLO,x
+    sta sidey
+    lda sidey+1
+    sbc FOGHI,x
+    sta sidey+1
+    bcc :+
+    lda #$ff
+    sta sidey
+    sta sidey+1
+    sta saty
+:   ldx py+1                ; the row and column the player is in
     lda ROWLO,x
     sta mptr
     lda ROWHI,x
     sta mptr+1
     ldy px+1
 
-    ; The walk. A saturated side distance (a sum past $FFFF) stays at $FFFF; the distance before the
-    ; last step is then kept in savedx / savedy, since sidex - secx no longer gives it.
+    ; The walk. A saturated side distance (a sum past $FFFF: the next step in that direction is in the
+    ; fog) stays at $FFFF; the distance before the last step is then kept in savedx / savedy, since
+    ; sidex - secx no longer gives it. A y step with both saturated is in the fog: the ray ends there.
 cr_step:
     lda sidex               ; sidex < sidey: step in x, otherwise in y
     cmp sidey
     lda sidex+1
     sbc sidey+1
     bcs cr_stepy
+cr_xstep:
     lda sidex
     adc secx                ; carry is clear
     sta sidex
@@ -548,14 +577,14 @@ p_xop:
     sbc secx+1
     sta dist+1
     lda #0
-    beq cr_hit
+    jmp cr_hit
 cr_xsat:
     lda savedx
     sta dist
     lda savedx+1
     sta dist+1
     lda #0
-    beq cr_hit
+    jmp cr_hit
 cr_satx:
     sec                     ; the distance before this step, then saturate
     lda sidex
@@ -616,7 +645,17 @@ cr_ysat:
     lda #1
     bne cr_hit
 cr_saty:
-    sec
+    lda saty                ; already saturated: both directions are in the fog
+    beq :++
+    lda satx
+    beq :+
+    jmp cr_fog
+:   lda #$ff                ; sidex is exactly $FFFF unsaturated: its step comes first
+    sta sidey
+    sta sidey+1
+    clc
+    jmp cr_xstep
+:   sec
     lda sidey
     sbc secy
     sta savedy
@@ -631,8 +670,15 @@ cr_saty:
 
 cr_hit:
     sta side
-    ldx ray                 ; the face it hit: the tile's address, plus bit 7 for a north/south face
-    tya
+    ldx ray                 ; dist without the fog's bias
+    clc
+    lda dist
+    adc FOGLO,x
+    sta dist
+    lda dist+1
+    adc FOGHI,x
+    sta dist+1
+    tya                     ; the face it hit: the tile's address, plus bit 7 for a north/south face
     clc
     adc mptr
     sta HITL,x
@@ -741,6 +787,24 @@ cr_odd:
     sta HO,y
 cr_stored:
     ldx ray
+    rts
+
+; In the fog: no wall (j = 0), no face, and the greatest distance, so every object in front shows.
+cr_fog:
+    ldx ray
+    lda #$ff
+    sta HITL,x
+    sta HITH,x
+    sta PERPLO,x
+    sta PERPHI,x
+    txa
+    lsr
+    tay
+    lda #40
+    bcs :+
+    sta HE,y
+    rts
+:   sta HO,y
     rts
 
 ; A = the ray's quadrant, new since the last ray: patch the walk's steps, pick the 1/cos tables, and

@@ -133,8 +133,21 @@ project:
     lda acc+2
     adc pp+2
     sta depth+1
+    bmi @behind             ; 32 <= depth < FOG_PERP, or the object is behind the player, on top of
+    bne :+                  ; it, or in the fog
+    lda depth
+    cmp #32
+    bcc @behind
+:   lda depth
+    cmp #<FOG_PERP
+    lda depth+1
+    sbc #>FOG_PERP
+    bcc :+
+@behind:
+    jmp @next
 
     ; lat = (dy * cos - dx * sin) >> 8
+:
     lda dys
     ldy dys+1
     ldx #cs
@@ -159,13 +172,7 @@ project:
     sbc pp+2
     sta lat+1
 
-    lda depth+1             ; depth >= 32, or the object is behind or on top of the player
-    bmi @skip
-    bne :+
-    lda depth
-    cmp #32
-    bcc @skip
-:   lda lat+1               ; neg = lat's sign, lat = |lat|
+    lda lat+1               ; neg = lat's sign, lat = |lat|
     sta neg
     bpl :+
     sec

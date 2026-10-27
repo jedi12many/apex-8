@@ -13,6 +13,10 @@
  * With opts.interpolate, only the even rays (and the last) are cast. An odd ray whose neighbours hit
  * the same face of the same tile takes the mean of their heights and distances instead: on a flat wall
  * 1/distance, and so the wall height, changes linearly across the screen. Any other odd ray is cast.
+ *
+ * With opts.fog, a wall whose half height would be fog pixels or less is too far away to see: its ray
+ * returns halfH 0, dist 0xFFFF and no tile. FOG_PERP is the nearest distance that happens at, and
+ * project() leaves out objects that far away or more. A port can stop each ray's walk there.
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -41,9 +45,9 @@
 
   // opts: rays (columns), fov (degrees), scale (half-wall height in pixels at one tile), maxH (half the
   // view height in pixels), even (round half-heights down to even pixels), maxSteps (DDA limit),
-  // interpolate (cast every other ray where it can, see above).
+  // interpolate (cast every other ray where it can, see above), fog (see above; 0 for none).
   function makeCaster(opts = {}) {
-    const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64, interpolate: false }, opts);
+    const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64, interpolate: false, fog: 0 }, opts);
     const t = Math.tan((o.fov * Math.PI) / 360);
     // Each ray's angle relative to the view direction: evenly spaced on the screen plane, not in angle.
     const COL_ANGLE = Array.from({ length: o.rays }, (_, c) =>
@@ -51,6 +55,8 @@
     // Fisheye correction: cos of that angle, 0.8 fixed, capped at 255.
     const COL_COS = COL_ANGLE.map(a => Math.min(255, Math.round(Math.cos(rad(a)) * ONE)));
     const SCALE = o.scale * ONE;
+    // halfH <= fog exactly when perp > SCALE / (fog + 2), as halfH is rounded down to even.
+    const FOG_PERP = o.fog ? Math.floor(SCALE / (o.fog + 2)) + 1 : Infinity;
 
     // map: { w, h, cells: Uint8Array, 0 = open, anything else = a wall tile }; outside the map is solid.
     function cast(map, px, py, pa) {
@@ -72,6 +78,7 @@
           if (tile) break;
         }
         const perp = (dist * COL_COS[c]) >> 8;
+        if (perp >= FOG_PERP) { out[c] = { halfH: 0, side: 0, tile: 0, dist: 0xffff, mapX: -1, mapY: -1 }; return; }
         let halfH = perp ? Math.min(o.maxH, Math.floor(SCALE / perp)) : o.maxH;
         if (o.even) halfH &= ~1;
         out[c] = { halfH, side, tile, dist: perp, mapX, mapY };
@@ -99,11 +106,11 @@
     function project(p, x, y) {
       const dx = x - p.x, dy = y - p.y, c = cos(p.a), s = sin(p.a);
       const depth = (dx * c + dy * s) >> 8, lat = (dy * c - dx * s) >> 8;
-      if (depth < 32) return null;
+      if (depth < 32 || depth >= FOG_PERP) return null;
       return { depth, col: (o.rays / 2) * ONE + Math.floor((lat * FOCAL) / depth), halfH: Math.floor(SCALE / depth) };
     }
 
-    return { opts: o, COL_ANGLE, COL_COS, cast, project };
+    return { opts: o, COL_ANGLE, COL_COS, FOG_PERP, cast, project };
   }
 
   // Move by `speed` (8.8 tiles) along angle a, sliding along walls; keeps `radius` (8.8) clear of them.

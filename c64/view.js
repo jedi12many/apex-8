@@ -41,13 +41,17 @@ function shades(list) {
   }
   return out;
 }
+// DARK lines each side of the horizon are black, and a wall that would fit inside them is fog: the
+// view leaves it out, and the engine stops each ray before it. 24 was tried too: about 3% faster, but
+// walls and guards vanish under 5 tiles away.
+const DARK = 16;
 const GRADIENT = {
-  ceiling: shades([[12, 24], [12, 11, 8], [11, 24], [11, 0, 8], [0, 16]]),
-  floor: shades([[0, 16], [0, 11, 8], [11, 32], [11, 12, 8], [12, 16]]),
+  ceiling: shades([[12, 24], [12, 11, 8], [11, 40 - DARK], [11, 0, 8], [0, DARK]]),
+  floor: shades([[0, DARK], [0, 11, 8], [11, 48 - DARK], [11, 12, 8], [12, 16]]),
 };
 if (GRADIENT.ceiling.length !== HALF_ROWS * 8 || GRADIENT.floor.length !== HALF_ROWS * 8) throw new Error('GRADIENT must cover each half');
 
-const caster = APEXRAY.makeCaster({ rays: 80, fov: 66, scale: 120, maxH: HALF_ROWS * 8, even: true, interpolate: true });
+const caster = APEXRAY.makeCaster({ rays: 80, fov: 66, scale: 120, maxH: HALF_ROWS * 8, even: true, interpolate: true, fog: DARK });
 
 // The screen codes for one frame of rays (80 entries from cast()).
 function viewCodes(rays) {
@@ -135,4 +139,4 @@ function statusLines(map, p) {
   return ['', `{ APEX } ${map.name.toUpperCase()}`, '', `X ${num(p.x)}  Y ${num(p.y)}  HEADING ${deg}`, ''];
 }
 
-module.exports = { VIEW_ROWS, STATUS_ROWS, COLOURS, GRADIENT, caster, viewCodes, frame, statusLines };
+module.exports = { VIEW_ROWS, STATUS_ROWS, COLOURS, DARK, GRADIENT, caster, viewCodes, frame, statusLines };

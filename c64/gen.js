@@ -140,22 +140,23 @@ function gen(map, outDir, testPose) {
   fs.writeFileSync(path.join(outDir, 'charset.bin'), Buffer.from(APEXSCII.flatten(VIEW.charset())));
 }
 
-// The draw's tables (page-aligned): per row r of the top and bottom halves, the left ray's state
-// times 11 (TLTr, BLTr) and the right ray's (TRTr, BRTr) by its byte j + 41 * (shadeB + 2 * joint),
-// and the screen codes PAIRT / PAIRB by 11 * left + right.
+// The draw's tables (page-aligned): per row r (both halves, as the bricks are mirrored), the left
+// ray's state times 11 (LT r) and the right ray's (RT r) by its byte j + 41 * (shadeB + 2 * joint), and
+// the top and bottom screen codes PAIRT / PAIRB by 11 * left + right.
 function draw() {
   const out = ['.segment "DRAWTAB"'], page = (label, arr) => bytes(label, Array.from({ length: 256 }, (_, i) => arr[i] || 0));
   const decode = v => [v % 41, Math.floor(v / 41) & 1, Math.floor(v / 82)];
-  for (const [top, T] of [[true, 'T'], [false, 'B']]) for (let r = 0; r < VIEW.VIEW_ROWS / 2; r++) {
+  for (let r = 0; r < VIEW.VIEW_ROWS / 2; r++) {
     const L = [], R = [];
-    for (let v = 0; v < 246; v++) { const [j, sh, jn] = decode(v); L[v] = 11 * VIEW.leftState(top, r, j, sh, jn); R[v] = VIEW.rightState(top, r, j, sh, jn); }
-    out.push(page(`${T}LT${r}`, L), page(`${T}RT${r}`, R));
+    for (let v = 0; v < 246; v++) { const [j, sh, jn] = decode(v); L[v] = 11 * VIEW.leftState(r, j, sh, jn); R[v] = VIEW.rightState(r, j, sh, jn); }
+    out.push(page(`LT${r}`, L), page(`RT${r}`, R));
   }
   for (const [top, T] of [[true, 'T'], [false, 'B']]) {
     const P = [];
     for (let l = 0; l < 19; l++) for (let r = 0; r < 11; r++) P[11 * l + r] = VIEW.pairCode(top, l, r);
     out.push(page(`PAIR${T}`, P));
   }
+  out.push('.segment "RODATA"', `U_NEAR = ${Math.max(0, VIEW.TEX_NEAR - 4)}`);
   return out;
 }
 

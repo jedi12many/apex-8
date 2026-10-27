@@ -46,9 +46,10 @@
 
   // opts: rays (columns), fov (degrees), scale (half-wall height in pixels at one tile), maxH (half the
   // view height in pixels), even (round half-heights down to even pixels), maxSteps (DDA limit),
-  // interpolate (cast every other ray where it can, see above), fog (see above; 0 for none).
+  // interpolate (cast every other ray where it can, see above), fog (see above; 0 for none), uNear (u
+// is 0 for rays whose halfH / 2 is less).
   function makeCaster(opts = {}) {
-    const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64, interpolate: false, fog: 0 }, opts);
+    const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64, interpolate: false, fog: 0, uNear: 0 }, opts);
     const t = Math.tan((o.fov * Math.PI) / 360);
     // Each ray's angle relative to the view direction: evenly spaced on the screen plane, not in angle.
     const COL_ANGLE = Array.from({ length: o.rays }, (_, c) =>
@@ -84,7 +85,7 @@
         if (o.even) halfH &= ~1;
         // u: where along the wall face the ray hit, 0-255 across one tile, left to right as seen.
         const along = side === 0 ? py + ((dist * sin(a)) >> 8) : px + ((dist * cos(a)) >> 8);
-        const u = side === 0 ? (stepX > 0 ? along & 255 : 255 - (along & 255)) : (stepY > 0 ? 255 - (along & 255) : along & 255);
+        const u = halfH >> 1 < o.uNear ? 0 : side === 0 ? (stepX > 0 ? along & 255 : 255 - (along & 255)) : (stepY > 0 ? 255 - (along & 255) : along & 255);
         out[c] = { halfH, side, tile, dist: perp, mapX, mapY, u };
       };
       if (!o.interpolate) {

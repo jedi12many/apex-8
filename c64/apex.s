@@ -407,6 +407,8 @@ cast:
 .macro JOINT dst
     .local none, put
     ldy #0
+    lda U,x                 ; no u: no joint
+    beq none
     lda HITL,x
     cmp HITL+1,x
     bne none
@@ -450,6 +452,8 @@ j_pair:
     jmp j_pair
 j_last:                      ; the last ray: against 2u - the previous u, kept within 0-255
     ldy #0
+    lda U,x
+    beq j_put
     lda HITL,x
     cmp HITL-1,x
     bne j_put
@@ -798,6 +802,95 @@ cr_hit:
     ora #$80
 :   sta HITH,x
 
+
+    lda COLCOS,x            ; perp = dist * COLCOS[ray] >> 8, by quarter squares
+    sta p_mf1+1
+    sta p_mf3+1
+    sta p_mf5+1
+    sta p_mf7+1
+    eor #$ff
+    sta p_mf2+1
+    sta p_mf4+1
+    sta p_mf6+1
+    sta p_mf8+1
+    ldx dist
+    sec
+p_mf1:
+    lda SQ1LO,x
+p_mf2:
+    sbc SQ2LO,x
+p_mf3:
+    lda SQ1HI,x
+p_mf4:
+    sbc SQ2HI,x
+    sta t1
+    ldx dist+1
+    sec
+p_mf5:
+    lda SQ1LO,x
+p_mf6:
+    sbc SQ2LO,x
+    sta t2
+p_mf7:
+    lda SQ1HI,x
+p_mf8:
+    sbc SQ2HI,x
+    sta m_r+2
+    lda t1
+    clc
+    adc t2
+    sta m_r+1
+    bcc :+
+    inc m_r+2
+:   ldx ray                 ; kept for the sprites' wall test
+    lda m_r+1
+    sta PERPLO,x
+    lda m_r+2
+    sta PERPHI,x
+
+    ; j: JT gives the largest j for the start of perp's 32-wide bucket; step down while perp > TE[j].
+    lda m_r+2
+    cmp #64
+    bcc :+
+    lda #0                  ; perp >= 16384: no wall height at all
+    jmp cr_found
+:   lda m_r+1
+    lsr
+    lsr
+    lsr
+    lsr
+    lsr
+    sta t0
+    lda m_r+2
+    asl
+    asl
+    asl
+    ora t0
+    tax
+    lda m_r+2
+    and #32
+    bne :+
+    ldy JT0,x
+    jmp cr_refine
+:   ldy JT1,x
+cr_refine:
+    lda TE_LO,y             ; TE[j] >= perp?
+    cmp m_r+1
+    lda TE_HI,y
+    sbc m_r+2
+    bcs :+
+    dey
+    bne cr_refine
+:   tya
+cr_found:
+    sta t0                  ; j
+    cmp #U_NEAR             ; too far for bricks: no u
+    bcs :+
+    ldx ray
+    lda #0
+    sta U,x
+    jmp cr_store
+:
     ; u (c64/view.js): the low byte of the player's y (x for a north/south face) + dist * sin a >> 8
     ; (cos a for north/south), turned to run left to right as seen
     lda ra+1
@@ -889,87 +982,8 @@ u_keep:
     ldx ray
     lda t1
     sta U,x
-
-    lda COLCOS,x            ; perp = dist * COLCOS[ray] >> 8, by quarter squares
-    sta p_mf1+1
-    sta p_mf3+1
-    sta p_mf5+1
-    sta p_mf7+1
-    eor #$ff
-    sta p_mf2+1
-    sta p_mf4+1
-    sta p_mf6+1
-    sta p_mf8+1
-    ldx dist
-    sec
-p_mf1:
-    lda SQ1LO,x
-p_mf2:
-    sbc SQ2LO,x
-p_mf3:
-    lda SQ1HI,x
-p_mf4:
-    sbc SQ2HI,x
-    sta t1
-    ldx dist+1
-    sec
-p_mf5:
-    lda SQ1LO,x
-p_mf6:
-    sbc SQ2LO,x
-    sta t2
-p_mf7:
-    lda SQ1HI,x
-p_mf8:
-    sbc SQ2HI,x
-    sta m_r+2
-    lda t1
-    clc
-    adc t2
-    sta m_r+1
-    bcc :+
-    inc m_r+2
-:   ldx ray                 ; kept for the sprites' wall test
-    lda m_r+1
-    sta PERPLO,x
-    lda m_r+2
-    sta PERPHI,x
-
-    ; j: JT gives the largest j for the start of perp's 32-wide bucket; step down while perp > TE[j].
-    lda m_r+2
-    cmp #64
-    bcc :+
-    lda #0                  ; perp >= 16384: no wall height at all
-    jmp cr_found
-:   lda m_r+1
-    lsr
-    lsr
-    lsr
-    lsr
-    lsr
-    sta t0
-    lda m_r+2
-    asl
-    asl
-    asl
-    ora t0
-    tax
-    lda m_r+2
-    and #32
-    bne :+
-    ldy JT0,x
-    jmp cr_refine
-:   ldy JT1,x
-cr_refine:
-    lda TE_LO,y             ; TE[j] >= perp?
-    cmp m_r+1
-    lda TE_HI,y
-    sbc m_r+2
-    bcs :+
-    dey
-    bne cr_refine
-:   tya
-cr_found:
+cr_store:
+    lda t0
     ldy side
     bne :+
     clc
@@ -1176,24 +1190,20 @@ init_squares:
 
 ; ------------------------------------------------------------------ drawing
 ; Each cell's screen code is PAIR[11 * left state + right state], the states coming from per-row
-; tables indexed by the rays' bytes in HE / HO (c64/gen.js builds them from c64/view.js). The sums
-; never reach 256, so the carry stays clear from one cell to the next.
+; tables indexed by the rays' bytes in HE / HO (c64/gen.js builds them from c64/view.js). The bottom
+; half mirrors the top, so one sum gives both rows' codes. The sums never reach 256, so the carry
+; stays clear from one cell to the next.
 .macro DRAWROW scr, r
     .local loop
     ldy #39
 loop:
     ldx HE,y
-    lda .ident(.sprintf("TLT%d", r)),x
+    lda .ident(.sprintf("LT%d", r)),x
     ldx HO,y
-    adc .ident(.sprintf("TRT%d", r)),x
+    adc .ident(.sprintf("RT%d", r)),x
     tax
     lda PAIRT,x
     sta scr + (HALF_ROWS - 1 - r) * 40,y
-    ldx HE,y
-    lda .ident(.sprintf("BLT%d", r)),x
-    ldx HO,y
-    adc .ident(.sprintf("BRT%d", r)),x
-    tax
     lda PAIRB,x
     sta scr + (HALF_ROWS + r) * 40,y
     dey

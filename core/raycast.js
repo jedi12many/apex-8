@@ -8,7 +8,8 @@
  *   - per ray, a DDA walk over the grid using sec() tables, then a fisheye correction per column
  *
  * makeCaster(opts) builds the tables for one view (ray count, field of view, wall scale); cast()
- * returns one { halfH, side, tile, dist } per ray. Platforms turn those into pixels their own way.
+ * returns one { halfH, side, tile, dist, u } per ray, where u (0-255) is where along the wall face the ray
+ * hit, left to right as seen. Platforms turn those into pixels their own way.
  *
  * With opts.interpolate, only the even rays (and the last) are cast. An odd ray whose neighbours hit
  * the same face of the same tile takes the mean of their heights and distances instead: on a flat wall
@@ -78,10 +79,13 @@
           if (tile) break;
         }
         const perp = (dist * COL_COS[c]) >> 8;
-        if (perp >= FOG_PERP) { out[c] = { halfH: 0, side: 0, tile: 0, dist: 0xffff, mapX: -1, mapY: -1 }; return; }
+        if (perp >= FOG_PERP) { out[c] = { halfH: 0, side: 0, tile: 0, dist: 0xffff, mapX: -1, mapY: -1, u: 0 }; return; }
         let halfH = perp ? Math.min(o.maxH, Math.floor(SCALE / perp)) : o.maxH;
         if (o.even) halfH &= ~1;
-        out[c] = { halfH, side, tile, dist: perp, mapX, mapY };
+        // u: where along the wall face the ray hit, 0-255 across one tile, left to right as seen.
+        const along = side === 0 ? py + ((dist * sin(a)) >> 8) : px + ((dist * cos(a)) >> 8);
+        const u = side === 0 ? (stepX > 0 ? along & 255 : 255 - (along & 255)) : (stepY > 0 ? 255 - (along & 255) : along & 255);
+        out[c] = { halfH, side, tile, dist: perp, mapX, mapY, u };
       };
       if (!o.interpolate) {
         for (let c = 0; c < o.rays; c++) ray(c);
@@ -94,7 +98,8 @@
         if (l.mapX !== r.mapX || l.mapY !== r.mapY || l.side !== r.side) { ray(c); continue; }
         let halfH = (l.halfH + r.halfH) >> 1;
         if (o.even) halfH &= ~1;
-        out[c] = { halfH, side: l.side, tile: l.tile, dist: (l.dist + r.dist) >> 1, mapX: l.mapX, mapY: l.mapY, interpolated: true };
+        const u = (l.u + r.u) >> 1;
+        out[c] = { halfH, side: l.side, tile: l.tile, dist: (l.dist + r.dist) >> 1, mapX: l.mapX, mapY: l.mapY, u, interpolated: true };
       }
       return out;
     }

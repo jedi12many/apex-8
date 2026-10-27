@@ -78,8 +78,12 @@ ticks0:  .res 1
 ticks_used: .res 1
 
 .segment "BSS"
-HE:      .res 40            ; per screen column: even ray's j (half height / 2) + 40, or + 168 for shade B
+HE:      .res 40            ; per screen column: the even ray's j + 41 * (shadeB + 2 * joint) (c64/view.js)
 HO:      .res 40            ; and the odd ray's
+RJ:      .res RAYS          ; per ray: j (half height / 2), + 41 for shade B
+U:       .res RAYS          ; per ray: where along the face it hit (0-255, left to right)
+uq:      .res 1             ; the quadrant of the angle whose sine gives u
+col:     .res 1             ; the joint pass's screen column
 HITL:    .res RAYS          ; per ray: the address of the tile it hit
 HITH:    .res RAYS          ; (high byte, plus bit 7 for a north/south face)
 
@@ -361,14 +365,20 @@ cast:
     lda HITH-1,x
     cmp HITH+1,x
     bne @full
-    txa                     ; j, stored as j + 40 or j + 168: (left + right) >> 1, carry into bit 7
+    clc                     ; j + 41 * shadeB: (left + right) >> 1, as both have the same shade
+    lda RJ-1,x
+    adc RJ+1,x
     lsr
-    tay
-    lda HE,y
-    clc
-    adc HE+1,y
+    sta RJ,x
+    clc                     ; u: the mean
+    lda U-1,x
+    adc U+1,x
     ror
-    sta HO,y
+    sta U,x
+    lda HITL-1,x            ; the same face, for the joints
+    sta HITL,x
+    lda HITH-1,x
+    sta HITH,x
     clc                     ; and the distance, for the sprites
     lda PERPLO-1,x
     adc PERPLO+1,x
@@ -388,6 +398,104 @@ cast:
     inx
     cpx #RAYS - 1
     bcc @odd
+    ; fall through
+
+; The joints, as c64/view.js finds them: ray X has one when a multiple of 64 lies between its u and
+; the next ray's on the same face (the last ray extrapolates), 1 for an even multiple, 2 for odd.
+; That is when ceil(u / 64) differs between the two (GCEIL), and the multiple is the smaller ceil.
+; Then each ray's byte for the draw, RJ + 82 * joint, goes into HE (even rays) or HO (odd).
+.macro JOINT dst
+    .local none, put
+    ldy #0
+    lda HITL,x
+    cmp HITL+1,x
+    bne none
+    lda HITH,x
+    cmp HITH+1,x
+    bne none
+    ldy U,x
+    lda GCEIL,y
+    sta t0
+    ldy U+1,x
+    lda GCEIL,y
+    cmp t0
+    beq none
+    bcc :+
+    lda t0
+:   and #1
+    tay
+    iny
+    bne put
+none:
+    ldy #0
+put:
+    lda RJ,x
+    clc
+    adc J82,y
+    ldy col
+    sta dst,y
+.endmacro
+
+joints:
+    ldx #0
+    stx col
+j_pair:
+    JOINT HE
+    inx
+    cpx #RAYS - 1
+    beq j_last
+    JOINT HO
+    inx
+    inc col
+    jmp j_pair
+j_last:                      ; the last ray: against 2u - the previous u, kept within 0-255
+    ldy #0
+    lda HITL,x
+    cmp HITL-1,x
+    bne j_put
+    lda HITH,x
+    cmp HITH-1,x
+    bne j_put
+    lda U,x
+    asl
+    sta t0
+    lda #0
+    rol
+    sta t1
+    sec
+    lda t0
+    sbc U-1,x
+    sta t0
+    lda t1
+    sbc #0
+    bmi j_low
+    beq :+
+    lda #255
+    bne j_ext
+j_low:
+    lda #0
+    beq j_ext
+:   lda t0
+j_ext:
+    tay
+    lda GCEIL,y
+    sta t0
+    ldy U,x
+    lda GCEIL,y
+    ldy #0
+    cmp t0
+    beq j_put
+    bcc :+
+    lda t0
+:   and #1
+    tay
+    iny
+j_put:
+    lda RJ,x
+    clc
+    adc J82,y
+    ldy col
+    sta HO,y
     rts
 
 ; Ray X: walk to the first wall, then store its distance, j and the face it hit. Returns X = the ray.
@@ -400,6 +508,7 @@ cast_ray:
     lda pa+1
     adc COLANG_HI,x
     and #3
+    sta ra+1
     cmp lastq               ; a new quadrant: patch the walk, the tables and the multiplies
     beq :+
     jsr quad_setup
@@ -689,6 +798,98 @@ cr_hit:
     ora #$80
 :   sta HITH,x
 
+    ; u (c64/view.js): the low byte of the player's y (x for a north/south face) + dist * sin a >> 8
+    ; (cos a for north/south), turned to run left to right as seen
+    lda ra+1
+    clc
+    adc side                ; cos a = sin (a + 256)
+    and #3
+    sta uq
+    ldy ra
+    lsr                     ; odd quadrants read the table mirrored
+    bcs u_mir
+    lda USINLO,y
+    ldx USINHI,y
+    jmp u_got
+u_mir:
+    lda USINMLO,y
+    ldx USINMHI,y
+u_got:
+    cpx #0
+    bne u_s256
+    sta u_q1+1              ; dist * |s| by quarter squares, only the two bytes needed: the lowest
+    sta u_q3+1              ; (for rounding) and the next, the low byte of >> 8
+    sta u_q5+1
+    eor #$ff
+    sta u_q2+1
+    sta u_q4+1
+    sta u_q6+1
+    ldx dist
+    sec
+u_q1:
+    lda SQ1LO,x
+u_q2:
+    sbc SQ2LO,x
+    tay
+u_q3:
+    lda SQ1HI,x
+u_q4:
+    sbc SQ2HI,x
+    sta t1
+    ldx dist+1
+    sec
+u_q5:
+    lda SQ1LO,x
+u_q6:
+    sbc SQ2LO,x
+    clc
+    adc t1
+    jmp u_sign
+u_s256:
+    lda dist
+    ldy #0
+u_sign:
+    sta t1
+    lda uq                  ; negative: the low byte of -(product) >> 8 (rounding down)
+    and #2
+    beq u_pos
+    lda t1
+    eor #$ff
+    cpy #0
+    bne :+
+    clc
+    adc #1
+:   sta t1
+u_pos:
+    lda side
+    bne :+
+    lda py
+    jmp u_add
+:   lda px
+u_add:
+    clc
+    adc t1
+    sta t1
+    ldx ra+1                ; x faces read left to right stepping east, y faces stepping north
+    lda side
+    bne u_ns
+    lda XSTEP_OP,x
+    cmp #$c8
+    beq u_keep
+    bne u_flip
+u_ns:
+    lda YSTEP_LO,x
+    cmp #32
+    bne u_keep
+u_flip:
+    lda t1
+    eor #$ff
+    sta t1
+u_keep:
+    ldx ray
+    lda t1
+    sta U,x
+
     lda COLCOS,x            ; perp = dist * COLCOS[ray] >> 8, by quarter squares
     sta p_mf1+1
     sta p_mf3+1
@@ -772,21 +973,9 @@ cr_found:
     ldy side
     bne :+
     clc
-    adc #168 - 40           ; east/west faces: shade B
-:   clc
-    adc #40
-    tax
-    lda ray
-    lsr
-    tay
-    txa
-    bcs cr_odd
-    sta HE,y
-    bcc cr_stored
-cr_odd:
-    sta HO,y
-cr_stored:
-    ldx ray
+    adc #41                 ; east/west faces: shade B
+:   ldx ray
+    sta RJ,x
     rts
 
 ; In the fog: no wall (j = 0), no face, and the greatest distance, so every object in front shows.
@@ -797,14 +986,9 @@ cr_fog:
     sta HITH,x
     sta PERPLO,x
     sta PERPHI,x
-    txa
-    lsr
-    tay
-    lda #40
-    bcs :+
-    sta HE,y
-    rts
-:   sta HO,y
+    lda #0
+    sta RJ,x
+    sta U,x
     rts
 
 ; A = the ray's quadrant, new since the last ray: patch the walk's steps, pick the 1/cos tables, and
@@ -991,32 +1175,40 @@ init_squares:
     rts
 
 ; ------------------------------------------------------------------ drawing
-; Row r above the horizon shows the "ray top" glyph $40 + 9 * left state + right state, row r below
-; it the "ray bottom" glyph 81 codes later. A ray's state in row r is CL / CL9 at its stored height
-; minus 4r, which is the same as indexing a table based 4r bytes lower.
+; Each cell's screen code is PAIR[11 * left state + right state], the states coming from per-row
+; tables indexed by the rays' bytes in HE / HO (c64/gen.js builds them from c64/view.js). The sums
+; never reach 256, so the carry stays clear from one cell to the next.
 .macro DRAWROW scr, r
     .local loop
     ldy #39
 loop:
     ldx HE,y
-    lda CL9 - 4 * r,x
+    lda .ident(.sprintf("TLT%d", r)),x
     ldx HO,y
-    clc
-    adc CL - 4 * r,x
+    adc .ident(.sprintf("TRT%d", r)),x
+    tax
+    lda PAIRT,x
     sta scr + (HALF_ROWS - 1 - r) * 40,y
-    adc #81
+    ldx HE,y
+    lda .ident(.sprintf("BLT%d", r)),x
+    ldx HO,y
+    adc .ident(.sprintf("BRT%d", r)),x
+    tax
+    lda PAIRB,x
     sta scr + (HALF_ROWS + r) * 40,y
     dey
     bpl loop
 .endmacro
 
 draw_a:
+    clc
 .repeat HALF_ROWS, R
     DRAWROW SCREEN_A, R
 .endrepeat
     rts
 
 draw_b:
+    clc
 .repeat HALF_ROWS, R
     DRAWROW SCREEN_B, R
 .endrepeat
@@ -1314,6 +1506,11 @@ XSTEP_OP: .byte $c8, $88, $88, $c8 ; per quadrant of the ray angle: INY (east) o
 YSTEP_LO: .byte 32, 32, $e0, $e0   ; +32 (south) or -32 (north) on the map row pointer
 YSTEP_BR: .byte $90, $90, $b0, $b0 ; BCC / BCS: skip the page change
 YSTEP_OP: .byte $e6, $e6, $c6, $c6 ; INC / DEC zp
+J82:     .byte 0, 82, 164       ; a ray's joint, in its draw byte
+GCEIL:
+.repeat 256, I
+    .byte (I + 63) / 64     ; ceil(u / 64)
+.endrepeat
 KEYS:    .byte $09, $0d, $0a, $12 ; W S A D
 KEYBITS: .byte 1, 2, 4, 8
 ROWLO:

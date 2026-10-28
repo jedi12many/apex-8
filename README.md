@@ -382,8 +382,8 @@ Bullets aim at one of 16 directions, chosen by integer comparisons. A hit costs 
 | | PAL | NTSC |
 |---|---|---|
 | Sprites set up late | 0 | 0 |
-| Frames late in the autopilot's run (2,400 ticks) | 6 (0.25%) | 95 (4%) |
-| Frames late in the sweep through a whole game (2,400 ticks) | 9 (0.4%) | 160 (6.7%) |
+| Frames late in the autopilot's run (2,400 ticks) | 7 (0.3%) | 115 (4.8%) |
+| Frames late in the sweep through a whole game (2,400 ticks) | 12 (0.5%) | 170 (7.1%) |
 | Slowest frame's own work (before copying ahead) | 89% of a frame | 107% |
 
 The engine alone (before the score, titles and sound) was never late on PAL or NTSC. The whole game is a little over budget at its busiest moments: on PAL a frame is shown twice now and then, and on NTSC play slows a little in heavy fights. The timing test reports this as a failure until it's fixed.
@@ -428,15 +428,17 @@ node test/profile.js "C:\path\to\GTK3VICE-3.10-win64" shmup sweep
 Music and sound effects for the SID, made the way the pictures are: `core/sound.js` is the reference, and the 6502 driver `c64/kit/sid.inc` sets exactly the same 25 SID registers on every tick. The test compares registers, not audio. The driver keeps them in RAM, and copies them to the SID once a frame. The test checks a running checksum of every tick's registers, and the last tick's, against the reference.
 
 - *music*: three voices, each playing 32-row patterns from its own order list. A row is a note, a release, or nothing. Instruments set the waveform, ADSR, a sweeping pulse width, an arpeggio and a gate length. A new note restarts hard: one tick with the gate off
-- *effects*: steps of a waveform, a sliding frequency, ADSR and a length, played on voice 3 instead of the music, which goes on underneath. A new effect starts unless one of higher priority is playing
-- `sound/shmup.js`: the Dreadnought's music, a 31-second loop in A minor (bass, a pulse lead, arpeggiated chords), and its five effects
+- *drums*: an instrument can instead have a table, a waveform and a note for each tick (the note played plus some semitones, or a fixed note), so a kick is a fast pitch drop and a clap a burst of noise
+- *the filter*: a resonant low-pass (or band or high) whose cutoff sweeps up and down from a table, over the voices whose instruments use it
+- *effects*: steps of a waveform, a sliding frequency, ADSR and a length, played on one voice (chosen by the song) instead of the music, which goes on underneath. A new effect starts unless one of higher priority is playing
+- `sound/shmup.js`: the Dreadnought's music, an original late-80s house track at 125 beats a minute in A minor. A four-on-the-floor kick with offbeat hats and claps, an octave-jumping bass through the sweeping filter, and arpeggiated chord stabs that give way to a hook. The effects borrow the stabs' voice, so firing never stops the beat. It loops every 31 seconds
 
 | File | What it is |
 |------|------------|
 | `core/sound.js` | The reference player |
 | `c64/sound/` | A player program: the music, with the joystick (or a test's script) playing the effects |
 | `test/sound-check.js` | Plays the song for two loops, each effect alone, and effects piling up in VICE, and compares every tick's registers |
-| `showcase/sound-wav.js` | Records the player in VICE as `showcase/out/shmup-music.wav` |
+| `showcase/sound-wav.js` | Records the player in VICE as `showcase/out/shmup-music.mp3` (and a WAV, not kept in git) |
 
 ```bash
 node c64/sound/build.js

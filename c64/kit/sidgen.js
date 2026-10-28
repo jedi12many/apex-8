@@ -10,7 +10,9 @@ function sidgen(c, dir) {
   const out = [], b = v => v & 255;
   const table = (name, values) => out.push(`${name}: .byte ${values.length ? values.map(b).join(',') : '0'}`);
   if (c.ins.length > 32 || c.patterns.length > 64 || c.effects.length > 32) throw new Error('too many instruments, patterns or effects');
-  out.push(`SND_SPEED = ${c.speed}`, `SND_ORDER_LEN = ${c.order[0].length}`, `SND_EFFECTS = ${c.effects.length}`);
+  out.push(`SND_SPEED = ${c.speed}`, `SND_ORDER_LEN = ${c.order[0].length}`, `SND_EFFECTS = ${c.effects.length}`,
+    `SFX_VOICE = ${c.effectsVoice}`, `SFX_BASE = ${7 * c.effectsVoice}`,
+    `SND_RES = ${c.filter.res}`, `SND_FMODE = ${c.filter.mode}`, `SND_FPERIOD = ${c.filter.cut.length}`);
   c.effNames.forEach((n, i) => out.push(`SFX_${n.replace(/[A-Z]/g, m => '_' + m).toUpperCase()} = ${i}`));
   out.push('.segment "RODATA"');
   table('SND_FREQ_LO', S.FREQ.map(f => f & 255));
@@ -30,6 +32,19 @@ function sidgen(c, dir) {
   table('INS_PWSL', c.ins.map(i => i.pwSpeed & 255));
   table('INS_PWSH', c.ins.map(i => (i.pwSpeed >> 8) & 255));
   table('INS_GATE', c.ins.map(i => i.gate));
+  table('INS_FILT', c.ins.map(i => (i.filter ? 1 : 0)));
+  // instruments' tables, one after another: per step its waveform and note (a fixed note + $80, or
+  // + n as 7 bits)
+  const tw = [], tn = [], tabAt = [];
+  for (const i of c.ins) { tabAt.push(tw.length); for (const [w, n] of i.table) { tw.push(w); tn.push(n); } }
+  if (tw.length > 255) throw new Error('instrument tables too long');
+  table('INS_TAB', tabAt);
+  table('INS_TLEN', c.ins.map(i => i.table.length));
+  table('SND_TW', tw);
+  table('SND_TN', tn);
+  // the filter's cutoff, tick by tick
+  table('SND_CUT_LO', c.filter.cut.map(v => v & 7));
+  table('SND_CUT_HI', c.filter.cut.map(v => v >> 3));
   // patterns: 32 rows of two bytes: the op (0 nothing, 1 release, 2 + note) and the instrument ($ff:
   // the voice's last)
   c.patterns.forEach((rows, k) => table(`SND_PAT_${k}`, rows.flatMap(r => [r.op === 2 ? 2 + r.note : r.op, r.op === 2 && r.ins >= 0 ? r.ins : 0xff])));

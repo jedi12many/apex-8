@@ -4,6 +4,8 @@
 ; include path.
 ;
 ;   snd_init        silence, and the song from its start
+;
+; Effects play on voice SFX_VOICE (the song's effectsVoice); the filter's cutoff sweeps by a table.
 ;   snd_fx          starts effect A (SFX_<NAME> in sound.inc), if nothing is playing or nothing with a
 ;                   higher priority. Keeps X and Y
 ;   snd_tick        one tick: the next row, each voice, the effect, into the register image snd_img.
@@ -25,6 +27,9 @@ v_age:     .res 3
 v_arp:     .res 3
 v_pwl:     .res 3
 v_pwh:     .res 3
+v_tpos:    .res 3           ; per voice: the step in its instrument's table
+snd_ft:    .res 1           ; the filter sweep's tick
+snd_route: .res 1           ; this tick's voices through the filter
 sfx:       .res 1           ; the effect playing ($ff: none), its step, its ticks left in the step
 sfx_step:  .res 1           ; and its frequency
 sfx_left:  .res 1
@@ -53,6 +58,7 @@ snd_init:
     sta snd_pos
     sta snd_sum
     sta snd_sum+1
+    sta snd_ft
     ldx #2
 :   lda #$ff
     sta v_ins,x
@@ -60,6 +66,7 @@ snd_init:
     sta v_phase,x
     lda #0
     sta v_note,x
+    sta v_tpos,x
     sta v_age,x
     sta v_arp,x
     sta v_pwl,x
@@ -143,6 +150,7 @@ snd_tick:
     sta v_phase,x
     sta v_age,x
     sta v_arp,x
+    sta v_tpos,x
     lda INS_PWL,y
     sta v_pwl,x
     lda INS_PWH,y
@@ -166,6 +174,8 @@ snd_tick:
     sta snd_timer
 @voices:
     dec snd_timer
+    lda #0
+    sta snd_route
     ldx #2                  ; each voice's registers, then its state moves on
 :   jsr snd_voice
     dex
@@ -175,19 +185,19 @@ snd_tick:
     bmi @fixed
     ldx sfx_step
     lda sfx_fl
-    sta snd_img+14
+    sta snd_img+SFX_BASE
     lda sfx_fh
-    sta snd_img+15
+    sta snd_img+SFX_BASE+1
     lda ST_PWL,x
-    sta snd_img+16
+    sta snd_img+SFX_BASE+2
     lda ST_PWH,x
-    sta snd_img+17
+    sta snd_img+SFX_BASE+3
     lda ST_CTRL,x
-    sta snd_img+18
+    sta snd_img+SFX_BASE+4
     lda ST_AD,x
-    sta snd_img+19
+    sta snd_img+SFX_BASE+5
     lda ST_SR,x
-    sta snd_img+20
+    sta snd_img+SFX_BASE+6
     lda sfx_fl              ; it slides
     clc
     adc ST_SL,x
@@ -213,11 +223,20 @@ snd_tick:
     lda ST_FH,x
     sta sfx_fh
 @fixed:
-    lda #0                  ; no filter; full volume
+    ldx snd_ft              ; the filter: its cutoff this tick, its voices, its mode; full volume
+    lda SND_CUT_LO,x
     sta snd_img+21
+    lda SND_CUT_HI,x
     sta snd_img+22
+    inx
+    cpx #<SND_FPERIOD
+    bne :+
+    ldx #0
+:   stx snd_ft
+    lda #SND_RES << 4
+    ora snd_route
     sta snd_img+23
-    lda #$0f
+    lda #SND_FMODE | $0f
     sta snd_img+24
 .if .defined(SCRIPT) .and .not .defined(SND_NOSUM)
     ldx #0                  ; the checksum: rotate left, add
@@ -244,7 +263,7 @@ snd_voice:
     sty snd_b
     lda v_ins,x
     bmi @silent
-    cpx #2
+    cpx #SFX_VOICE
     bne @emit
     lda sfx                 ; (under an effect, which sets them)
     bmi @emit
@@ -266,23 +285,56 @@ snd_voice:
     sta snd_ad
     lda INS_SR,y
     sta snd_sr
-    lda INS_WAVE,y          ; the control register: the gate bit only while on
+    lda INS_FILT,y          ; through the filter?
+    beq :+
+    lda V_BIT,x
+    ora snd_route
+    sta snd_route
+:   lda INS_TLEN,y
+    beq @arp
+    lda v_tpos,x            ; a table: its step (the last, once past it)
+    cmp INS_TLEN,y
+    bcc :+
+    lda INS_TLEN,y
+    sbc #1
+:   clc
+    adc INS_TAB,y
+    tay
+    lda SND_TW,y
     sta snd_w
-    lda v_phase,x
-    cmp #1
-    bne :+
-    inc snd_w
-:   lda INS_ARP,y           ; the frequency: note + arpeggio, at most 95
+    lda SND_TN,y
+    bmi :+
+    eor #$40                ; the note + n (n: 7 bits, signed)
+    sec
+    sbc #$40
+    clc
+    adc v_note,x
+    jmp @note
+:   and #$7f                ; a fixed note
+    jmp @note
+@arp:
+    lda INS_WAVE,y
+    sta snd_w
+    lda INS_ARP,y           ; note + arpeggio
     clc
     adc v_arp,x
     tay
     lda SND_ARP,y
     clc
     adc v_note,x
-    cmp #96
+@note:
+    cmp #$c0                ; 0 to 95 (below 0: 0)
+    bcc :+
+    lda #0
+:   cmp #96
     bcc :+
     lda #95
 :   tay
+    lda v_phase,x           ; the control register: the gate bit only while on
+    cmp #1
+    bne :+
+    inc snd_w
+:
     lda SND_FREQ_LO,y
     sta snd_fl
     lda SND_FREQ_HI,y
@@ -302,7 +354,13 @@ snd_voice:
     sta snd_img+6,y
     ldy v_ins,x
 @state:
-    lda v_phase,x           ; restart -> on; on -> released once the gate length is reached
+    lda v_phase,x           ; the table moves on once the gate is on
+    beq :+
+    lda v_tpos,x
+    cmp #255
+    beq :+
+    inc v_tpos,x
+:   lda v_phase,x           ; restart -> on; on -> released once the gate length is reached
     bne :+
     lda #1
     sta v_phase,x
@@ -349,4 +407,5 @@ snd_out:
 
 .segment "RODATA"
 V_BASE: .byte 0, 7, 14
+V_BIT:  .byte 1, 2, 4
 .segment "CODE"

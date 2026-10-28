@@ -3,7 +3,8 @@
 //
 //   node showcase/sound-wav.js <path to VICE folder> [--seconds 34]
 //
-// Writes showcase/out/shmup-music.wav. Needs cc65 and VICE.
+// Writes showcase/out/shmup-music.wav, and from it (from the music's first sound) shmup-music.mp3.
+// Needs cc65, VICE and ffmpeg.
 const fs = require('fs'), os = require('os'), path = require('path'), { spawnSync } = require('child_process');
 const { findVice } = require('../test/vice-lib.js');
 const { song, build, runs } = require('../c64/sound/build.js');
@@ -26,4 +27,7 @@ spawnSync(exe, ['-default', '-sound', '-sounddev', 'dump', '-soundarg', path.joi
   '-autostartprgmode', '1', '-limitcycles', String(Math.round((seconds + 3) * 985248)), '-autostart', path.join(dir, 'sound.prg')], { timeout: (seconds + 60) * 1000 });
 fs.rmSync(dir, { recursive: true, force: true });
 if (!fs.existsSync(out)) throw new Error('VICE wrote no WAV');
-console.log(`${path.relative(process.cwd(), out)}: ${(fs.statSync(out).size / 1024).toFixed(0)} KB`);
+const mp3 = out.replace(/\.wav$/, '.mp3');
+const ff = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', out, '-af', 'silenceremove=start_periods=1:start_threshold=-60dB', '-c:a', 'libmp3lame', '-b:a', '192k', mp3]);
+if (ff.status) throw new Error('ffmpeg failed: ' + ff.stderr);
+console.log(`${path.relative(process.cwd(), out)}: ${(fs.statSync(out).size / 1024).toFixed(0)} KB; ${path.basename(mp3)}: ${(fs.statSync(mp3).size / 1024).toFixed(0)} KB`);

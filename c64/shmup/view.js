@@ -2,9 +2,11 @@
  * The C64 shoot-'em-up view: what the screen shows each frame, exactly as the engine is to show it.
  *
  * Multicolor characters, 40 columns by 24 rows, scrolled down a line a frame by the VIC's vertical fine
- * scroll. The level's tiles are 2x2 characters, drawn from each tile and its four neighbours: hull
- * plates with lit and shaded rims, seams, vents, lamps and turret bases, the hull's front face hanging
- * below it over space, and a starfield. Colour RAM never changes: one value for the whole screen.
+ * scroll. The level's tiles are 2x2 characters, drawn from each tile and its neighbours: armour panels
+ * with lit and shaded rims, seams and rivets, some recessed; vents, lamps, pipes, hazard stripes, domes,
+ * raised blocks of superstructure with lit windows along their fronts, turret bases, and the hull's
+ * front face hanging below it over space. Behind it, two layers of stars drift slower than the hull,
+ * in characters redrawn each frame. Colour RAM never changes: one value for the whole screen.
  *
  * Everything that moves is a hardware sprite, more of them than the VIC's eight: a multiplexer gives
  * each one a hardware sprite for its stretch of the screen, in order down the screen, so that one
@@ -33,21 +35,48 @@
   // ------------------------------------------------------------------ the level's characters
   // Fat pixels: 0 space, 1 dark grey, 2 hull grey, 3 white. A tile is 8 fat pixels by 16 lines.
   const hull = k => k !== G.SPACE;
+  // The hull's armour comes in panels of 2x2 tiles, seamed at their edges; a hash of the panel makes
+  // one in seven recessed (dark, with a shadow along its top and left).
+  const wrapY = (L, ty) => ((ty % L.h) + L.h) % L.h;
+  const recessed = (L, tx, ty) => ((tx >> 1) * 5 + (wrapY(L, ty) >> 1) * 3) % 7 === 0;
+  function plate(L, tx, ty, X, Y) {
+    const right = tx & 1, bottom = wrapY(L, ty) & 1;
+    if ((X === 7 && right) || (Y === 15 && bottom)) return 1; // seams
+    if (recessed(L, tx, ty)) return (Y === 0 && !bottom) || (X === 0 && !right) ? 0 : 1;
+    if (X === (right ? 6 : 1) && Y === (bottom ? 13 : 2)) return 1; // rivets at the panel's corners
+    return 2;
+  }
   function tilePixel(L, tx, ty, X, Y) {
-    const at = (dx, dy) => G.tileAt(L, tx + dx, ty + dy), k = at(0, 0);
-    if (k === G.SPACE) {
-      // the hull's front face, below its edge
-      if (hull(at(0, -1)) && Y < 8) return Y === 7 || (X & 3) === 3 ? 0 : 1;
-      // a few stars, placed by a hash of the tile
-      const h = (tx * 73 + ty * 151 + ((tx * ty) & 15) * 29) & 255;
-      if (h % 3) return 0;
-      const sx = (h >> 2) & 7, sy = 8 + ((h >> 5) & 7);
-      return X === sx && Y === sy ? (h & 1 ? 3 : 1) : 0;
-    }
-    if (Y === 0 && !hull(at(0, -1))) return 3; // lit rims, top and left
+    const at = (dx, dy) => G.tileAt(L, tx + dx, ty + dy), k = at(0, 0), up = at(0, -1);
+    if (k === G.SPACE) return hull(up) && Y < 8 ? (Y === 7 || (X & 3) === 3 ? 0 : 1) : 0; // the hull's front face
+    // a raised block's front face, with lit windows, below it
+    if (k !== G.BLOCK && up === G.BLOCK && Y < 8) return Y === 7 ? 0 : Y >= 2 && Y <= 4 && (X & 3) === 1 ? 3 : 1;
+    if (Y === 0 && !hull(up)) return 3; // the hull's rims: lit top and left, shaded bottom and right
     if (X === 0 && !hull(at(-1, 0))) return 3;
-    if (Y === 15 || X === 7) return 1; // shaded rims, and seams between plates
+    if (Y === 15 && !hull(at(0, 1))) return 1;
+    if (X === 7 && !hull(at(1, 0))) return 1;
     switch (k) {
+      case G.BLOCK:
+        if ((Y === 0 && up !== G.BLOCK) || (X === 0 && at(-1, 0) !== G.BLOCK)) return 3;
+        if (X === 7 && at(1, 0) !== G.BLOCK) return 1;
+        return (Y & 3) === 3 ? 1 : 2; // deck plating
+      case G.DOME: {
+        // the dome's quarter from its neighbours, lit from the top left, casting a shadow down and right
+        const px = 16 * (at(-1, 0) === G.DOME) + 2 * X + 1, py = 16 * (up === G.DOME) + Y + 0.5;
+        const dx = px - 16, dy = py - 16, d = Math.hypot(dx, dy);
+        if (d < 13) return d >= 11.5 ? 1 : dx + dy < -9 ? 3 : dx + dy > 7 ? 1 : 2;
+        if (Math.hypot(px - 19, py - 19) < 13) return 1;
+        break;
+      }
+      case G.PIPE_V:
+        if (X >= 2 && X <= 5 && (Y === 7 || Y === 8)) return 1; // a collar
+        if (X >= 2 && X <= 6) return [3, 2, 2, 1, 0][X - 2];
+        break;
+      case G.PIPE_H:
+        if (Y >= 4 && Y <= 11 && (X === 3 || X === 4)) return 1;
+        if (Y >= 4 && Y <= 12) return [3, 3, 2, 2, 2, 2, 1, 1, 0][Y - 4];
+        break;
+      case G.HAZARD: return ((2 * X + Y) >> 2) & 1 ? 3 : 1;
       case G.VENT: if (X >= 1 && X <= 6 && Y >= 3 && Y <= 12) return Y & 1 ? 0 : 1; break;
       case G.LAMP:
         if (X >= 3 && X <= 4 && Y >= 6 && Y <= 9) return 3;
@@ -59,34 +88,61 @@
         if (d < 6) return 1;
         break;
       }
-      default:
-        if ((X === 1 || X === 6) && (Y === 2 || Y === 13)) return 1; // rivets
     }
-    return 2;
+    return plate(L, tx, ty, X, Y);
+  }
+
+  // The stars: two layers that drift down slower than the hull, the near one (white) at 1/2 its speed
+  // and the far one (grey) at 1/4. Empty space shows them through STAR_CODES characters redrawn each
+  // frame: 4 textures, each a column of 4 fat pixels by 64 lines holding one star of each layer, by 8
+  // character rows. Which texture (or none) a column of space shows, and from which of its 8 rows it
+  // starts, change every 8 character rows, by a hash. A texture's lines move up by its layer's offset each frame, so its stars move down
+  // slower than the hull.
+  const STAR = 256 - 32, STAR_CODES = 32;
+  const NEAR = [[1, 5], [3, 21], [0, 40], [2, 55]], FAR = [[2, 33], [0, 50], [3, 12], [1, 28]];
+  // The star character for column c, character row R, or -1 for none.
+  const starCode = (c, R) => {
+    const b = R >> 3, h = (c * 37 + b * 91 + ((c * b) & 7) * 13) % 12;
+    return h < 4 ? STAR + 8 * h + ((R + c * 5 + b * 3) & 7) : -1;
+  };
+  const starOffsets = t => [(t >> 1) & 63, ((3 * t) >> 2) & 63];
+  // A star character's 8 bytes at frame t: texture (code - STAR) >> 3, its lines from 8 * (code & 7).
+  function starGlyph(code, t) {
+    const id = (code - STAR) >> 3, m = (code - STAR) & 7, [o1, o2] = starOffsets(t), out = new Uint8Array(8);
+    for (let y = 0; y < 8; y++) {
+      const line = 8 * m + y;
+      if (((line + o1) & 63) === NEAR[id][1]) out[y] |= 3 << (6 - 2 * NEAR[id][0]);
+      if (((line + o2) & 63) === FAR[id][1]) out[y] |= 2 << (6 - 2 * FAR[id][0]);
+    }
+    return out;
   }
 
   // The level's characters, shared where they look the same, and its screen: rows of 40 codes, two per
-  // tile row, top to bottom. { chars (256 x 8 bytes), count, rows (Uint8Array, 40 x 2h) }
+  // tile row, top to bottom. Codes from STAR are the stars' (their bytes from starGlyph).
+  // { chars (256 x 8 bytes), count (fixed characters), rows (Uint8Array, 40 x 2h) }
   const prepared = new WeakMap();
   function prepare(L) {
     if (prepared.has(L)) return prepared.get(L);
     const chars = Array.from({ length: 256 }, () => new Uint8Array(8)), byLook = new Map();
     const rows = new Uint8Array(40 * 2 * L.h);
     for (let ty = 0; ty < L.h; ty++) for (let tx = 0; tx < G.WIDTH; tx++) for (let q = 0; q < 4; q++) {
-      const cx = q & 1, cy = q >> 1, bytes = [];
+      const cx = q & 1, cy = q >> 1, bytes = [], c = 2 * tx + cx, R = 2 * ty + cy;
       for (let y = 0; y < 8; y++) {
         let b = 0;
         for (let f = 0; f < 4; f++) b |= tilePixel(L, tx, ty, 4 * cx + f, 8 * cy + y) << (6 - 2 * f);
         bytes.push(b);
       }
+      const star = G.tileAt(L, tx, ty) === G.SPACE && bytes.every(b => !b) ? starCode(c, R) : -1;
+      if (star >= 0) { rows[R * 40 + c] = star; continue; }
       const key = bytes.join(',');
       if (!byLook.has(key)) {
-        if (byLook.size >= 256) throw new Error(`${L.name}: more than 256 characters`);
+        if (byLook.size >= STAR) throw new Error(`${L.name}: more than ${STAR} characters`);
         chars[byLook.size] = Uint8Array.from(bytes);
         byLook.set(key, byLook.size);
       }
-      rows[(2 * ty + cy) * 40 + 2 * tx + cx] = byLook.get(key);
+      rows[R * 40 + c] = byLook.get(key);
     }
+    for (let i = 0; i < STAR_CODES; i++) chars[STAR + i] = starGlyph(STAR + i, 0);
     const P = { chars, count: byLook.size, rows };
     prepared.set(L, P);
     return P;
@@ -186,7 +242,7 @@
     for (let r = 0; r < 25; r++) {
       const row = (((sc.cY + r) % rowsN) + rowsN) % rowsN;
       for (let c = 0; c < 40; c++) {
-        const ch = P.chars[P.rows[row * 40 + c]];
+        const code = P.rows[row * 40 + c], ch = code >= STAR ? starGlyph(code, g.t) : P.chars[code];
         for (let y = 0; y < 8; y++) {
           const Y = 8 * r + y + sc.ys - 3;
           if (Y < 0 || Y >= 200) continue;
@@ -211,5 +267,5 @@
     return { pixels: out, scroll: sc, sprites };
   }
 
-  return { COLORS, GAP, SPRITE, FRAME_NAMES, FRAMES, COLOR, tilePixel, prepare, scroll, objects, multiplex, frame };
+  return { COLORS, GAP, SPRITE, FRAME_NAMES, FRAMES, COLOR, STAR, STAR_CODES, NEAR, FAR, tilePixel, starCode, starOffsets, starGlyph, prepare, scroll, objects, multiplex, frame };
 });

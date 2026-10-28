@@ -20,8 +20,9 @@
   'use strict';
 
   const TILE = 16, WIDTH = 20, SCREEN_H = 200;
-  // Tiles: space, and the dreadnought's hull: a plate, a vent, a lamp, a turret's base.
-  const SPACE = 0, PLATE = 1, VENT = 2, LAMP = 3, BASE = 4;
+  // Tiles: space, and the dreadnought's hull: a plate, a vent, a lamp, a turret's base, a dome (2x2
+  // tiles), a raised block of superstructure, pipes along and across, hazard stripes.
+  const SPACE = 0, PLATE = 1, VENT = 2, LAMP = 3, BASE = 4, DOME = 5, BLOCK = 6, PIPE_V = 7, PIPE_H = 8, HAZARD = 9;
   // Enemy slots' kinds.
   const FREE = 0, DRONE = 1, SWOOPER = 2, TURRET = 3, BOOM = 4;
   const SLOTS = { shots: 3, enemies: 12, bullets: 6 };
@@ -59,7 +60,8 @@
   }
 
   // Level text: 20 characters a row, the first row the level's end. ' ' space, '#' plate, '=' vent,
-  // 'o' lamp, 'T' a turret on its base; 'd' a column of drones and 's' a swooper, entering from the top
+  // 'o' lamp, 'O' dome (in 2x2 blocks), 'H' superstructure, '|' and '-' pipes, '/' hazard stripes, 'T' a
+  // turret on its base; 'd' a column of drones and 's' a swooper, entering from the top
   // over space ('D', 'S' over plate). Lines starting with ';' are comments; the first names the level.
   function parse(text) {
     const lines = text.replace(/\r/g, '').split('\n');
@@ -70,7 +72,7 @@
       if (r.length > WIDTH) throw new Error(`row ${ty} is wider than ${WIDTH}`);
       for (let tx = 0; tx < WIDTH; tx++) {
         const ch = r[tx] || ' ';
-        tiles[ty * WIDTH + tx] = { '#': PLATE, D: PLATE, S: PLATE, '=': VENT, o: LAMP, T: BASE }[ch] || SPACE;
+        tiles[ty * WIDTH + tx] = { '#': PLATE, D: PLATE, S: PLATE, '=': VENT, o: LAMP, T: BASE, O: DOME, H: BLOCK, '|': PIPE_V, '-': PIPE_H, '/': HAZARD }[ch] || SPACE;
         const kind = { d: DRONE, D: DRONE, s: SWOOPER, S: SWOOPER, T: TURRET }[ch];
         if (kind) spawns.push({ tx, ty, kind });
       }
@@ -204,6 +206,6 @@
     return g;
   }
 
-  return { TILE, WIDTH, SCREEN_H, SPACE, PLATE, VENT, LAMP, BASE, FREE, DRONE, SWOOPER, TURRET, BOOM, SLOTS,
+  return { TILE, WIDTH, SCREEN_H, SPACE, PLATE, VENT, LAMP, BASE, DOME, BLOCK, PIPE_V, PIPE_H, HAZARD, FREE, DRONE, SWOOPER, TURRET, BOOM, SLOTS,
     DIRS, BOUNDS, START, SHOT, DEAD_FOR, INVULN, SCORE, HP, BOX, SWAY, AIM, aim, parse, tileAt, game, tick };
 });

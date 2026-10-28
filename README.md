@@ -334,18 +334,20 @@ To play the reference, open `web/shmup.html` from a local server, or `web/out/sh
 |------|------------|
 | `core/shmup.js` | The level, the ship, its shots, the enemies and their bullets, in integer maths with fixed slots |
 | `c64/shmup/view.js` | What the C64 screen shows each frame, including the multiplexer's rule |
-| `levels/shmup/s1.txt` | The Dreadnought: 120 rows of 20 tiles, two hull sections with a trench, turrets, and waves of drones and swoopers |
+| `levels/shmup/s1.txt` | The Dreadnought: 120 rows of 20 tiles, two hull sections with domes, superstructure, pipes and a hazard-striped trench, turrets, and waves of drones and swoopers |
 | `web/shmup.html` | The reference, playable in a browser |
 | `showcase/shmup-pilot.js` | An autopilot that lines up under enemies and sidesteps what's coming |
 | `showcase/shmup.js` | The autopilot's run, as `showcase/out/shmup-run.mp4` |
 
-**Screen.** Multicolor characters, 40 columns by 24 rows. The VIC's vertical fine scroll moves the screen down one line a frame. Tiles are 16×16 pixels (2×2 characters), each drawn from its own kind and its four neighbours:
-- hull plates with lit top and left rims, shaded rims and seams, and rivets
-- vents, lamps and turret bases
-- the hull's front face, hanging below its edge over space
-- stars
+**Screen.** Multicolor characters, 40 columns by 24 rows. The VIC's vertical fine scroll moves the screen down one line a frame. Tiles are 16×16 pixels (2×2 characters), each drawn from its own kind and its neighbours:
+- *armour*: panels of 2×2 tiles with seams and corner rivets, and lit and shaded rims along the hull's edges. One panel in seven is recessed: dark, with a shadow along its top and left
+- *fittings*: vents, lamps, pipes running along and across, and hazard stripes on the hull's nose and the trench walls
+- *raised structures*: domes, lit from the top left and casting a shadow, and blocks of superstructure with a row of lit windows along their fronts
+- *turret bases*, and the hull's front face hanging below its edge over space
 
-The Dreadnought needs 90 characters. Colour RAM is one value for the whole screen, so scrolling never touches it.
+The Dreadnought needs 140 characters. Colour RAM is one value for the whole screen, so scrolling never touches it.
+
+**Parallax stars.** Two layers of stars drift down behind the hull, slower than it: white near stars at half its speed and grey far stars at a quarter. Empty space shows them through 32 star characters that are redrawn every frame. They come from 4 textures, each a column 64 lines tall holding one star of each layer, cut into 8 characters. Every 8 character rows, a hash picks which texture each column of space shows (or none) and which row of it to start from, so the stars don't line up. Each frame, a texture's lines move up by half a line for the near layer and three quarters for the far one. Against the screen's one line down, that leaves the stars moving down at ½ and ¼ speed. On the C64 that costs 256 bytes rewritten per frame.
 
 **Sprites and the multiplexer.** The objects to show are sorted by Y, and the n-th one shown gets hardware sprite n mod 8. An object is shown only if it starts at least 24 lines below the last object on its hardware sprite. That leaves time for the VIC to finish the previous object and for an interrupt to set up the next. Otherwise the object is left out for that frame. Where sprites overlap, the lower hardware sprite is in front, as on the VIC. The autopilot's run peaks at 14 sprites on screen at once, and none is dropped.
 

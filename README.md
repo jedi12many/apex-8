@@ -270,9 +270,11 @@ node test/side-check.js "C:\path\to\GTK3VICE-3.10-win64"
 node showcase/side-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
-## Isometric dungeon (in progress)
+## Isometric dungeon
 
-A Diablo-style dungeon for the C64: an isometric 2:1 view that scrolls smoothly in every direction with the hero always at the centre, and a torchlight radius around them. So far it is a JavaScript reference you can play; the 6502 engine comes next and will be tested pixel for pixel against it, like the other two.
+A Diablo-style dungeon for the C64: an isometric 2:1 view that scrolls smoothly in every direction with the hero always at the centre, and a torchlight radius around them. A JavaScript reference defines every frame; the 6502 engine draws exactly the same frames at 50 frames a second, checked pixel for pixel in VICE.
+
+To play on a C64 or in VICE, load `c64/out/iso.prg` with `LOAD"*",8,1`, then `RUN`. Use a joystick in port 2, or W, A, S and D (two at once for diagonals); R starts again. `showcase/out/iso-c64.mp4` is a recording of it running in VICE.
 
 | File | What it is |
 |------|------------|
@@ -282,6 +284,10 @@ A Diablo-style dungeon for the C64: an isometric 2:1 view that scrolls smoothly 
 | `web/iso.html` | The reference, playable in a browser (`web/bundle.js` makes one-file versions in `web/out/`) |
 | `showcase/iso-pilot.js` | An autopilot that tours the rooms along shortest paths |
 | `showcase/iso.js` | The autopilot's tour, as `showcase/out/iso-run.mp4` |
+| `c64/iso/iso.s` | The 6502 engine (ca65) |
+| `c64/iso/gen.js`, `build.js` | Turn the reference into the engine's code maps, characters, sprites, screen copies and light fixups, and assemble it |
+| `test/iso-check.js` | Plays the tour and an eight-direction walk in VICE, checks every pixel of the C64's frames against the reference, and checks that no frame is late |
+| `showcase/iso-c64-video.js` | Records the C64 engine's tour in VICE, as `showcase/out/iso-c64.mp4` |
 
 **Screen.** Multicolor characters, 38 columns by 24 rows, with the VIC's fine scroll in both directions. Tiles are 32×16 pixel diamonds and walls are cubes 16 pixels high. On a 2:1 grid each screen character can show parts of at most four tiles, and which four depends only on its phase: its place on the grid, one of four. Each character is therefore a table lookup by its phase and those tiles' looks: void, floor, cracked floor, wall, or wall with a torch. The phase also fixes which part of each tile a character shows, so textures can follow the tiles: flagstones with joints along the diamonds, wall tops in half mortar, lit sides in two courses of brick, shaded sides in alternate lines, and a contact shadow at each wall's foot. Only the cases a map uses get a character: the Crypt needs 53, out of a limit of 128.
 
@@ -296,9 +302,26 @@ Together they make five steps from full light to dark, blended across the rings 
 - collision: the hero's square, half a tile across, stays on floor, checked one axis at a time so the hero slides along walls
 - the hero is a multicolor sprite that never moves; the camera is always centred on them
 
+**The C64 engine.** Each frame it reads the controls, moves the hero one tick and works out the camera, then leaves the next frame for the bottom-of-frame IRQ to show:
+- *code maps*: for each phase and anchor tile, the character, 64×64 anchors by 4 phases in 16K. A character is one lookup, and along a row or column the anchor steps in a fixed pattern by phase, so a new edge row or column is unrolled code with no arithmetic per character
+- *two screens*: when the view moves a whole character, the screen that isn't showing becomes the other one shifted (an unrolled copy, 9 cycles a character), then the new edge row or column is looked up. A diagonal step moves both ways at once
+- *the light's half-lit bits*: a shift carries each character's bit 7 to a new place in the fixed rings, so the generator lists the characters where it is now wrong and emits code that flips them (about 180 to 200 a shift). Each list also serves the opposite direction, run with X as the offset
+- *the IRQ*: one, below the display, sets the screen, both fine scrolls and the hero's sprite frame together
+- *memory*: BASIC and the KERNAL are switched out; the light's fixups load under BASIC's ROM
+
+The map must fit 64×64 tiles, and the screen's anchors from anywhere the hero can stand must span at most 64×64; the generator checks both. The Crypt's span 62×62.
+
+| | PAL | NTSC |
+|---|---|---|
+| Frames late in the tour (1,800 ticks) and the eight-way walk (480) | 0 | 0 |
+| Slowest frame's work (a diagonal step with both edges) | 80% of a frame | 93% |
+
 ```bash
 node showcase/iso.js
 node web/bundle.js
+node c64/iso/build.js
+node test/iso-check.js "C:\path\to\GTK3VICE-3.10-win64"
+node showcase/iso-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
 ## Roadmap

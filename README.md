@@ -270,6 +270,33 @@ node test/side-check.js "C:\path\to\GTK3VICE-3.10-win64"
 node showcase/side-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
+## Isometric dungeon (in progress)
+
+A Diablo-style dungeon for the C64: an isometric 2:1 view that scrolls smoothly in every direction with the hero always at the centre, and a torchlight radius around them. So far it is a JavaScript reference you can play; the 6502 engine comes next and will be tested pixel for pixel against it, like the other two.
+
+| File | What it is |
+|------|------------|
+| `core/iso.js` | Maps, and the hero's movement and collision, in integer maths |
+| `c64/iso/view.js` | What the C64 screen shows each frame |
+| `levels/iso/d1.txt` | The Crypt: nine rooms and their corridors on a 48×48 map |
+| `web/iso.html` | The reference, playable in a browser (`web/bundle.js` makes one-file versions in `web/out/`) |
+| `showcase/iso-pilot.js` | An autopilot that tours the rooms along shortest paths |
+| `showcase/iso.js` | The autopilot's tour, as `showcase/out/iso-run.mp4` |
+
+**Screen.** Multicolor characters, 38 columns by 24 rows, with the VIC's fine scroll in both directions. Tiles are 32×16 pixel diamonds and walls are cubes 16 pixels high. On a 2:1 grid each screen character can show parts of at most four tiles, and which four depends only on its phase: its place on the grid, one of four. Each character is therefore a table lookup by its phase and those tiles' kinds (void, floor, wall), which is 144 cases. They need only 47 distinct characters, all made from the faces' textures.
+
+**Light.** Bit pair 11 of every character takes its colour from colour RAM, which holds rings around the hero (yellow, then red, then dark) and never changes. The dungeon scrolls under the light while the colour RAM stays still. The other bit pairs are black (void and floor joints) and dark grey (mortar), so outside the light the walls still show faintly as grey outlines.
+
+**Movement.** One tick per 50 Hz frame, in 1/256 tile:
+- walking: the eight joystick directions at one speed, 2 pixels a frame across the screen and 1 up and down
+- collision: the hero's square, half a tile across, stays on floor, checked one axis at a time so the hero slides along walls
+- the hero is a multicolor sprite that never moves; the camera is always centred on them
+
+```bash
+node showcase/iso.js
+node web/bundle.js
+```
+
 ## Roadmap
 
 The raycaster is a renderer so far. These are what a game built on it would need, in a sensible order. None is planned yet.

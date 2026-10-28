@@ -1,0 +1,1132 @@
+<title>APEX Crypt</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* One look on purpose: a C64 screen in a dark room, whatever the viewer's theme. */
+  :root { --bg: #15131c; --fg: #e4e1ee; --dim: #9893ad; --key: #2c2838; --key-on: #4a4460; color-scheme: dark; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-block: 16px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); box-sizing: border-box; min-height: 100%; touch-action: manipulation; }
+  canvas { width: min(100%, 960px); aspect-ratio: 384 / 272; image-rendering: pixelated; background: #000; }
+  .help { color: var(--dim); text-align: center; max-width: 960px; }
+  .pad { display: none; width: 144px; height: 144px; border-radius: 50%; background: var(--key); position: relative; user-select: none; -webkit-user-select: none; touch-action: none; }
+  .pad .knob { position: absolute; left: 50%; top: 50%; width: 48px; height: 48px; margin: -24px 0 0 -24px; border-radius: 50%; background: var(--key-on); }
+  @media (pointer: coarse) { .pad { display: block; } }
+</style>
+
+<canvas id="screen" width="384" height="272"></canvas>
+<div class="pad" id="pad" aria-label="move"><div class="knob" id="knob"></div></div>
+<p class="help" id="help">Arrow keys or W / A / S / D to walk (two at once for diagonals) · R to restart · gamepad works too</p>
+<script>
+/*
+ * APEXSCII — PETSCII-style character sets for the Commodore 64, one per perspective:
+ * isometric 2:1, military 45°, top-down 3/4, side oblique, first-person dungeon and raycast,
+ * each in hi-res (8x8) and multicolor (4x8).
+ *
+ * Every set keeps PETSCII text at screen codes $00-$3F, then two shade sets (smooth and brick),
+ * line art and block elements; the rest of the 256 slots are free. buildDefault(mode, persp)
+ * returns the glyphs, their names and the layout regions.
+ *
+ * Also here: the C64 screen decoder, runnable .prg / .asm writers and specimen sheets.
+ * Works in the browser (window.APEXSCII) and in Node (require).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSCII = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- text font
+  const TEXT_NAMES = '@ABCDEFGHIJKLMNOPQRSTUVWXYZ[£]↑← !"#$%&\'()*+,-./0123456789:;<=>?';
+  const FONT_SRC = [
+    '..####.. .##..##. .##.###. .##.###. .##..... .##...#. ..####..', // @
+    '...##... ..####.. .##..##. .######. .##..##. .##..##. .##..##.', // A
+    '.#####.. .##..##. .##..##. .#####.. .##..##. .##..##. .#####..',
+    '..####.. .##..##. .##..... .##..... .##..... .##..##. ..####..',
+    '.####... .##.##.. .##..##. .##..##. .##..##. .##.##.. .####...',
+    '.######. .##..... .##..... .####... .##..... .##..... .######.',
+    '.######. .##..... .##..... .####... .##..... .##..... .##.....',
+    '..####.. .##..##. .##..... .##.###. .##..##. .##..##. ..####..',
+    '.##..##. .##..##. .##..##. .######. .##..##. .##..##. .##..##.',
+    '..####.. ...##... ...##... ...##... ...##... ...##... ..####..',
+    '...####. ....##.. ....##.. ....##.. ....##.. .##.##.. ..###...',
+    '.##..##. .##.##.. .####... .###.... .####... .##.##.. .##..##.',
+    '.##..... .##..... .##..... .##..... .##..... .##..... .######.',
+    '.##...## .###.### .####### .##.#.## .##...## .##...## .##...##',
+    '.##..##. .###.##. .######. .######. .##.###. .##..##. .##..##.',
+    '..####.. .##..##. .##..##. .##..##. .##..##. .##..##. ..####..',
+    '.#####.. .##..##. .##..##. .#####.. .##..... .##..... .##.....',
+    '..####.. .##..##. .##..##. .##..##. .##..##. ..####.. ....###.',
+    '.#####.. .##..##. .##..##. .#####.. .####... .##.##.. .##..##.',
+    '..####.. .##..##. .##..... ..####.. .....##. .##..##. ..####..',
+    '.######. ...##... ...##... ...##... ...##... ...##... ...##...',
+    '.##..##. .##..##. .##..##. .##..##. .##..##. .##..##. ..####..',
+    '.##..##. .##..##. .##..##. .##..##. .##..##. ..####.. ...##...',
+    '.##...## .##...## .##...## .##.#.## .####### .###.### .##...##',
+    '.##..##. .##..##. ..####.. ...##... ..####.. .##..##. .##..##.',
+    '.##..##. .##..##. .##..##. ..####.. ...##... ...##... ...##...',
+    '.######. .....##. ....##.. ...##... ..##.... .##..... .######.', // Z
+    '..####.. ..##.... ..##.... ..##.... ..##.... ..##.... ..####..', // [
+    '....##.. ...##.#. ..##.... .#####.. ..##.... .##...#. ######..', // £
+    '..####.. ....##.. ....##.. ....##.. ....##.. ....##.. ..####..', // ]
+    '...##... ..####.. .######. ...##... ...##... ...##... ...##...', // ↑
+    '........ ..#..... .##..... ######## .##..... ..#..... ........', // ←
+    '........',                                                        // space
+    '...##... ...##... ...##... ...##... ........ ........ ...##...', // !
+    '.##..##. .##..##. .##..##.',                                      // "
+    '.##..##. .##..##. ######## .##..##. ######## .##..##. .##..##.', // #
+    '...##... ..#####. .##..... ..####.. .....##. .#####.. ...##...', // $
+    '.##...#. .##..##. ....##.. ...##... ..##.... .##..##. .#...##.', // %
+    '..####.. .##..##. ..####.. ..###... .##..### .##..##. ..#####.', // &
+    '.....##. ....##.. ...##...',                                      // '
+    '....##.. ...##... ..##.... ..##.... ..##.... ...##... ....##..', // (
+    '..##.... ...##... ....##.. ....##.. ....##.. ...##... ..##....', // )
+    '........ .##..##. ..####.. ######## ..####.. .##..##. ........', // *
+    '........ ...##... ...##... .######. ...##... ...##... ........', // +
+    '........ ........ ........ ........ ........ ...##... ...##... ..##....', // ,
+    '........ ........ ........ .######.',                             // -
+    '........ ........ ........ ........ ........ ...##... ...##...', // .
+    '........ ......## .....##. ....##.. ...##... ..##.... .##.....', // /
+    '..####.. .##..##. .##.###. .###.##. .##..##. .##..##. ..####..', // 0
+    '...##... ..###... ...##... ...##... ...##... ...##... .######.',
+    '..####.. .##..##. .....##. ....##.. ..##.... .##..... .######.',
+    '..####.. .##..##. .....##. ...###.. .....##. .##..##. ..####..',
+    '.....##. ....###. ...####. .##..##. .####### .....##. .....##.',
+    '.######. .##..... .#####.. .....##. .....##. .##..##. ..####..',
+    '..####.. .##..##. .##..... .#####.. .##..##. .##..##. ..####..',
+    '.######. .##..##. ....##.. ...##... ...##... ...##... ...##...',
+    '..####.. .##..##. .##..##. ..####.. .##..##. .##..##. ..####..',
+    '..####.. .##..##. .##..##. ..#####. .....##. .##..##. ..####..', // 9
+    '........ ........ ...##... ........ ........ ...##... ........', // :
+    '........ ........ ...##... ........ ........ ...##... ...##... ..##....', // ;
+    '....###. ...###.. ..###... .###.... ..###... ...###.. ....###.', // <
+    '........ ........ .######. ........ .######.',                   // =
+    '.###.... ..###... ...###.. ....###. ...###.. ..###... .###....', // >
+    '..####.. .##..##. .....##. ....##.. ...##... ........ ...##...', // ?
+  ];
+
+  function parseGlyph(src) {
+    const rows = src.trim().split(/\s+/);
+    if (rows.length > 8) throw new Error('glyph has >8 rows: ' + src);
+    const g = new Uint8Array(8);
+    rows.forEach((r, y) => {
+      if (r.length !== 8) throw new Error('row not 8 wide: "' + r + '"');
+      for (let x = 0; x < 8; x++) if (r[x] === '#') g[y] |= 0x80 >> x;
+    });
+    return g;
+  }
+
+  // ---------------------------------------------------------- shade patterns
+  // Patterns are periodic in 8x8 so a glyph looks identical wherever it lands.
+  function brickWall(x, y) {
+    x &= 7; y &= 7;
+    if ((y & 3) === 3) return false;
+    return x !== (y < 4 ? 0 : 4);
+  }
+  const SETS = {
+    smooth: {
+      E: () => false,
+      T: () => true,
+      L: (x, y) => ((x + y) & 1) === 0,
+      R: (x, y) => (x & 1) === 0 && (y & 1) === 0,
+    },
+    brick: {
+      E: () => false,
+      T: (x, y) => !(((x & 3) === 0 && (y & 3) === 0) || ((x & 3) === 2 && (y & 3) === 2)),
+      L: brickWall,
+      R: (x, y) => brickWall(x, y) && ((x + y) & 1) === 0,
+    },
+  };
+  // Multicolor patterns work on 4x8 fat pixels: fn(fx, y) -> 2-bit value.
+  //   00 = $D021 background, 01 = $D022 (MC1), 10 = $D023 (MC2), 11 = the cell's colour RAM (0-7).
+  // The top face takes the cell colour, so materials share glyphs and differ only by colour;
+  // the left/right faces use the two shared shades.
+  function brickWallMC(fx, y) {
+    y &= 7;
+    if ((y & 3) === 3) return false;
+    return (fx & 3) !== (y < 4 ? 0 : 2);
+  }
+  const MC_SETS = {
+    smooth: { E: () => 0, T: () => 3, L: () => 1, R: () => 2 },
+    brick: {
+      E: () => 0,
+      T: (fx, y) => ((y & 3) === 0 && ((fx + (y >> 2)) & 1) === 0) ? 2 : 1, // light paving, dark joints
+      L: (fx, y) => brickWallMC(fx, y) ? 3 : 1,                             // bricks in cell colour, light mortar
+      R: (fx, y) => brickWallMC(fx, y) ? (((fx + y) & 1) ? 3 : 2) : 0,      // shaded bricks, dark mortar
+    },
+  };
+  // Dungeon faces: ceiling, ground, front wall, side wall, door (vertical planks).
+  Object.assign(SETS.smooth, { C: () => false, G: SETS.smooth.R, W: SETS.smooth.T, S: SETS.smooth.L, D: x => (x & 3) !== 3 });
+  Object.assign(SETS.brick, { C: () => false, G: SETS.brick.T, W: SETS.brick.L, S: SETS.brick.R, D: x => (x & 3) !== 3 });
+  Object.assign(MC_SETS.smooth, { C: () => 0, G: () => 2, W: () => 3, S: () => 1, D: fx => (fx & 1) ? 2 : 3 });
+  Object.assign(MC_SETS.brick, { C: () => 0, G: MC_SETS.brick.T, W: MC_SETS.brick.L, S: MC_SETS.brick.R, D: fx => (fx & 1) ? 2 : 3 });
+
+  // ------------------------------------------------------------ theme textures
+  // A theme repaints the two shade sets of every perspective with its own textures; glyph roles and
+  // screen codes stay the same, so maps and renderers work with any theme. A texture is 8 rows of
+  // 8 pixels ('#' on) for hi-res, or 8 rows of 4 fat pixels ('0'-'3') for multicolor, tiled every
+  // 8 pixels. Faces: T top, L lit side, R shaded side; dungeon C ceiling and D door. The dungeon's
+  // floor, front wall and side wall default to T, L and R.
+  const tex = rows => (x, y) => rows[y & 7][x & 7] === '#';
+  const texMC = rows => (fx, y) => +rows[y & 7][fx & 3];
+  const shaded = f => (x, y) => f(x, y) && ((x + y) & 1) === 0; // a darker side: every other pixel
+  function defineSet(name, hi, mc) {
+    const full = (s, none, door) => Object.assign({ E: none, C: none, G: s.T, W: s.L, S: s.R, D: door }, s);
+    SETS[name] = full(hi, () => false, x => (x & 3) !== 3);
+    MC_SETS[name] = full(mc, () => 0, fx => (fx & 1) ? 2 : 3);
+  }
+  const IRON_DOOR = tex(['########', '###.###.', '###.###.', '###.###.', '###.###.', '########', '###.###.', '###.###.']);
+  const IRON_DOOR_MC = texMC(['1111', '3303', '3303', '3303', '3303', '1111', '3303', '3303']);
+  const COBWEB = tex(['#.......', '.#......', '..#.....', '...#....', '........', '........', '......#.', '........']);
+  const COBWEB_MC = texMC(['1000', '0100', '0000', '0010', '0000', '0000', '0001', '0000']);
+
+  const cryptL = tex(['#######.', '#.######', '#######.', '........', '###.####', '###.##.#', '###.####', '........']);
+  defineSet('crypt-stone', {
+    T: tex(['#######.', '#######.', '#.#####.', '........', '###.####', '###.####', '###.##.#', '........']),
+    L: cryptL, R: shaded(cryptL), C: COBWEB, D: IRON_DOOR,
+  }, {
+    T: texMC(['3330', '3330', '3130', '0000', '3033', '3033', '3031', '0000']),
+    L: texMC(['1110', '1210', '1110', '0000', '1011', '1011', '1012', '0000']),
+    R: texMC(['2220', '2020', '2220', '0000', '2022', '2022', '2020', '0000']), C: COBWEB_MC, D: IRON_DOOR_MC,
+  });
+  const mossL = tex(['#.#####.', '#.###.#.', '#####.#.', '........', '###.#.##', '###.#.##', '###.####', '........']);
+  defineSet('crypt-moss', {
+    T: tex(['#.#####.', '#######.', '###.##..', '........', '###.##.#', '#.#.####', '###.####', '........']),
+    L: mossL, R: shaded(mossL), C: COBWEB, D: IRON_DOOR,
+  }, {
+    T: texMC(['3130', '3330', '3310', '0000', '3031', '3133', '3033', '0000']),
+    L: texMC(['1210', '1210', '1110', '0000', '1021', '1021', '1011', '0000']),
+    R: texMC(['2020', '2020', '2220', '0000', '2022', '2022', '2022', '0000']), C: COBWEB_MC, D: IRON_DOOR_MC,
+  });
+
+  const CANOPY = tex(['#..#....', '.#....#.', '....#..#', '#.#.....', '.....#..', '..#....#', '#...#...', '.#....#.']);
+  const CANOPY_MC = texMC(['1020', '0102', '2010', '0201', '1020', '0102', '2010', '0201']);
+  const PLANK_DOOR = tex(['########', '###.###.', '###.###.', '###.###.', '###.###.', '###.###.', '###.###.', '########']);
+  const PLANK_DOOR_MC = texMC(['2222', '3303', '3303', '3303', '3303', '3303', '3303', '2222']);
+  const dirt = tex(['#.#.#.#.', '.#.###.#', '#.#####.', '.#.###.#', '#.#.#.#.', '.#.#.#.#', '###.#.#.', '##.#.#.#']);
+  defineSet('forest-grass', {
+    T: tex(['########', '##.#####', '#.#.####', '########', '######.#', '#####.#.', '########', '########']),
+    L: dirt, R: shaded(dirt), C: CANOPY, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '3233', '3333', '3332', '3333', '3323', '3333', '2333']),
+    L: texMC(['1121', '1111', '2111', '1112', '1111', '1211', '1111', '1121']),
+    R: texMC(['2202', '2222', '0222', '2220', '2222', '2022', '2222', '2202']), C: CANOPY_MC, D: PLANK_DOOR_MC,
+  });
+  const bark = tex(['#.##.###', '#.##.###', '#.###.##', '#.###.##', '##.#.###', '##.#.###', '#.##.#.#', '#.##.###']);
+  defineSet('forest-wood', {
+    T: tex(['#######.', '#######.', '........', '###.####', '###.####', '........', '#####.##', '........']),
+    L: bark, R: shaded(bark), C: CANOPY, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3330', '3330', '0000', '3033', '3033', '0000', '3303', '0000']),
+    L: texMC(['3131', '3131', '3113', '3113', '1313', '1313', '3131', '3131']),
+    R: texMC(['2020', '2020', '2002', '2002', '0202', '0202', '2020', '2020']), C: CANOPY_MC, D: PLANK_DOOR_MC,
+  });
+
+  const BEAMS = tex(['########', '........', '........', '........', '########', '........', '........', '........']);
+  const BEAMS_MC = texMC(['2222', '0000', '0000', '0000', '2222', '0000', '0000', '0000']);
+  const timber = (x, y) => !((y & 7) === 0 || (x & 7) === 0 || (x & 7) === (y & 7)); // half-timbered panels
+  const timberMC = (fx, y) => ((y & 7) === 0 || (fx & 3) === 0 || (fx & 3) === (y & 7) >> 1 ? 2 : 1);
+  defineSet('town-cobble', {
+    T: tex(['###.###.', '###.###.', '###.###.', '........', '#.###.##', '#.###.##', '#.###.##', '........']),
+    L: timber, R: shaded(timber), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    // Cobbles in the shared shade (MC1) with a fat-pixel accent of the material's own colour.
+    T: texMC(['3101', '1101', '1101', '0000', '0310', '0110', '0110', '0000']),
+    L: timberMC, R: (fx, y) => (timberMC(fx, y) === 2 ? 2 : ((fx + y) & 1 ? 1 : 0)), C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+  defineSet('town-roof', {
+    T: tex(['.######.', '########', '########', '#.#.#.#.', '###..###', '########', '########', '#.#.#.#.']),
+    L: SETS.brick.L, R: SETS.brick.R, C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['0330', '3333', '3333', '1313', '3003', '3333', '3333', '1313']),
+    L: MC_SETS.brick.L, R: MC_SETS.brick.R, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+
+  // Animated textures: frames of a top-face texture, for a renderer to cycle through. They aren't in
+  // any theme's layout; on the C64 the few glyphs they produce are rewritten each frame. Water ripples
+  // drift right by one fat pixel per frame (four frames loop); its sides are the smooth ones.
+  const ANIMATIONS = { water: [] };
+  for (let f = 0; f < 4; f++) {
+    const crest = (x, y) => (y & 3) === 1 && ((x + 2 * f + ((y >> 2) & 1) * 4) & 7) < 3;
+    const crestMC = (fx, y) => (y & 3) === 1 && ((fx + f + ((y >> 2) & 1) * 2) & 3) < 2;
+    defineSet(`water-${f}`, { T: (x, y) => !crest(x, y), L: SETS.smooth.L, R: SETS.smooth.R },
+      { T: (fx, y) => (crestMC(fx, y) ? 1 : 3), L: MC_SETS.smooth.L, R: MC_SETS.smooth.R });
+    ANIMATIONS.water.push(`water-${f}`);
+  }
+
+  // Each theme names the pattern sets that fill the two shade-set regions of every perspective.
+  const THEMES = {
+    classic: { name: 'Classic', sets: ['smooth', 'brick'] },
+    crypt: { name: 'Crypt', sets: ['crypt-stone', 'crypt-moss'] },
+    forest: { name: 'Forest', sets: ['forest-grass', 'forest-wood'] },
+    town: { name: 'Town', sets: ['town-cobble', 'town-roof'] },
+  };
+  const FACE_NAMES = { E: 'empty', T: 'top', L: 'left', R: 'right' };
+
+  // 45° boundaries, corner to corner across a cell: military, side oblique and dungeon views.
+  const B45 = [
+    { id: '/', name: '/ 45°', row: x => 7 - x },
+    { id: '\\', name: '\\ 45°', row: x => x },
+  ];
+
+  // Every perspective shares the text block at $00-$3F, then its own shade sets.
+  //   faces: what the pair glyphs combine; key: which pattern each face uses; solids: plain faces.
+  // The top-down 3/4 view has no slopes at all, so it carries outline variants instead.
+  const PERSPECTIVES = {
+    iso: { name: 'Isometric 2:1' },
+    military: {
+      name: 'Military 45°', faces: ['E', 'T', 'L', 'R'], solids: ['T', 'L', 'R'], bounds: B45,
+      key: { E: 'E', T: 'T', L: 'L', R: 'R' }, faceNames: FACE_NAMES,
+    },
+    oblique: {
+      name: 'Top-down 3/4', faces: [], solids: [], bounds: [], edges: true,
+      key: { T: 'T', F: 'L' }, faceNames: { T: 'top', F: 'front' },
+    },
+    side: {
+      name: 'Side oblique', faces: ['E', 'T', 'F', 'R'], solids: ['T', 'F', 'R'], bounds: [B45[0]],
+      key: { E: 'E', T: 'T', F: 'L', R: 'R' }, faceNames: { E: 'empty', T: 'top', F: 'front', R: 'side' },
+    },
+    dungeon: {
+      name: 'First-person dungeon', faces: ['C', 'G', 'W', 'S'], solids: ['C', 'G', 'W', 'S', 'D'], bounds: B45,
+      key: { C: 'C', G: 'G', W: 'W', S: 'S', D: 'D' },
+      faceNames: { C: 'ceiling', G: 'floor', W: 'front wall', S: 'side wall', D: 'door' },
+    },
+    ray: { name: 'Raycast' },
+  };
+
+  // Raycast view: every screen column is two 4-pixel ray columns, and each ray column is in one of
+  // nine states: 0 empty, 1-4 wall shade A 2/4/6/8 pixels high, 5-8 shade B the same. The "top" glyphs
+  // are where a wall rises out of the ceiling (wall at the bottom of the cell), the "bottom" glyphs where
+  // it meets the floor (wall at the top). Screen code = base + 9 * left state + right state, so a full
+  // wall is top or bottom with both states 4 (shade A) or 8 (shade B).
+  // Multicolor: ceiling 00 ($D021), floor 01 ($D022), wall A 10 ($D023), wall B 11 (colour RAM). Walls
+  // are the VIC's foreground bit pairs, so sprites behind walls can use background priority, and
+  // colour RAM never changes from frame to frame. Hi-res: wall A solid, wall B checkered, floor dotted.
+  const RAY = { STATES: 9, top: 0x40, bottom: 0x40 + 81 };
+  RAY.state = (shade, h) => (h <= 0 ? 0 : (shade ? 4 : 0) + Math.min(4, h >> 1)); // h in pixels, rounded down to even
+  RAY.height = s => (s ? ((s - 1) & 3) * 2 + 2 : 0);
+  RAY.shade = s => (s > 4 ? 1 : 0);
+  const RAY_STATE_NAMES = ['empty', 'A2', 'A4', 'A6', 'A8', 'B2', 'B4', 'B6', 'B8'];
+
+  // The four 2:1 slope boundaries; row(x) is the first row of the "below" region.
+  const BOUNDS = [
+    { id: '/u', name: '/ upper', row: x => 3 - (x >> 1) },
+    { id: '/l', name: '/ lower', row: x => 7 - (x >> 1) },
+    { id: '\\u', name: '\\ upper', row: x => x >> 1 },
+    { id: '\\l', name: '\\ lower', row: x => 4 + (x >> 1) },
+  ];
+  const FACES = ['E', 'T', 'L', 'R'];
+  const PAIRS = [];
+  for (const a of FACES) for (const b of FACES) if (a !== b) PAIRS.push([a, b]);
+
+  function glyphFrom(fn) {
+    const g = new Uint8Array(8);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) if (fn(x, y)) g[y] |= 0x80 >> x;
+    return g;
+  }
+  function glyphFromMC(fn) {
+    const g = new Uint8Array(8);
+    for (let y = 0; y < 8; y++) for (let fx = 0; fx < 4; fx++) g[y] |= (fn(fx, y) & 3) << (6 - 2 * fx);
+    return g;
+  }
+
+  // ----------------------------------------------------------- default set
+  const REGIONS = [
+    { from: 0x00, to: 0x3f, name: 'text' },
+    { from: 0x40, to: 0x72, name: 'smooth' },
+    { from: 0x73, to: 0xa5, name: 'brick' },
+    { from: 0xa6, to: 0xad, name: 'lines' },
+    { from: 0xae, to: 0xb5, name: 'blocks' },
+    { from: 0xb6, to: 0xff, name: 'free' },
+  ];
+
+  // In multicolor mode the shade sets and free slots are fat-pixel glyphs; text, lines and
+  // blocks stay hi-res (they are shown with colour RAM 0-7, which keeps a cell hi-res).
+  const LAYOUTS = {};
+  const layout = persp => LAYOUTS[persp] || (LAYOUTS[persp] = buildDefault('hires', persp).regions);
+  function isMCSlot(i, persp = 'iso') {
+    const r = layout(persp).find(r => i >= r.from && i <= r.to);
+    return !['text', 'lines', 'blocks'].includes(r.name);
+  }
+
+  // theme picks the textures (see THEMES); the layout and glyph roles are the same for every theme.
+  // style.outline draws a dark seam where two different faces meet (see pairFn).
+  function buildDefault(mode = 'hires', persp = 'iso', theme = 'classic', style = {}) {
+    const sets = THEMES[theme].sets, outline = !!style.outline;
+    return persp === 'iso' ? buildIso(mode, sets, outline) : persp === 'ray' ? buildRay(mode) : buildPerspective(mode, persp, sets, outline);
+  }
+
+  // The raycast set has flat shading only, so it is the same in every theme and style (see RAY).
+  function buildRay(mode) {
+    const mc = mode === 'mc';
+    const glyphs = [], names = [], regions = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0, start = 0;
+    const add = (g, name) => { glyphs[i] = g; names[i++] = name; };
+    const region = name => { regions.push({ from: start, to: i - 1, name }); start = i; };
+    FONT_SRC.forEach((src, k) => add(parseGlyph(src), 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k])));
+    region('text');
+    const px = mc
+      ? { ceiling: () => 0, floor: () => 1, wall: [() => 2, () => 3] }
+      : { ceiling: () => false, floor: (x, y) => (x & 3) === 1 && (y & 3) === 2, wall: [() => true, (x, y) => ((x + y) & 1) === 0] };
+    const make = mc ? glyphFromMC : glyphFrom, half = mc ? x => x >> 1 : x => x >> 2;
+    for (const end of ['top', 'bottom']) {
+      for (let a = 0; a < 9; a++) for (let b = 0; b < 9; b++) {
+        add(make((x, y) => {
+          const s = half(x) ? b : a, h = RAY.height(s);
+          const isWall = end === 'top' ? y >= 8 - h : y < h;
+          return isWall ? px.wall[RAY.shade(s)](x, y) : (end === 'top' ? px.ceiling : px.floor)(x, y);
+        }), `${mc ? 'mc ' : ''}ray ${end} · ${RAY_STATE_NAMES[a]} | ${RAY_STATE_NAMES[b]}`);
+      }
+      region('ray ' + end);
+    }
+    EDGE_BLOCK_GLYPHS.slice(0, 4).forEach(([n, fn]) => add(glyphFrom(fn), 'line · ' + n));
+    region('lines');
+    EDGE_BLOCK_GLYPHS.slice(4).forEach(([n, fn]) => add(glyphFrom(fn), 'block · ' + n));
+    region('blocks');
+    i = 256; region('free');
+    return { glyphs, names, regions };
+  }
+
+  const EDGE_BLOCK_GLYPHS = [
+    ['left edge', (x) => x === 0], ['right edge', (x) => x === 7],
+    ['top edge', (x, y) => y === 0], ['bottom edge', (x, y) => y === 7],
+    ['upper half', (x, y) => y < 4], ['lower half', (x, y) => y >= 4],
+    ['left half', (x) => x < 4], ['right half', (x) => x >= 4],
+    ['quad TL', (x, y) => x < 4 && y < 4], ['quad TR', (x, y) => x >= 4 && y < 4],
+    ['quad BL', (x, y) => x < 4 && y >= 4], ['quad BR', (x, y) => x >= 4 && y >= 4],
+  ];
+
+  // A pair glyph: face pa above the boundary, pc below it. With a seam, the first row of the lower face
+  // is left dark (0 in either mode) — except in a cell's top row, so renderers can apply the same rule
+  // to every pixel without knowing where boundaries fall.
+  const pairFn = (row, b, pa, pc, seam) => (x, y) => {
+    const r = row(b, x);
+    return seam && y === r && y > 0 ? 0 : (y < r ? pa : pc)(x, y);
+  };
+
+  function buildPerspective(mode, persp, sets, outline) {
+    const P = PERSPECTIVES[persp], mc = mode === 'mc';
+    const glyphs = [], names = [], regions = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0, start = 0;
+    const add = (g, name) => { glyphs[i] = g; names[i++] = name; };
+    const region = name => { regions.push({ from: start, to: i - 1, name }); start = i; };
+    FONT_SRC.forEach((src, k) => add(parseGlyph(src), 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k])));
+    region('text');
+    const pairs = [];
+    for (const a of P.faces) for (const b of P.faces) if (a !== b) pairs.push([a, b]);
+    for (const setName of sets) {
+      const pat = f => (mc ? MC_SETS : SETS)[setName][P.key[f]], make = mc ? glyphFromMC : glyphFrom;
+      const row = mc ? (b, fx) => b.row(fx * 2) : (b, x) => b.row(x);
+      const label = (mc ? 'mc ' : '') + (outline ? 'outlined ' : '') + setName, fn = P.faceNames;
+      for (const f of P.solids) add(make(pat(f)), `${label} · ${fn[f]} face`);
+      for (const b of P.bounds) for (const [a, c] of pairs) {
+        add(make(pairFn(row, b, pat(a), pat(c), outline && a !== 'E' && c !== 'E')), `${label} · ${b.name} · ${fn[a]} over ${fn[c]}`);
+      }
+      if (P.edges) {
+        // Outlines where a block drops away: top faces with any of N/E/S/W, front faces with W/E.
+        const maxX = mc ? 3 : 7, off = mc ? 0 : false;
+        for (let e = 0; e < 16; e++) {
+          const on = [e & 1 && 'N', e & 2 && 'E', e & 4 && 'S', e & 8 && 'W'].filter(Boolean);
+          add(make((x, y) => ((e & 1) && y === 0) || ((e & 4) && y === 7) || ((e & 8) && x === 0) || ((e & 2) && x === maxX)
+            ? off : pat('T')(x, y)), `${label} · top · ${on.length ? 'edges ' + on.join('') : 'no edges'}`);
+        }
+        for (let e = 0; e < 4; e++) {
+          add(make((x, y) => ((e & 1) && x === 0) || ((e & 2) && x === maxX) ? off : pat('F')(x, y)),
+            `${label} · front · ${['no edges', 'edge W', 'edge E', 'edges WE'][e]}`);
+        }
+      }
+      region(setName);
+    }
+    for (const b of P.bounds) add(glyphFrom((x, y) => y === b.row(x)), `line · ${b.name}`);
+    EDGE_BLOCK_GLYPHS.slice(0, 4).forEach(([n, fn]) => add(glyphFrom(fn), 'line · ' + n));
+    region('lines');
+    EDGE_BLOCK_GLYPHS.slice(4).forEach(([n, fn]) => add(glyphFrom(fn), 'block · ' + n));
+    region('blocks');
+    i = 256; region('free');
+    return { glyphs, names, regions };
+  }
+
+  function buildIso(mode, sets, outline) {
+    const mc = mode === 'mc';
+    const glyphs = [], names = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0;
+    FONT_SRC.forEach((src, k) => {
+      glyphs[i] = parseGlyph(src);
+      names[i++] = 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k]);
+    });
+    for (const setName of sets) {
+      const set = (mc ? MC_SETS : SETS)[setName], make = mc ? glyphFromMC : glyphFrom;
+      const row = mc ? (b, fx) => b.row(fx * 2) : (b, x) => b.row(x);
+      const label = (mc ? 'mc ' : '') + (outline ? 'outlined ' : '') + setName;
+      for (const f of ['T', 'L', 'R']) {
+        glyphs[i] = make(set[f]);
+        names[i++] = `${label} · ${FACE_NAMES[f]} face`;
+      }
+      for (const b of BOUNDS) for (const [a, c] of PAIRS) {
+        glyphs[i] = make(pairFn(row, b, set[a], set[c], outline && a !== 'E' && c !== 'E'));
+        names[i++] = `${label} · ${b.name} · ${FACE_NAMES[a]} over ${FACE_NAMES[c]}`;
+      }
+    }
+    for (const b of BOUNDS) {
+      glyphs[i] = glyphFrom((x, y) => y === b.row(x));
+      names[i++] = `line · ${b.name}`;
+    }
+    [['left edge', (x) => x === 0], ['right edge', (x) => x === 7],
+     ['top edge', (x, y) => y === 0], ['bottom edge', (x, y) => y === 7],
+     ['upper half', (x, y) => y < 4], ['lower half', (x, y) => y >= 4],
+     ['left half', (x) => x < 4], ['right half', (x) => x >= 4],
+     ['quad TL', (x, y) => x < 4 && y < 4], ['quad TR', (x, y) => x >= 4 && y < 4],
+     ['quad BL', (x, y) => x < 4 && y >= 4], ['quad BR', (x, y) => x >= 4 && y >= 4],
+    ].forEach(([n, fn], k) => {
+      glyphs[i] = glyphFrom(fn);
+      names[i++] = (k < 4 ? 'line · ' : 'block · ') + n;
+    });
+    if (i !== 0xb6) throw new Error('layout drift: ended at ' + i.toString(16));
+    const regions = REGIONS.map(r => ({ ...r, name: r.name === 'smooth' ? sets[0] : r.name === 'brick' ? sets[1] : r.name }));
+    return { glyphs, names, regions };
+  }
+
+  // --------------------------------------------------------------- palette
+  const PALETTE = ['#000000', '#ffffff', '#68372b', '#70a4b2', '#6f3d86', '#588d43', '#352879', '#b8c76f',
+                   '#6f4f25', '#433900', '#9a6759', '#444444', '#6c6c6c', '#9ad284', '#6c5eb5', '#959595'];
+  const COLOR_NAMES = ['black', 'white', 'red', 'cyan', 'purple', 'green', 'blue', 'yellow',
+                       'orange', 'brown', 'light red', 'dark grey', 'grey', 'light green', 'light blue', 'light grey'];
+
+  // --------------------------------------------------------------- screens
+  const W = 320, H = 200;
+
+  function asciiToScreen(ch) {
+    const c = ch.toUpperCase().charCodeAt(0);
+    if (c >= 65 && c <= 90) return c - 64;
+    if (ch === '@') return 0;
+    if (ch === '[') return 27;
+    if (ch === ']') return 29;
+    if (c >= 32 && c <= 63) return c;
+    return 32;
+  }
+
+  // Decode a 40x25 screen the way the VIC does: in MC mode, colour RAM bit 3 makes a cell multicolor.
+  // opts: { mode, bg, mc1, mc2, romRows }. The bottom `romRows` rows come from the ROM font (see
+  // screenPrg): pass the 4K chargen ROM as `rom` for an exact picture; otherwise APEXSCII's own text
+  // glyphs stand in (inverted for reverse codes).
+  function screenRGB(chars, screen, color, opts, rom) {
+    const pal = PALETTE.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
+    const out = new Uint8ClampedArray(W * H * 4), mc = opts.mode === 'mc', firstRom = 25 - (opts.romRows || 0);
+    const romGlyph = code => {
+      if (rom) return rom.subarray(code * 8, code * 8 + 8);
+      const t = (code & 0x7f) < 0x40 ? chars[code & 0x3f] : new Uint8Array(8);
+      return code & 0x80 ? t.map(b => b ^ 0xff) : t;
+    };
+    for (let cy = 0; cy < 25; cy++) for (let cx = 0; cx < 40; cx++) {
+      const k = cy * 40 + cx, cr = color[k];
+      const g = cy >= firstRom ? romGlyph(screen[k]) : chars[screen[k]];
+      const multi = mc && (cr & 8);
+      const cols = multi ? [opts.bg, opts.mc1, opts.mc2, cr & 7] : [opts.bg, cr];
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+        const v = multi ? (g[y] >> (6 - 2 * (x >> 1))) & 3 : (g[y] >> (7 - x)) & 1;
+        const c = pal[cols[v]], p = ((cy * 8 + y) * W + cx * 8 + x) * 4;
+        out[p] = c[0]; out[p + 1] = c[1]; out[p + 2] = c[2]; out[p + 3] = 255;
+      }
+    }
+    return out;
+  }
+
+  // --------------------------------------------------------------- exports
+  function flatten(chars) {
+    const out = new Uint8Array(2048);
+    chars.forEach((g, i) => out.set(g, i * 8));
+    return out;
+  }
+  function charsetPrg(chars) {
+    const out = new Uint8Array(2050);
+    out[0] = 0x00; out[1] = 0x38; out.set(flatten(chars), 2);
+    return out;
+  }
+
+  // Self-contained runnable PRG for a 40x25 screen: BASIC "10 SYS2064", copies screen/colour/charset
+  // into place, points the VIC at $3800 and parks. Memory: $0A00 screen, $0E00 colour, $1200 charset.
+  // opts: { mode, bg, border, mc1, mc2, romRows }. Multicolor also sets $D022/$D023 and $D016 bit 4.
+  //
+  // With romRows > 0, a two-stage raster IRQ swaps $D018 every frame: APEXSCII ($1E) above, the ROM
+  // uppercase/graphics font ($14, VIC sees ROM at $1000) for the bottom rows. The swap is polled to
+  // the very start of the first ROM row's raster line, before the VIC fetches that line's glyphs.
+  // ROM rows should use colour RAM 0-7, so they stay hi-res in MC mode.
+  function screenPrg(chars, screen, color, opts) {
+    const { bg, border } = opts, ORG = 0x0810;
+    const SCR = 0x0a00, COL = 0x0e00, CHR = 0x1200, START = 0x0801, END = 0x1a00;
+    const split = (opts.romRows || 0) > 0;
+    const L = 51 + 8 * (25 - (opts.romRows || 0)); // first raster line of the ROM rows (PAL and NTSC)
+    const lo = v => v & 0xff, hi = v => v >> 8;
+    const labels = {};
+    // Two passes: the first records label addresses, the second fills in forward references.
+    const emit = () => {
+      const c = [], pc = () => ORG + c.length, mark = n => { labels[n] = pc(); };
+      const at = n => labels[n] || 0, rel = n => (at(n) - (pc() + 2)) & 0xff;
+      const setVec = n => c.push(0xa9, lo(at(n)), 0x8d, 0x14, 0x03, 0xa9, hi(at(n)), 0x8d, 0x15, 0x03); // $0314/5 = n
+      c.push(
+        0xa9, border & 15, 0x8d, 0x20, 0xd0,   // LDA #border : STA $D020
+        0xa9, bg & 15, 0x8d, 0x21, 0xd0,       // LDA #bg     : STA $D021
+        0xa9, 0x80, 0x8d, 0x91, 0x02);         // LDA #$80    : STA $0291 (lock shift+C= charset switch)
+      if (opts.mode === 'mc') c.push(
+        0xa9, opts.mc1 & 15, 0x8d, 0x22, 0xd0, // LDA #mc1    : STA $D022
+        0xa9, opts.mc2 & 15, 0x8d, 0x23, 0xd0, // LDA #mc2    : STA $D023
+        0xa9, 0xd8, 0x8d, 0x16, 0xd0);         // LDA #$D8    : STA $D016 (multicolor on)
+      c.push(0xa2, 0x00);                      // LDX #0
+      mark('copy');
+      for (let p = 0; p < 4; p++) c.push(0xbd, 0x00, hi(SCR) + p, 0x9d, 0x00, 0x04 + p); // LDA src,X : STA dst,X
+      for (let p = 0; p < 4; p++) c.push(0xbd, 0x00, hi(COL) + p, 0x9d, 0x00, 0xd8 + p);
+      for (let p = 0; p < 8; p++) c.push(0xbd, 0x00, hi(CHR) + p, 0x9d, 0x00, 0x38 + p);
+      c.push(0xe8);                                    // INX
+      c.push(0xd0, rel('copy'));                       // BNE copy
+      c.push(0xa9, 0x1e, 0x8d, 0x18, 0xd0);            // LDA #$1E : STA $D018
+      if (split) {
+        c.push(0x78);                                  // SEI
+        c.push(0xa9, 0x7f, 0x8d, 0x0d, 0xdc);          // LDA #$7F : STA $DC0D (CIA timer IRQs off)
+        c.push(0xad, 0x0d, 0xdc);                      // LDA $DC0D (ack)
+        c.push(0xa9, 0x01, 0x8d, 0x1a, 0xd0);          // LDA #1 : STA $D01A (raster IRQ on)
+        c.push(0xad, 0x11, 0xd0, 0x29, 0x7f, 0x8d, 0x11, 0xd0); // clear raster bit 8
+        c.push(0xa9, L - 2, 0x8d, 0x12, 0xd0);         // first IRQ two lines above the split
+        setVec('split');
+        c.push(0x58);                                  // CLI
+      }
+      mark('park');
+      c.push(0x4c, lo(at('park')), hi(at('park')));    // JMP park
+      if (split) {
+        mark('split');
+        c.push(0xa9, L, 0xa2, 0x14);                   // LDA #L : LDX #$14
+        mark('wait');
+        c.push(0xcd, 0x12, 0xd0);                      // CMP $D012
+        c.push(0xd0, rel('wait'));                     // BNE wait
+        c.push(0x8e, 0x18, 0xd0);                      // STX $D018 (ROM font from here down)
+        c.push(0xa9, 0x00, 0x8d, 0x12, 0xd0);          // next IRQ at line 0
+        setVec('top');
+        c.push(0xa9, 0xff, 0x8d, 0x19, 0xd0);          // ack VIC IRQ
+        c.push(0x4c, 0x81, 0xea);                      // JMP $EA81 (restore regs, RTI)
+        mark('top');
+        c.push(0xa9, 0x1e, 0x8d, 0x18, 0xd0);          // APEXSCII above the split
+        c.push(0xa9, L - 2, 0x8d, 0x12, 0xd0);
+        setVec('split');
+        c.push(0xa9, 0xff, 0x8d, 0x19, 0xd0);
+        c.push(0x4c, 0x31, 0xea);                      // JMP $EA31 (KERNAL keyboard/jiffy once a frame)
+      }
+      return c;
+    };
+    emit();
+    const code = emit();
+    if (ORG + code.length > SCR) throw new Error('PRG code overruns screen data');
+    const mem = new Uint8Array(END - START);
+    const put = (addr, bytes) => mem.set(bytes, addr - START);
+    put(0x0801, [0x0b, 0x08, 0x0a, 0x00, 0x9e, 0x32, 0x30, 0x36, 0x34, 0x00, 0x00, 0x00]);
+    put(ORG, code);
+    put(SCR, screen);
+    put(COL, color.map(c => c & 15));
+    put(CHR, flatten(chars));
+    const out = new Uint8Array(mem.length + 2);
+    out[0] = 0x01; out[1] = 0x08; out.set(mem, 2);
+    return out;
+  }
+
+  const hex = (v, w = 2) => '$' + v.toString(16).toUpperCase().padStart(w, '0');
+  function charsetAsm(chars, names) {
+    const lines = ['; APEXSCII character set — 256 glyphs x 8 bytes', '; load/copy to a 2K boundary, e.g. $3800 (VIC $D018 = $1E)', 'apexscii:'];
+    chars.forEach((g, i) => lines.push(`    .byte ${Array.from(g, b => hex(b)).join(',')}  ; ${hex(i)} ${names[i] || ''}`));
+    return lines.join('\n') + '\n';
+  }
+  function screenAsm(screen, color, label = 'screen') {
+    const out = ['; APEXSCII screen — 40x25 screen codes then colour RAM values', `${label}_codes:`];
+    for (let r = 0; r < 25; r++) out.push('    .byte ' + Array.from(screen.slice(r * 40, r * 40 + 40), b => hex(b)).join(','));
+    out.push(`${label}_color:`);
+    for (let r = 0; r < 25; r++) out.push('    .byte ' + Array.from(color.slice(r * 40, r * 40 + 40), b => hex(b)).join(','));
+    return out.join('\n') + '\n';
+  }
+
+  // -------------------------------------------------------------- specimens
+  // A specimen sheet shows a whole set on the C64: the 256 glyphs as a 16x16 grid with hex labels
+  // (columns spaced for legibility), the layout regions underneath, and a status row in the ROM
+  // font, so the raster split is exercised too. Text stays below colour 8, so it is hi-res in MC.
+  function specimen(persp = 'iso', mode = 'hires', theme = 'classic', style = {}) {
+    const { glyphs, regions } = buildDefault(mode, persp, theme, style), mc = mode === 'mc';
+    const ink = mc ? { title: 7, sub: 1, label: 3, legend: 1 } : { title: 7, sub: 15, label: 12, legend: 15 };
+    const screen = new Uint8Array(1000).fill(0x20), color = new Uint8Array(1000).fill(1);
+    const text = (row, col, s, c, rev) => {
+      for (let k = 0; k < s.length && col + k < 40; k++) {
+        screen[row * 40 + col + k] = asciiToScreen(s[k]) | (rev ? 0x80 : 0);
+        color[row * 40 + col + k] = c;
+      }
+    };
+    const centre = (row, s, c, rev) => text(row, (40 - s.length) >> 1, s, c, rev);
+    const HEX = '0123456789ABCDEF';
+    centre(0, 'APEXSCII ' + PERSPECTIVES[persp].name.toUpperCase().replace('°', ''), ink.title);
+    centre(1, (theme === 'classic' ? '' : THEMES[theme].name.toUpperCase() + '  ') + (style.outline ? 'OUTLINED  ' : '') +
+      (mc ? 'MULTICOLOR 4X8' : 'HI-RES 8X8'), ink.sub);
+    for (let k = 0; k < 16; k++) text(3, 7 + 2 * k, HEX[k], ink.label);
+    for (let r = 0; r < 16; r++) {
+      text(4 + r, 3, HEX[r] + '0', ink.label);
+      for (let k = 0; k < 16; k++) {
+        const code = r * 16 + k, at = (4 + r) * 40 + 7 + 2 * k, region = regions.find(g => code >= g.from && code <= g.to).name;
+        screen[at] = code;
+        // MC slots use green as the cell colour; hi-res glyphs: white text, green sets, grey line art.
+        const hires = region === 'text' ? 1 : region === 'lines' || region === 'blocks' ? (mc ? 7 : 15) : 13;
+        color[at] = mc && isMCSlot(code, persp) ? 8 | 5 : hires;
+      }
+    }
+    // Region legend, wrapped over two rows.
+    const items = regions.map(g => `${g.name.toUpperCase()} ${g.from.toString(16).toUpperCase().padStart(2, '0')}-${g.to.toString(16).toUpperCase()}`);
+    const lines = [''];
+    for (const it of items) {
+      const cur = lines[lines.length - 1];
+      if ((cur ? cur.length + 2 : 0) + it.length > 38) lines.push(it); else lines[lines.length - 1] = cur ? cur + '  ' + it : it;
+    }
+    lines.slice(0, 3).forEach((l, i) => centre(21 + i, l, ink.legend)); // rows 21-23; the ROM row is 24
+    const tag = ' ROM FONT ', rest = ' STATUS ROW', start = (40 - tag.length - rest.length) >> 1;
+    text(24, start, tag, 7, true);
+    text(24, start + tag.length, rest, 7);
+    return { chars: glyphs, screen, color, opts: { mode, bg: 0, border: 0, mc1: 12, mc2: 11, romRows: 1 } };
+  }
+  const specimenPrg = (persp, mode, theme, style) => { const s = specimen(persp, mode, theme, style); return screenPrg(s.chars, s.screen, s.color, s.opts); };
+
+  return {
+    W, H, PALETTE, COLOR_NAMES, REGIONS, PERSPECTIVES, THEMES, ANIMATIONS, SETS, MC_SETS, BOUNDS, B45, PAIRS, FACE_NAMES, RAY,
+    glyphFrom, glyphFromMC, buildDefault, layout, isMCSlot, asciiToScreen,
+    screenRGB, screenPrg, screenAsm, flatten, charsetPrg, charsetAsm, hex, specimen, specimenPrg,
+  };
+});
+
+</script>
+<script>
+/*
+ * APEX isometric dungeon: the reference for dungeon maps and the hero's movement. Integer maths only,
+ * so a 6502 port that follows the same steps lands on exactly the same position every frame.
+ *
+ *   - the map is square tiles: 0 void, 1 floor, 2 wall; outside the map is void. A tile can also carry
+ *     a decoration (a crack in the floor, a torch on a wall), which only changes how it looks
+ *   - positions are 8.8 fixed point in tiles (256 = one tile); x runs down-right on the screen,
+ *     y down-left (isometric 2:1: a tile is a 32x16 pixel diamond)
+ *   - one tick per 50 Hz frame; input is the joystick's bits: 1 up, 2 down, 4 left, 8 right
+ *   - the hero walks the 8 screen directions at one speed, and only on floor
+ *
+ * parse(text) reads a map; hero(map) makes a hero at its start; tick(map, h, input) moves it one
+ * frame; screen(h) is where it stands in screen pixels.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXISO = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const TILE = 256;
+  const VOID = 0, FLOOR = 1, WALL = 2;
+  // The hero's square on the floor: RADIUS each way from its position.
+  const RADIUS = 64;
+  // A step per frame for each joystick direction (by its bits). Screen left and right move along both
+  // axes, 2 pixels a frame; screen up and down 1 pixel a frame; the diagonals along one axis. All are
+  // about 22/256 of a tile.
+  const STEP = 16, DIAG = 22;
+  const DIRS = [];
+  DIRS[1] = [-STEP, -STEP]; DIRS[2] = [STEP, STEP]; DIRS[4] = [-STEP, STEP]; DIRS[8] = [STEP, -STEP];
+  DIRS[5] = [-DIAG, 0]; DIRS[9] = [0, -DIAG]; DIRS[6] = [0, DIAG]; DIRS[10] = [DIAG, 0];
+
+  // Map text: one character per tile, '#' wall, 't' wall with a torch, '.' floor, ',' cracked floor,
+  // 'P' the start (floor); anything else is void. Lines starting with ';' are comments; the first
+  // names the map.
+  function parse(text) {
+    const lines = text.replace(/\r/g, '').split('\n');
+    const name = (lines.find(l => l.startsWith(';')) || '; dungeon').slice(1).trim();
+    const rows = lines.filter(l => !l.startsWith(';') && l.length);
+    const h = rows.length, w = Math.max(...rows.map(r => r.length));
+    const tiles = new Uint8Array(w * h), deco = new Uint8Array(w * h);
+    let start = null;
+    rows.forEach((r, y) => {
+      for (let x = 0; x < w; x++) {
+        const ch = r[x] || ' ';
+        tiles[y * w + x] = '#t'.includes(ch) ? WALL : '.,P'.includes(ch) ? FLOOR : VOID;
+        deco[y * w + x] = 't,'.includes(ch) ? 1 : 0;
+        if (ch === 'P') start = { x, y };
+      }
+    });
+    if (!start) throw new Error('map has no P');
+    return { name, w, h, tiles, deco, start };
+  }
+
+  const inside = (M, tx, ty) => tx >= 0 && ty >= 0 && tx < M.w && ty < M.h;
+  const tileAt = (M, tx, ty) => (inside(M, tx, ty) ? M.tiles[ty * M.w + tx] : VOID);
+  const decoAt = (M, tx, ty) => (inside(M, tx, ty) ? M.deco[ty * M.w + tx] : 0);
+  // Is the hero's square at (x, y) all on floor?
+  function clear(M, x, y) {
+    for (const ty of [(y - RADIUS) >> 8, (y + RADIUS - 1) >> 8])
+      for (const tx of [(x - RADIUS) >> 8, (x + RADIUS - 1) >> 8]) if (tileAt(M, tx, ty) !== FLOOR) return false;
+    return true;
+  }
+
+  function hero(M) {
+    return { x: M.start.x * TILE + TILE / 2, y: M.start.y * TILE + TILE / 2, facing: 1, frame: 0, moving: false };
+  }
+
+  // One frame: step along x, then along y, each only if the square stays on floor.
+  function tick(M, h, input) {
+    const d = DIRS[input & 15];
+    const x0 = h.x, y0 = h.y;
+    if (d) {
+      if (clear(M, h.x + d[0], h.y)) h.x += d[0];
+      if (clear(M, h.x, h.y + d[1])) h.y += d[1];
+      const sdx = d[0] - d[1]; // screen x direction
+      if (sdx) h.facing = sdx > 0 ? 1 : -1;
+    }
+    h.moving = h.x !== x0 || h.y !== y0;
+    h.frame = h.moving ? (h.frame + 1) & 15 : 0;
+    return h;
+  }
+
+  // Where the hero stands on the screen's isometric plane, in whole pixels.
+  const screen = h => ({ x: (h.x - h.y) >> 4, y: (h.x + h.y) >> 5 });
+
+  return { TILE, VOID, FLOOR, WALL, RADIUS, DIRS, parse, tileAt, decoAt, clear, hero, tick, screen };
+});
+
+</script>
+<script>
+/*
+ * The C64 isometric dungeon view: what the screen shows each frame, exactly as the engine is to show it.
+ *
+ * Multicolor characters, 38 columns by 24 rows, scrolled in both directions by the VIC's fine scroll so
+ * the hero stays at the centre (a hardware sprite that never moves). Tiles are 32x16 pixel diamonds;
+ * walls are cubes 16 pixels high. Every character of the screen shows the part of the dungeon under
+ * it, and with tiles on a 2:1 grid that part depends on at most 4 tiles: which 4 depends on where the
+ * character sits on the grid (its phase, 0-3), and the character is a table lookup by phase and those
+ * tiles' looks (void, floor, cracked floor, wall, wall with a torch). Textures are laid out on each
+ * tile (flagstones, brick courses along the walls), so the phase also fixes which part of a tile a
+ * character shows. Only the cases a map uses get characters, at most 128.
+ *
+ * Light, in two parts that never change while the dungeon scrolls under them:
+ *   - colour RAM gives bit pair 11 (the lit stone) its colour in rings around the hero: yellow, red, black
+ *   - each character comes twice: as itself, and half-lit (its lit stone thinned by a dither). The
+ *     screen codes' bit 7 picks the half-lit one, again in rings, fixed on the screen
+ * Together they make five steps from full light to dark, blended by ordered dithering. The other bit
+ * pairs are fixed colours: $D021 black (void, floor joints), $D022 white (torch flames, which glow in
+ * the dark), $D023 dark grey (mortar, so walls stay faintly visible in the dark).
+ *
+ * Works in Node and in the browser (global APEXISOVIEW, needing APEXSCII and APEXISO).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('../../apexscii/apexscii.js'), require('../../core/iso.js'));
+  else root.APEXISOVIEW = factory(root.APEXSCII, root.APEXISO);
+})(typeof self !== 'undefined' ? self : this, function (APEXSCII, ISO) {
+  'use strict';
+
+  const WALL_H = 16; // a wall's height in pixels
+  const COLS = 38, ROWS = 24; // what the 38-column, 24-row screen shows
+  // The visible window: X 7-310, Y 4-195 of the 320x200 display. The hero's feet are always at HERO.
+  const HERO = { x: 158, y: 112 };
+  const COLORS = { border: 0, bg: 0, mc1: 1, mc2: 11 }; // $D020, $D021 void and joints, $D022 flames, $D023 mortar
+  // The light's steps, brightest first: [colour RAM, half-lit]. A character's step is its distance
+  // from the light (vertical distance counts double: the floor is squashed 2:1), past FULL, in steps
+  // of STEP pixels, dithered with a 2x2 ordered pattern.
+  const LIGHT = { center: { x: HERO.x, y: HERO.y - 10 }, full: 52, step: 20, steps: [[7, 0], [7, 1], [2, 0], [2, 1], [0, 0]] };
+
+  // ------------------------------------------------------------------ geometry
+  // A tile's look: 0 void, 1 floor, 2 cracked floor, 3 wall, 4 wall with a torch.
+  const lookAt = (M, tx, ty) => {
+    const k = ISO.tileAt(M, tx, ty), d = ISO.decoAt(M, tx, ty);
+    return k === ISO.FLOOR ? 1 + d : k === ISO.WALL ? 3 + d : 0;
+  };
+  // Screen-plane pixel (sx, sy) -> world (in tiles): sx = 16 (wx - wy), sy = 8 (wx + wy).
+  const inv = (sx, sy) => [(sx / 16 + sy / 8) / 2, (sy / 8 - sx / 16) / 2];
+  // What's at a screen-plane point: the nearest wall face, else the floor. { f: E void, G floor,
+  // T wall top, L wall's lit side, R wall's shaded side; t: the tile; look; where on the tile: a, b
+  // across a floor or top, along and h (height) up a side }
+  function surface(look, sx, sy) {
+    const [wx, wy] = inv(sx, sy), bx = Math.floor(wx), by = Math.floor(wy);
+    let best = null, depth = -Infinity;
+    for (let ty = by - 1; ty <= by + 3; ty++) for (let tx = bx - 1; tx <= bx + 3; tx++) {
+      const lk = look(tx, ty);
+      if (lk < 3 || tx + ty <= depth) continue;
+      const t = tx + ',' + ty, [ux, uy] = inv(sx, sy + WALL_H);
+      let s = null;
+      if (Math.floor(ux) === tx && Math.floor(uy) === ty) s = { f: 'T', a: ux - tx, b: uy - ty };
+      else {
+        const u = sx / 16 + ty + 1, hu = 8 * (u + ty + 1) - sy; // on the lower-left edge's face?
+        if (u >= tx && u < tx + 1 && hu > 0 && hu <= WALL_H) s = { f: 'L', along: u - tx, h: hu };
+        const v = tx + 1 - sx / 16, hv = 8 * (tx + 1 + v) - sy; // the lower-right edge's?
+        if (!s && v >= ty && v < ty + 1 && hv > 0 && hv <= WALL_H) s = { f: 'R', along: ty + 1 - v, h: hv };
+      }
+      if (s) { best = Object.assign(s, { t, look: lk }); depth = tx + ty; }
+    }
+    if (best) return best;
+    const lk = look(bx, by);
+    return lk ? { f: 'G', t: bx + ',' + by, look: lk, a: wx - bx, b: wy - by } : { f: 'E', t: bx + ',' + by, look: 0 };
+  }
+
+  // A screen-plane character (cx, cy) covers pixels 8cx.. x 8cy..; its phase and anchor tile.
+  const phaseOf = (cx, cy) => (cx + 2 * cy) & 3;
+  const anchorOf = (cx, cy) => [(2 * (cx + 2 * cy) + 3) >> 3, (2 * (2 * cy - cx) + 1) >> 3];
+  // The character's fat pixel samples.
+  const sample = (cx, cy, f, y) => [8 * cx + 2 * f + 1, 8 * cy + y + 0.5];
+
+  // REL[phase]: the four tiles (from the anchor) that can show in a character of that phase, found by
+  // changing one tile at a time; the first two can show as floor or void too, the last two only as walls.
+  const REL = [0, 1, 2, 3].map(p => {
+    const [ax, ay] = anchorOf(p, 0), floors = [], walls = [];
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+      const kinds = new Set();
+      for (const k of [0, 1, 3]) {
+        const look = (x, y) => (x === ax + dx && y === ay + dy ? k : 1);
+        let s = '';
+        for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) s += surface(look, ...sample(p, 0, f, y)).f;
+        kinds.add(s);
+      }
+      if (kinds.size === 3) floors.push([dx, dy]);
+      else if (kinds.size === 2) walls.push([dx, dy]);
+    }
+    if (floors.length !== 2 || walls.length !== 2) throw new Error(`phase ${p}: expected 2 floor and 2 wall tiles`);
+    return [...floors, ...walls];
+  });
+  // A character's pattern: the looks of its REL tiles, l0 + 5 l1 + 25 w2 + 75 w3 (0-224), where w is
+  // 0 not a wall, 1 wall, 2 wall with a torch.
+  const PATTERNS = 225;
+  const wallOf = lk => (lk >= 3 ? lk - 2 : 0);
+  function patternOf(M, cx, cy) {
+    const p = phaseOf(cx, cy), [ax, ay] = anchorOf(cx, cy), r = REL[p];
+    const lk = i => lookAt(M, ax + r[i][0], ay + r[i][1]);
+    return lk(0) + 5 * lk(1) + 25 * wallOf(lk(2)) + 75 * wallOf(lk(3));
+  }
+
+  // ------------------------------------------------------------------ textures
+  // Fat pixels: 0 black, 1 flame ($D022), 2 mortar ($D023), 3 lit stone (colour RAM). Each surface
+  // is split into regions (a floor tile, a wall's bricks in two courses along its sides) and a joint
+  // or mortar line is drawn where a region meets the one above it, or beside it on a wall.
+  function region(s) {
+    switch (s.f) {
+      case 'G': case 'T': return s.f + s.t;
+      case 'L': case 'R': {
+        const course = Math.floor((s.h - 0.5) / 8);
+        return `${s.f}${s.t}:${course}:${Math.floor(2 * s.along + (course & 1) / 2)}`;
+      }
+      default: return 'E';
+    }
+  }
+  function shade(s, f, y, left, up) {
+    const id = region(s), meets = n => n && region(n) !== id;
+    if (s.f === 'E') return 0;
+    if (s.f === 'G') {
+      if (up && up.f === 'G' && meets(up)) return 0; // a joint between tiles
+      if (up && (up.f === 'L' || up.f === 'R')) return 0; // the shadow at a wall's foot
+      if (s.look === 2 && Math.abs(s.a - 0.5 - (s.b - 0.5) * 0.6) < 0.05 && s.b > 0.15 && s.b < 0.85) return 0; // a crack
+      if (s.look === 2 && s.a > 0.6 && s.b < 0.35) return (f + y) & 1 ? 0 : 3; // and broken stone
+      return 3;
+    }
+    if (s.f === 'T') return [left, up].some(meets) || (f + y) & 1 ? 2 : 3; // half mortar: darker than the floor
+    // a wall's side: a torch, else bricks
+    if (s.look === 4) {
+      const c = Math.abs(s.along - 0.5) * 16; // pixels from the middle
+      if (c < 2 && s.h >= 7 && s.h < 12) return 1;
+      if (c < 1 && s.h >= 12 && s.h < 13) return 1;
+      if (c < 2 && s.h >= 4 && s.h < 7) return 0;
+    }
+    if ([left, up].some(n => n && n.f === s.f && n.t === s.t && meets(n))) return 2;
+    return s.f === 'R' && y & 1 ? 0 : 3;
+  }
+  // Half-lit: lit stone thinned to a checkerboard of fat pixels.
+  const halfLit = (v, f, y) => (v === 3 && (f + y) & 1 ? 0 : v);
+
+  // The character for a phase and pattern: 8 bytes, as itself and half-lit.
+  function draw(p, n) {
+    const [ax, ay] = anchorOf(p, 0), lk = [n % 5, Math.floor(n / 5) % 5];
+    const w = [Math.floor(n / 25) % 3, Math.floor(n / 75)].map(v => (v ? v + 2 : 1));
+    const looks = [...lk, ...w];
+    const look = (x, y) => { for (let i = 0; i < 4; i++) if (x === ax + REL[p][i][0] && y === ay + REL[p][i][1]) return looks[i]; return 1; };
+    const s = [];
+    for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) s.push(surface(look, ...sample(p, 0, f, y)));
+    const v = [];
+    for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) v.push(shade(s[y * 4 + f], f, y, f ? s[y * 4 + f - 1] : null, y ? s[(y - 1) * 4 + f] : null));
+    const bytes = half => Array.from({ length: 8 }, (_, y) => {
+      let b = 0;
+      for (let f = 0; f < 4; f++) b |= (half ? halfLit(v[y * 4 + f], f, y) : v[y * 4 + f]) << (6 - 2 * f);
+      return b;
+    });
+    return { full: bytes(false), half: bytes(true) };
+  }
+
+  // ------------------------------------------------------------------ a map's characters
+  // Characters 0-127 are the patterns the map uses (sharing any that look the same); 128-255 are the
+  // same, half-lit. codes[phase * 225 + pattern] is a pattern's character, -1 where the map never
+  // shows it.
+  const prepared = new WeakMap();
+  function prepare(M) {
+    if (prepared.has(M)) return prepared.get(M);
+    const used = new Set();
+    // every character the map can show, with a margin for the walls' height
+    for (let cy = -2; cy <= M.w + M.h + 4; cy++) for (let cx = -2 * M.h - 4; cx <= 2 * M.w + 4; cx++)
+      used.add(phaseOf(cx, cy) * PATTERNS + patternOf(M, cx, cy));
+    for (let p = 0; p < 4; p++) used.add(p * PATTERNS); // all void
+    const chars = Array.from({ length: 256 }, () => new Uint8Array(8)), codes = new Int16Array(4 * PATTERNS).fill(-1);
+    const byLook = new Map();
+    for (const i of [...used].sort((a, b) => a - b)) {
+      const g = draw(Math.floor(i / PATTERNS), i % PATTERNS), key = g.full.join(',');
+      if (!byLook.has(key)) {
+        const code = byLook.size;
+        if (code >= 128) throw new Error(`${M.name}: more than 128 characters`);
+        chars[code] = Uint8Array.from(g.full);
+        chars[code + 128] = Uint8Array.from(g.half);
+        byLook.set(key, code);
+      }
+      codes[i] = byLook.get(key);
+    }
+    const P = {
+      chars, codes, count: byLook.size,
+      codeAt: (cx, cy) => {
+        const c = codes[phaseOf(cx, cy) * PATTERNS + patternOf(M, cx, cy)];
+        if (c < 0) throw new Error(`no character for ${cx},${cy}`);
+        return c;
+      },
+    };
+    prepared.set(M, P);
+    return P;
+  }
+
+  // ------------------------------------------------------------------ the light
+  // Per character of the 40 x 25 screen: LIGHT_RAM its colour RAM, LIGHT_HALF 1 for half-lit.
+  const LIGHT_RAM = new Uint8Array(1000), LIGHT_HALF = new Uint8Array(1000);
+  const ORDER = [[0, 0.5], [0.75, 0.25]];
+  for (let r = 0; r < 25; r++) for (let c = 0; c < 40; c++) {
+    const dx = 8 * c + 8 - LIGHT.center.x, dy = 2 * (8 * r + 4 - LIGHT.center.y), d = Math.hypot(dx, dy);
+    const step = Math.max(0, Math.min(LIGHT.steps.length - 1, Math.floor((d - LIGHT.full) / LIGHT.step + 1 - ORDER[r & 1][c & 1])));
+    [LIGHT_RAM[r * 40 + c], LIGHT_HALF[r * 40 + c]] = LIGHT.steps[step];
+  }
+
+  // ------------------------------------------------------------------ scrolling
+  // The camera is the screen-plane pixel at the display's top left. The VIC shows screen matrix
+  // column c from X = 8c + xs and row r from Y = 8r + ys - 3 (xs, ys: the fine scroll registers), so
+  // the matrix starts at screen-plane character (cX, cY).
+  function scroll(h) {
+    const s = ISO.screen(h), camX = s.x - HERO.x, camY = s.y - HERO.y;
+    const xs = -camX & 7, ys = (3 - camY) & 7;
+    return { camX, camY, xs, ys, cX: (camX + xs) >> 3, cY: (camY + ys - 3) >> 3 };
+  }
+
+  // ------------------------------------------------------------------ the hero's sprite
+  // 12 fat pixels by 21 rows, facing right: a armour (sprite colour), c cloak ($D025), w steel and
+  // skin ($D026).
+  const SPRITE = { mc1: 2, mc2: 1, color: 15 };
+  const BODY = [
+    '....aaaa....', '...aaaaaa...', '...awwwwa...', '...aaaaaa...', '....aaaa....', '..cccaaccc..',
+    '.ccaaaaaacc.', '.caaaaaaaac.', '.caawaaaaacw', '.caaaaaaaacw', '..cawaaaa.cw', '..ccaaaacc.w',
+    '...aaaaaa..w', '...ccccccc..',
+  ];
+  const LEGS = {
+    stand: ['...aa..aa...', '...aa..aa...', '...aa..aa...', '...aa..aa...', '...aa..aa...', '..www..www..', '............'],
+    walk1: ['...aa...aa..', '..aa....aa..', '..aa.....aa.', '.aa......aa.', '.www.....www', '............', '............'],
+    walk2: ['....aaaa....', '....aaa.....', '.....aa.....', '.....aa.....', '....www.....', '............', '............'],
+  };
+  const FRAMES = {};
+  for (const [name, legs] of Object.entries(LEGS)) {
+    const rows = [...BODY, ...legs].map(r => Array.from(r, ch => ({ c: 1, a: 2, w: 3 }[ch] || 0)));
+    while (rows[rows.length - 1].every(v => !v)) rows.pop();
+    while (rows.length < 21) rows.unshift(new Array(12).fill(0));
+    FRAMES[name] = rows.slice(-21);
+  }
+  const spriteFrame = h => (!h.moving ? 'stand' : (h.frame >> 2) & 1 ? 'walk2' : 'walk1');
+
+  // ------------------------------------------------------------------ a frame
+  const PAL = APEXSCII.PALETTE.map(hx => [1, 3, 5].map(i => parseInt(hx.substr(i, 2), 16)));
+  // What the screen shows: { pixels (320x200 RGBA, the border drawn), scroll }.
+  function frame(M, h) {
+    const P = prepare(M), out = new Uint8ClampedArray(320 * 200 * 4);
+    const put = (x, y, c) => { const i = (y * 320 + x) * 4; out[i] = c[0]; out[i + 1] = c[1]; out[i + 2] = c[2]; out[i + 3] = 255; };
+    const sc = scroll(h);
+    for (let r = 0; r < 25; r++) for (let c = 0; c < 39; c++) {
+      const g = P.chars[P.codeAt(sc.cX + c, sc.cY + r) | (LIGHT_HALF[r * 40 + c] << 7)];
+      const cols = [COLORS.bg, COLORS.mc1, COLORS.mc2, LIGHT_RAM[r * 40 + c]];
+      for (let y = 0; y < 8; y++) {
+        const Y = 8 * r + y + sc.ys - 3;
+        if (Y < 0 || Y >= 200) continue;
+        for (let x = 0; x < 8; x++) {
+          const X = 8 * c + x + sc.xs;
+          if (X < 320) put(X, Y, PAL[cols[(g[y] >> (6 - 2 * (x >> 1))) & 3]]);
+        }
+      }
+    }
+    // the hero: feet at HERO, centred across
+    const f = FRAMES[spriteFrame(h)], scols = [null, SPRITE.mc1, SPRITE.color, SPRITE.mc2];
+    for (let r = 0; r < 21; r++) for (let c = 0; c < 12; c++) {
+      const v = f[r][h.facing < 0 ? 11 - c : c];
+      if (v) for (const dx of [0, 1]) put(HERO.x - 12 + 2 * c + dx, HERO.y - 20 + r, PAL[scols[v]]);
+    }
+    for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++) if (x < 7 || x >= 311 || y < 4 || y >= 196) put(x, y, PAL[COLORS.border]);
+    return { pixels: out, scroll: sc };
+  }
+
+  return { WALL_H, COLS, ROWS, HERO, COLORS, LIGHT, LIGHT_RAM, LIGHT_HALF, REL, PATTERNS, lookAt,
+    phaseOf, anchorOf, patternOf, surface, prepare, scroll, SPRITE, FRAMES, spriteFrame, frame };
+});
+
+</script>
+<script>window.LEVEL_TEXT = "; The Crypt\r\n------------------------------------------------\r\n------------------------------------------------\r\n-----------------######t#####-------------------\r\n---####t#####----#...,......#-------------------\r\n---#........#----#..........#----##t########----\r\n---#.....,..#----#....,.....##t###.,.......#----\r\n---t........##t###...........,............,#----\r\n---#....P.,............,............,......#----\r\n---#,............,..........######.........#----\r\n---#.......,######......,...#----#...,.....#----\r\n---#####..###----######..####----#.........#----\r\n-------#..#-----------t..#-------t....,....#----\r\n-------#..#-----------#..#-------#.........#----\r\n-------#..#-----------#..#-------######,.###----\r\n-------t..#-----------#..#------------#..#------\r\n-------#..#-----#######..#####--------#.,#------\r\n----####,.###---#....,.......#--------#..#------\r\n----#.......#---#...........,#--------#..#------\r\n----#....,..#---#.....,......#----#####..#t#----\r\n----t.......#---#...#....#...#----#.......,#----\r\n----#.....,.#####......,.....###t##.,......#----\r\n----#............,............,............#----\r\n----#......,............,............,.....#----\r\n----#,......#####.,.#....#...######........#----\r\n----#.......#---#........,...#----t...,....#----\r\n----#.,.....#---#..,.........#----#........#----\r\n----#####..##---#######..#####----####.,####----\r\n--------t..#----------#..#-----------#..#-------\r\n--------#..#----------#..#-----------#..#-------\r\n--------#..#----------#..#-----------#..#-------\r\n--------#..#----------#..#-----------t..#-------\r\n--------#,.#------###t#..###---------#..#-------\r\n---##t###..####---#........#----######..####----\r\n---#......,...#---#....,...#----#...,......#----\r\n---#,.........#---#........#----#..........#----\r\n---#.......,..#---#.....,..######....,.....#----\r\n---#.,........####t............,...........#----\r\n---#........,............,............,....#----\r\n---#..,............,.......######..........#----\r\n---t.........,#####.......,#----#......,...#----\r\n---#...,......#---#.,......#----#,.........#----\r\n---############---##########----#.......,..#----\r\n--------------------------------t.,........#----\r\n--------------------------------############----\r\n------------------------------------------------\r\n------------------------------------------------\r\n------------------------------------------------\r\n------------------------------------------------\r\n";</script>
+<script>
+// The APEX isometric dungeon reference, playable: the same movement and the same frames the C64
+// engine draws, at a fixed 50 ticks a second, inside a C64-sized border.
+(async function () {
+  const text = window.LEVEL_TEXT || await (await fetch('../levels/iso/d1.txt')).text();
+  const map = APEXISO.parse(text);
+  let hero = APEXISO.hero(map);
+  const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(320, 200);
+  const border = APEXSCII.PALETTE[APEXISOVIEW.COLORS.border];
+
+  // Input: keyboard, the touch pad and the first gamepad, as joystick bits (1 up, 2 down, 4 left, 8 right).
+  const KEYS = { ArrowUp: 1, KeyW: 1, ArrowDown: 2, KeyS: 2, ArrowLeft: 4, KeyA: 4, ArrowRight: 8, KeyD: 8 };
+  let keys = 0, touch = 0;
+  addEventListener('keydown', e => {
+    if (e.code === 'KeyR') hero = APEXISO.hero(map);
+    if (KEYS[e.code]) { keys |= KEYS[e.code]; e.preventDefault(); }
+  });
+  addEventListener('keyup', e => { if (KEYS[e.code]) keys &= ~KEYS[e.code]; });
+  addEventListener('blur', () => { keys = 0; touch = 0; });
+  // The pad: the direction from its centre, in eighths.
+  const pad = document.getElementById('pad'), knob = document.getElementById('knob');
+  const EIGHTHS = [8, 10, 2, 6, 4, 5, 1, 9]; // right, then clockwise
+  const aim = e => {
+    const r = pad.getBoundingClientRect(), dx = e.clientX - r.left - r.width / 2, dy = e.clientY - r.top - r.height / 2;
+    const far = Math.hypot(dx, dy) > 12;
+    touch = far ? EIGHTHS[Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) & 7] : 0;
+    const k = Math.min(1, 48 / Math.max(1, Math.hypot(dx, dy)));
+    knob.style.transform = far ? `translate(${dx * k}px, ${dy * k}px)` : '';
+  };
+  pad.addEventListener('pointerdown', e => { e.preventDefault(); pad.setPointerCapture(e.pointerId); aim(e); });
+  pad.addEventListener('pointermove', e => { if (pad.hasPointerCapture(e.pointerId)) aim(e); });
+  const release = () => { touch = 0; knob.style.transform = ''; };
+  pad.addEventListener('pointerup', release);
+  pad.addEventListener('pointercancel', release);
+  function gamepad() {
+    const g = navigator.getGamepads && [...navigator.getGamepads()].find(Boolean);
+    if (!g) return 0;
+    const x = g.axes[0] || 0, y = g.axes[1] || 0, btn = i => g.buttons[i] && g.buttons[i].pressed;
+    return (y < -0.4 || btn(12) ? 1 : 0) | (y > 0.4 || btn(13) ? 2 : 0) | (x < -0.4 || btn(14) ? 4 : 0) | (x > 0.4 || btn(15) ? 8 : 0);
+  }
+
+  function draw() {
+    image.data.set(APEXISOVIEW.frame(map, hero).pixels);
+    ctx.fillStyle = border;
+    ctx.fillRect(0, 0, 384, 272);
+    ctx.putImageData(image, 32, 36);
+  }
+
+  // Fixed 50 Hz ticks; the screen shows the latest.
+  const TICK = 20;
+  let last = performance.now(), acc = 0;
+  function loop(now) {
+    acc = Math.min(acc + now - last, 200);
+    last = now;
+    let stepped = false;
+    while (acc >= TICK) {
+      APEXISO.tick(map, hero, keys | touch | gamepad());
+      acc -= TICK;
+      stepped = true;
+    }
+    if (stepped) draw();
+    requestAnimationFrame(loop);
+  }
+  draw();
+  requestAnimationFrame(loop);
+})().catch(e => { document.getElementById('help').textContent = 'Could not start: ' + e.message; });
+</script>

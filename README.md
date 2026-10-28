@@ -326,9 +326,11 @@ node showcase/iso-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 
 ## Shoot-'em-up
 
-A vertical-scrolling shooter for the C64, over the hull of a space dreadnought. Everything that moves is a hardware sprite: the ship, its shots, the enemies, their bullets and the explosions. That is more than the VIC's eight, so a sprite multiplexer shares them out down the screen. So far this is the JavaScript reference, which defines every frame. The 6502 engine comes next, to be checked against it pixel for pixel.
+A vertical-scrolling shooter for the C64, over the hull of a space dreadnought. Everything that moves is a hardware sprite: the ship, its shots, the enemies, their bullets and the explosions. That is more than the VIC's eight, so a sprite multiplexer shares them out down the screen. A JavaScript reference defines every frame; the 6502 engine draws exactly the same frames at 50 frames a second, checked pixel for pixel in VICE.
 
-To play the reference, open `web/shmup.html` from a local server, or `web/out/shmup-play.html` directly. Use the arrow keys or W, A, S and D to fly, and Space, Ctrl or K to fire (hold it for autofire). R starts again.
+To play on a C64 or in VICE, load `c64/out/shmup.prg` with `LOAD"*",8,1`, then `RUN`. Use a joystick in port 2, or W, A, S and D to fly and Space to fire (hold it for autofire); R starts again. `showcase/out/shmup-c64.mp4` is a recording of it running in VICE.
+
+To play the reference, open `web/shmup.html` from a local server, or `web/out/shmup-play.html` directly. Use the arrow keys or W, A, S and D to fly, and Space, Ctrl or K to fire. R starts again.
 
 | File | What it is |
 |------|------------|
@@ -338,6 +340,10 @@ To play the reference, open `web/shmup.html` from a local server, or `web/out/sh
 | `web/shmup.html` | The reference, playable in a browser |
 | `showcase/shmup-pilot.js` | An autopilot that lines up under enemies and sidesteps what's coming |
 | `showcase/shmup.js` | The autopilot's run, as `showcase/out/shmup-run.mp4` |
+| `c64/shmup/shmup.s` | The 6502 engine (ca65) |
+| `c64/shmup/gen.js`, `build.js` | Turn the reference into the engine's characters, sprites, level rows, tables and screen shifts, and assemble it |
+| `test/shmup-check.js` | Plays the autopilot's run and a sweep that gets shot down in VICE, checks every pixel of the C64's frames against the reference, and checks that no frame and no sprite is late |
+| `showcase/shmup-c64-video.js` | Records the C64 engine's run in VICE, as `showcase/out/shmup-c64.mp4` |
 
 **Screen.** Multicolor characters, 40 columns by 24 rows. The VIC's vertical fine scroll moves the screen down one line a frame. Tiles are 16×16 pixels (2×2 characters), each drawn from its own kind and its neighbours:
 - *armour*: panels of 2×2 tiles with seams and corner rivets, and lit and shaded rims along the hull's edges. One panel in seven is recessed: dark, with a shadow along its top and left
@@ -359,9 +365,23 @@ The Dreadnought needs 140 characters. Colour RAM is one value for the whole scre
 
 Bullets aim at one of 16 directions, chosen by integer comparisons. A hit costs a ship. You come back after a moment and are untouchable for 120 frames, blinking. The level wraps round.
 
+**The C64 engine.** Each frame it reads the controls, plays one tick of the game as `core/shmup.js` does (fixed slots, the same order, 16-bit positions), and works out the next frame, which the bottom-of-frame IRQ then shows:
+- *two screens*: every 8 frames the view moves a whole row, so the screen that isn't showing becomes the shown one moved down a row, with the level's next row at its top. It's copied a part at a time over the other 7 frames, ahead of time when a frame has spare time (by the raster), so a busy frame never pays for it. The screens swap at the bottom of the frame together with the fine scroll
+- *two character sets*: the stars are redrawn in the one that isn't showing, so they never tear. Only their old and new bytes are touched, about 16 a frame
+- *the multiplexer*: the objects are sorted by (Y, slot), starting from last frame's order, so there is little to sort. Then they get hardware sprites by the reference's rule. Sprites 0–7 are set at the bottom of the frame. Each later one is set by a raster IRQ on the line after its hardware sprite's last object has drawn its last row (rows 18–20 are empty in every frame), and the IRQ chains straight on to one due a line later. The IRQ counts any sprite set up after its first line has begun, and there are none
+- *memory*: VIC bank 1 holds both screens, both character sets and the sprites; BASIC and the KERNAL are switched out
+
+| | PAL | NTSC |
+|---|---|---|
+| Frames late, and sprites late, in the autopilot's run and the sweep (2,400 ticks each) | 0 | 0 |
+| Slowest frame's work (a sweep frame with three turrets firing at once and 15 sprites) | 79% of a frame | 94% |
+
 ```bash
 node showcase/shmup.js
 node web/bundle.js
+node c64/shmup/build.js
+node test/shmup-check.js "C:\path\to\GTK3VICE-3.10-win64"
+node showcase/shmup-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
 ## Roadmap

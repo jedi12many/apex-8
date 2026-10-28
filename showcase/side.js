@@ -8,20 +8,10 @@ const fs = require('fs'), path = require('path'), { spawnSync } = require('child
 const APEXSCII = require('../apexscii/apexscii.js');
 const PLAT = require('../core/platform.js');
 const VIEW = require('../c64/side/view.js');
+const { autopilot } = require('./side-pilot.js');
 
 const level = PLAT.parse(fs.readFileSync(path.join(__dirname, '..', 'levels', 'side', 'w1.txt'), 'utf8'));
 const map = VIEW.compose(level);
-// An autopilot: run right, jumping at a wall or a pit ahead and holding jump while rising; at the end
-// of the level, stop.
-function autopilot(p) {
-  const B = PLAT.BLOCK, front = p.x + PLAT.PHYS.width, feet = p.y + PLAT.PHYS.height;
-  if (Math.floor(p.x / B) >= level.w - 3) return 0;
-  const solid = (x, y) => PLAT.solidAt(level, Math.floor(x / B), Math.floor(y / B));
-  // a pit: nothing under the next step for 3 blocks down (a ledge with ground below is walked off)
-  const pit = [0, 1, 2].every(d => !solid(front + 2 * 16, feet + 16 + d * B)), wall = solid(front + 10 * 16, feet - 16) || solid(front + 10 * 16, p.y + 16);
-  if (p.ground) return pit || wall ? 6 : 2;
-  return p.vy < 0 ? 6 : 2;
-}
 const SECONDS = 26;
 
 const PAL = APEXSCII.PALETTE.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
@@ -29,7 +19,7 @@ const FW = 384, FH = 272, frames = [];
 const p = PLAT.player(level);
 let cam = PLAT.follow(level, p, 0), n = 0;
 for (; n < SECONDS * 50; n++) {
-  PLAT.tick(level, p, autopilot(p));
+  PLAT.tick(level, p, autopilot(level, p));
   cam = PLAT.follow(level, p, cam);
   if (n & 1) continue;
   const px = VIEW.frame(level, map, p, cam).pixels, buf = Buffer.alloc(FW * FH * 3);

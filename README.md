@@ -208,9 +208,11 @@ node test/c64-bench.js "C:\path\to\GTK3VICE-3.10-win64"
 
 `test/c64-bench.js` builds a version that turns 4/1024 of a turn every frame for 64 frames: a quarter turn from the start, past the guards. Each frame turns the same amount however long it takes, so every build draws the same frames. `--walk` walks along the first corridor instead. It times them with the VICE monitor's stopwatch and prints cycles per frame and frames per second.
 
-## Platformer (in progress)
+## Platformer
 
-A side-scrolling platformer engine for the C64, with layers of parallax for depth, smooth scrolling at 50 frames a second and tight controls. So far it is a JavaScript reference you can play; the 6502 engine comes next and will be tested pixel for pixel against it, like the raycaster.
+A side-scrolling platformer engine for the C64, with layers of parallax for depth, smooth scrolling at 50 frames a second and tight controls. A JavaScript reference defines every frame; the 6502 engine draws exactly the same frames, checked pixel for pixel in VICE.
+
+To play on a C64 or in VICE, load `c64/out/side.prg` with `LOAD"*",8,1`, then `RUN`. Use a joystick in port 2 (fire or up to jump), or A and D to run and W, Z or Space to jump; R starts again. `showcase/out/side-c64.mp4` is a recording of it running in VICE.
 
 | File | What it is |
 |------|------------|
@@ -218,7 +220,12 @@ A side-scrolling platformer engine for the C64, with layers of parallax for dept
 | `c64/side/view.js` | What the C64 screen shows each frame |
 | `levels/side/w1.txt` | Green Hills, the first level |
 | `web/side.html` | The reference, playable in a browser (`web/bundle.js` makes one-file versions in `web/out/`) |
-| `showcase/side.js` | An autopilot run through the level, as `showcase/out/side-run.mp4` |
+| `c64/side/side.s` | The 6502 engine (ca65) |
+| `c64/side/gen.js`, `build.js` | Turn the reference into the engine's tables, characters, sprites and drawing code, and assemble it |
+| `test/side-check.js` | Plays the level in VICE and checks every pixel of the C64's frames against the reference, and that no frame is late |
+| `showcase/side-pilot.js` | An autopilot that runs the level, used by the videos and the test |
+| `showcase/side.js` | The reference's autopilot run, as `showcase/out/side-run.mp4` |
+| `showcase/side-c64-video.js` | Records the C64 engine's autopilot run in VICE, as `showcase/out/side-c64.mp4` |
 
 **Screen.** Multicolor characters, 38 columns, three bands, each with its own hardware fine scroll and colours set by raster splits:
 
@@ -240,9 +247,27 @@ The forest is four characters per row pattern, redrawn each frame with the patte
 - collision: the player box is 12×20 pixels, checked against blocks one axis at a time
 - camera: it follows the player within a dead zone
 
+**The C64 engine.** Each frame it reads the controls, moves the player one tick and moves the camera, all in the reference's integer steps, then works out the next frame for the bottom-of-frame IRQ to show:
+- *two screens*: when a band's first column changes, the engine redraws that band from its source into the screen that isn't showing, then swaps. Each source row is a page, so a band redraws with one load and one store per character
+- *raster splits*: the bottom IRQ shows the new screen and sets the mountains' scroll and colours, the sprite and the forest's characters. Three more IRQs set the hills' scroll, the level's scroll, and the sky behind the treetops. The bands' colours change in their ground lines, which show only colour RAM, so only the scroll has to land in the narrow border window. Writes from 46 to 60 cycles after the raster line starts pass every test on PAL and NTSC, and the engine uses 53
+- *the forest*: 20 characters are rewritten from a table only when its shift changes (16 shifts)
+- *memory*: BASIC and the KERNAL are switched out, and the IRQs use the hardware vector
+
+The level must be 8 blocks high and at most 127 wide, so a row of characters, plus the forest past its end, fits in a page. Green Hills is 127 wide.
+
+| | PAL | NTSC |
+|---|---|---|
+| Frames late in the 26 s autopilot run | 0 | 0 |
+| Slowest frame, from the bottom of one frame to the next being ready | 64% of a frame | 76% |
+
+NTSC runs 60 ticks a second, so the game plays 20% faster there.
+
 ```bash
 node showcase/side.js
 node web/bundle.js
+node c64/side/build.js
+node test/side-check.js "C:\path\to\GTK3VICE-3.10-win64"
+node showcase/side-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
 ## Roadmap

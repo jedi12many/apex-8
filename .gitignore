@@ -1,3 +1,4 @@
 node_modules/
 *.log
 c64/build/
+c64/side/build/

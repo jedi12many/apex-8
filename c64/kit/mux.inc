@@ -8,7 +8,8 @@
 ; Where sprites overlap, the lower hardware sprite is in front.
 ;
 ; The engine defines, before including:
-;   MUX_IDS        how many objects there can be (at most 32); ids are their order for ties
+;   MUX_IDS        how many objects there can be (at most MUX_LIST, 32 unless set, up to 64); ids
+;                  are their order for ties
 ;   MUX_GAP        the lines between objects on one hardware sprite
 ;   MUX_FREE_ROW   the first sprite row that is empty in every frame: a hardware sprite is set up for
 ;                  its next object from the line its last object draws this row
@@ -25,7 +26,9 @@
 ;
 ; latespr counts sprites set up after their first line had begun (none should be).
 
-MUX_LIST = 32               ; each sprite list's room
+.ifndef MUX_LIST
+MUX_LIST = 32               ; each sprite list's room (an engine may set more, up to 64)
+.endif
 
 .segment "ZEROPAGE"
 optr:     .res 1            ; SHOW: the object's sprite pointer and colour
@@ -60,6 +63,7 @@ o_xh:      .res MUX_LIST    ; and bit 8
 o_ptr:     .res MUX_LIST
 o_col:     .res MUX_LIST
 mux_order: .res MUX_LIST
+mux_prev:  .res MUX_LIST    ; last frame's order, while this frame's is built
 ; two sprite lists (the one showing, the one being built), MUX_LIST apart: per sprite its Y and X
 ; registers, $D010 after it, colour, pointer, and the line from which its hardware sprite is free
 d_y:       .res 2 * MUX_LIST
@@ -156,58 +160,64 @@ mux_start:
 mux_build:
     ; Last frame's order, without the objects gone, then the new ones (in id order), insertion
     ; sorted by (Y, id). As most objects move little from frame to frame, there is little to sort.
-    ldx #0                  ; X reads last frame's order, Y writes this one's
-    ldy #0
+    ; Last frame's order (in mux_prev), without the objects gone, then the new ones (in id order),
+    ; each placed into this frame's order by (Y, id) as it comes: an insertion sort as they're
+    ; gathered. As most objects move little from frame to frame, most go straight at the end.
+    ldx mux_pn
+:   dex                     ; last frame's order, to read from
+    bmi :+
+    lda mux_order,x
+    sta mux_prev,x
+    jmp :-
+:   lda #0
+    sta mux_on              ; this frame's so far
+    sta mux_t3              ; the next of last frame's
 @keep:
+    ldx mux_t3
     cpx mux_pn
     beq @kept
-    lda mux_order,x
-    inx
-    stx mux_t1
-    tax
-    lda mux_vis,x
-    beq @gone
-    lda #0                  ; (vis back to 0 for the next frame)
-    sta mux_vis,x
-    txa
-    sta mux_order,y
-    iny
-    ldx mux_t1
+    inc mux_t3
+    ldy mux_prev,x
+    lda mux_vis,y
+    bne :+
+    sta mux_inord,y         ; gone (A is 0)
     jmp @keep
-@gone:
-    sta mux_inord,x         ; (A is 0)
-    ldx mux_t1
+:   lda #0                  ; (vis back to 0 for the next frame)
+    sta mux_vis,y
+    jsr @insert
     jmp @keep
 @kept:
-    ldx #0
-@new:
-    cpx mux_nn
-    beq @newdone
-    lda mux_newl,x
-    sta mux_order,y
-    iny
-    stx mux_t1
-    tax
     lda #0
-    sta mux_vis,x
+    sta mux_t3
+@new:
+    ldx mux_t3
+    cpx mux_nn
+    beq @sorted
+    inc mux_t3
+    ldy mux_newl,x
+    lda #0
+    sta mux_vis,y
     lda #1
-    sta mux_inord,x
-    ldx mux_t1
-    inx
+    sta mux_inord,y
+    jsr @insert
     jmp @new
-@newdone:
-    sty mux_on
-    sty mux_pn
-    ldx #1
-@sort:
-    cpx mux_on
-    bcs @sorted
-    lda mux_order,x
-    sta mux_t0              ; the one to place: its id, and Y
-    tay
+; Object Y into the order so far, after every object with a lower Y, or the same Y and a lower id.
+@insert:
+    sty mux_t0
     lda o_y,y
     sta mux_t1
-    stx mux_t2
+    ldx mux_on
+    inc mux_on
+    cpx #0
+    beq @place              ; (the first)
+    ldy mux_order-1,x       ; after the last one placed? (most are: objects keep their order)
+    cmp o_y,y
+    beq :+
+    bcs @place
+    bcc @move
+:   cpy mux_t0
+    bcc @place
+    jmp @move
 @shift:
     cpx #0
     beq @place
@@ -226,10 +236,10 @@ mux_build:
 @place:
     lda mux_t0
     sta mux_order,x
-    ldx mux_t2
-    inx
-    jmp @sort
+    rts
 @sorted:
+    lda mux_on
+    sta mux_pn
     ; The n-th object shown gets hardware sprite n mod 8, if it starts MUX_GAP lines below the one
     ; before it on that sprite (the list's entry 8 back).
     lda mux_disp
@@ -334,31 +344,23 @@ mux_bottom:
     beq :+
     ldx #MUX_LIST
 :   stx mux_nx
-    txa                     ; the first 8
-    clc
-    adc #8
-    sta mux_it
-@first:
+.repeat 8, K                 ; the first 8, on hardware sprites 0-7
     cpx mux_end
-    beq @none
-    cpx mux_it
-    beq @more
-    txa
-    and #7
-    tay
+    bne :+
+    jmp @none
+:   ldy #K
     lda d_ptr,x
     sta (mux_pp),y
     lda d_col,x
-    sta $d027,y
-    tya
-    asl
-    tay
+    sta $d027+K
     lda d_y,x
-    sta $d001,y
+    sta $d001+2*K
     lda d_x,x
-    sta $d000,y
+    sta $d000+2*K
     inx
-    jmp @first
+.endrepeat
+    cpx mux_end
+    beq @none
 @more:
     stx mux_nx
     lda d_e,x

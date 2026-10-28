@@ -8,9 +8,15 @@
  *   - positions are whole screen pixels, of each sprite's top-left corner; bullets are 1/16 pixel
  *   - one tick per 50 Hz frame; input is the joystick's bits: 1 up, 2 down, 4 left, 8 right, 16 fire
  *   - enemies: drones that snake down in columns of four, swoopers that dive, fire once and turn back,
- *     and ground turrets that ride the scrolling hull and fire aimed bullets
+ *     and ground turrets that ride the scrolling hull and fire aimed bullets (every 64 ticks, staggered
+ *     by their slot)
+ *   - a game: the title (the level scrolls by; fire, pressed from released, starts), play with 3
+ *     ships, and game over (OVER_FOR ticks, then the title again). The level never stops scrolling,
+ *     and a game starts wherever it is
+ *   - each tick lists what it heard in g.events, in order: 'shot', 'enemyFire', 'hit' (a turret
+ *     damaged), 'explode', 'death'; the sound plays them (sound/shmup.js)
  *
- * parse(text) reads a level; game(level) makes a game at its start; tick(level, g, input) plays one
+ * parse(text) reads a level; game(level) makes a game at its title; tick(level, g, input) plays one
  * frame.
  */
 (function (root, factory) {
@@ -25,6 +31,9 @@
   const SPACE = 0, PLATE = 1, VENT = 2, LAMP = 3, BASE = 4, DOME = 5, BLOCK = 6, PIPE_V = 7, PIPE_H = 8, HAZARD = 9;
   // Enemy slots' kinds.
   const FREE = 0, DRONE = 1, SWOOPER = 2, TURRET = 3, BOOM = 4;
+  // The game's modes.
+  const TITLE = 0, PLAY = 1, OVER = 2;
+  const LIVES = 3, OVER_FOR = 250;
   const SLOTS = { shots: 3, enemies: 12, bullets: 6 };
 
   // The ship: 2 pixels a frame in the 8 directions (by the joystick's bits), kept inside BOUNDS.
@@ -87,7 +96,8 @@
     return {
       camY: L.px - SCREEN_H, // the level line at the top of the screen
       t: 0,
-      player: { x: START.x, y: START.y, dead: 0, invuln: 0, cool: 0 },
+      mode: TITLE, lives: 0, over: 0, held: false, hi: 0, events: [],
+      player: { x: START.x, y: START.y, dead: 1, invuln: 0, cool: 0 }, // (dead: not in play)
       shots: Array.from({ length: SLOTS.shots }, () => ({ on: false, x: 0, y: 0 })),
       enemies: Array.from({ length: SLOTS.enemies }, () => ({ kind: FREE, x: 0, y: 0, bx: 0, vx: 0, vy: 0, t: 0, hp: 0, flash: 0, ground: false, phase: 0 })),
       bullets: Array.from({ length: SLOTS.bullets }, () => ({ on: false, x: 0, y: 0, vx: 0, vy: 0 })),
@@ -102,18 +112,35 @@
     const bx = e.x + 9, by = e.y + 7;
     const [vx, vy] = AIM[aim(p.x + 12 - (bx + 3), p.y + 11 - (by + 2))];
     Object.assign(b, { on: true, x: bx << 4, y: by << 4, vx, vy });
+    g.events.push('enemyFire');
   }
-  function explode(e) {
+  function explode(g, e) {
     Object.assign(e, { kind: BOOM, t: 0, flash: 0 });
+    g.events.push('explode');
   }
 
   function tick(L, g, input) {
     const p = g.player;
     g.t = (g.t + 1) & 0xffff;
+    g.events = [];
+
+    // the game: fire starts one from the title; game over ends in the title
+    const firing = !!(input & 16), pressed = firing && !g.held;
+    g.held = firing;
+    if (g.mode === TITLE && pressed) {
+      Object.assign(g, { mode: PLAY, score: 0, lives: LIVES });
+      Object.assign(p, { x: START.x, y: START.y, dead: 0, invuln: 0, cool: 0 });
+      for (const o of [...g.shots, ...g.bullets]) o.on = false;
+      for (const e of g.enemies) e.kind = FREE;
+    } else if (g.mode === OVER && --g.over === 0) {
+      g.mode = TITLE;
+      g.hi = Math.max(g.hi, g.score);
+    }
 
     // the ship, and its shots
     if (p.dead) {
-      if (--p.dead === 0) Object.assign(p, { x: START.x, y: START.y, invuln: INVULN, cool: 0 });
+      if (g.mode !== PLAY) { if (p.dead > 1) p.dead--; } // (it stays gone)
+      else if (--p.dead === 0) Object.assign(p, { x: START.x, y: START.y, invuln: INVULN, cool: 0 });
     } else {
       const d = DIRS[input & 15];
       if (d) {
@@ -126,11 +153,12 @@
     if (p.cool) p.cool--;
     if (!p.dead && input & 16 && !p.cool) {
       const s = g.shots.find(o => !o.on);
-      if (s) { Object.assign(s, { on: true, x: p.x, y: p.y - 8 }); p.cool = SHOT.cool; }
+      if (s) { Object.assign(s, { on: true, x: p.x, y: p.y - 8 }); p.cool = SHOT.cool; g.events.push('shot'); }
     }
 
     // the enemies
-    for (const e of g.enemies) {
+    for (let k = 0; k < g.enemies.length; k++) {
+      const e = g.enemies[k];
       if (!e.kind) continue;
       e.t++;
       switch (e.kind) {
@@ -149,7 +177,9 @@
         case TURRET:
           e.y++;
           if (e.flash) e.flash--;
-          if ((e.t & 63) === 31 && e.y >= 0 && e.y < 140) fire(g, e);
+          // every 64 ticks, each slot 8 ticks after the one before, so turrets that arrive together
+          // don't fire together
+          if (((e.t + 8 * k) & 63) === 31 && e.y >= 0 && e.y < 140) fire(g, e);
           if (e.y >= SCREEN_H) e.kind = FREE;
           break;
         case BOOM:
@@ -165,9 +195,10 @@
       if (x <= -6 || x >= 320 || y <= -6 || y >= SCREEN_H) b.on = false;
     }
 
-    // the level scrolls on a line, and the tile row now wholly above the screen's top lets in its spawns
+    // the level scrolls on a line, and in play the tile row now wholly above the screen's top lets in
+    // its spawns
     g.camY = (g.camY + L.px - 1) % L.px;
-    if ((g.camY & 15) === 15) {
+    if (g.mode === PLAY && (g.camY & 15) === 15) {
       for (const s of L.spawns[g.camY >> 4]) {
         if (s.kind === DRONE) {
           for (let k = 0; k < 4; k++) {
@@ -191,8 +222,8 @@
       for (const e of g.enemies) {
         if (e.kind < DRONE || e.kind > TURRET || e.y <= -21 || !hits(s.x, s.y, BOX.shot, e.x, e.y, BOX[e.kind])) continue;
         s.on = false;
-        if (--e.hp) e.flash = 3;
-        else { g.score += SCORE[e.kind]; explode(e); }
+        if (--e.hp) { e.flash = 3; g.events.push('hit'); }
+        else { g.score += SCORE[e.kind]; explode(g, e); }
         break;
       }
     }
@@ -200,12 +231,16 @@
     if (!p.dead && !p.invuln) {
       let hit = false;
       for (const b of g.bullets) if (b.on && hits(p.x, p.y, BOX.player, b.x >> 4, b.y >> 4, BOX.bullet)) { b.on = false; hit = true; }
-      for (const e of g.enemies) if ((e.kind === DRONE || e.kind === SWOOPER) && hits(p.x, p.y, BOX.player, e.x, e.y, BOX[e.kind])) { explode(e); hit = true; }
-      if (hit) { p.dead = DEAD_FOR; g.deaths++; }
+      for (const e of g.enemies) if ((e.kind === DRONE || e.kind === SWOOPER) && hits(p.x, p.y, BOX.player, e.x, e.y, BOX[e.kind])) { explode(g, e); hit = true; }
+      if (hit) {
+        p.dead = DEAD_FOR; g.deaths++;
+        g.events.push('death');
+        if (--g.lives === 0) { g.mode = OVER; g.over = OVER_FOR; }
+      }
     }
     return g;
   }
 
   return { TILE, WIDTH, SCREEN_H, SPACE, PLATE, VENT, LAMP, BASE, DOME, BLOCK, PIPE_V, PIPE_H, HAZARD, FREE, DRONE, SWOOPER, TURRET, BOOM, SLOTS,
-    DIRS, BOUNDS, START, SHOT, DEAD_FOR, INVULN, SCORE, HP, BOX, SWAY, AIM, aim, parse, tileAt, game, tick };
+    TITLE, PLAY, OVER, LIVES, OVER_FOR, DIRS, BOUNDS, START, SHOT, DEAD_FOR, INVULN, SCORE, HP, BOX, SWAY, AIM, aim, parse, tileAt, game, tick };
 });

@@ -2,7 +2,8 @@
 // and flying enemies that would hit within the next few frames. Used by the video (showcase/shmup.js)
 // and the C64 test.
 //
-// inputs(level, n) plays n ticks from the start and returns { inputs, game } after them.
+// inputs(level, n, wait) plays n ticks from the start (the first `wait` on the title, doing nothing)
+// and returns { inputs, game } after them.
 // sweep(n): n ticks of flying side to side with fire held, which gets the ship shot down now and then
 // (for testing explosions, coming back and blinking).
 const G = require('../core/shmup.js');
@@ -49,10 +50,10 @@ function steer(L, g) {
   return best | 16;
 }
 
-function inputs(L, n) {
+function inputs(L, n, wait = 0) {
   const g = G.game(L), list = [];
   for (let k = 0; k < n; k++) {
-    const b = steer(L, g);
+    const b = k < wait ? 0 : steer(L, g);
     list.push(b);
     G.tick(L, g, b);
   }

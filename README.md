@@ -160,6 +160,7 @@ The write delay was found in VICE: 49 to 52 cycles draw every test frame exactly
 | Plus fog | 106,285 (9.3 fps) | |
 | Plus bricks | 126,495 (7.8 fps) | 126,040 (7.8 fps) |
 | Rays 2 angle units apart, kept when turning | 86,266 (11.4 fps) | 127,791 (7.7 fps) |
+| Built with the kit (the same code, moved) | 86,346 (11.4 fps) | 127,503 (7.7 fps) |
 
 Bricks only on walls within about 3 tiles (`TEX_NEAR` 20) ran at 8.2 fps turning before ray reuse, and scale 160 (in proportion at 56°) at 9.4 turning and 7.4 walking. Neither was worth it.
 
@@ -198,6 +199,8 @@ node test/vice-check.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
 `--ntsc` runs on an NTSC machine. `--cycles 12000000,15000017` screenshots at each listed cycle count. The script ends with PASS or FAIL.
+
+All the C64 checks run through the kit's test runner (`test/kit.js`), so they share their switches: `--ntsc`, `--model`, `--quick` and `--timing` (see *The C64 kit*).
 
 `test/c64-check.js` tests the 6502 engine itself. It builds the engine in test mode at 11 poses along the walk, so each build draws one frame and stops. Three more builds play scripted controls: turning (which reuses rays), walking, and sliding along and into walls and a guard. Their final position must match the same moves made in JavaScript. Every frame the C64 draws must match the reference pixel for pixel, sprites included. Pass `--ntsc` to test on NTSC too.
 
@@ -326,11 +329,11 @@ node showcase/iso-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 
 ## Shoot-'em-up
 
-A vertical-scrolling shooter for the C64, over the hull of a space dreadnought. Everything that moves is a hardware sprite: the ship, its shots, the enemies, their bullets and the explosions. That is more than the VIC's eight, so a sprite multiplexer shares them out down the screen. A JavaScript reference defines every frame; the 6502 engine draws exactly the same frames at 50 frames a second, checked pixel for pixel in VICE.
+A vertical-scrolling shooter for the C64, over the hull of a space dreadnought, and the first APEX game that is a whole game: a title, three ships, a score and a high score, game over, music and sound effects. Everything that moves is a hardware sprite: the ship, its shots, the enemies, their bullets, the explosions, and the score and titles too. That is more than the VIC's eight, so a sprite multiplexer shares them out down the screen. A JavaScript reference defines every frame and every SID register; the 6502 engine draws exactly the same frames and plays exactly the same sound at 50 frames a second, checked in VICE.
 
-To play on a C64 or in VICE, load `c64/out/shmup.prg` with `LOAD"*",8,1`, then `RUN`. Use a joystick in port 2, or W, A, S and D to fly and Space to fire (hold it for autofire); R starts again. `showcase/out/shmup-c64.mp4` is a recording of it running in VICE.
+To play on a C64 or in VICE, load `c64/out/shmup.prg` with `LOAD"*",8,1`, then `RUN`, and press fire. Use a joystick in port 2, or W, A, S and D to fly and Space to fire (hold it for autofire); R goes back to the title. `showcase/out/shmup-c64.mp4` is a recording of it running in VICE, with its sound.
 
-To play the reference, open `web/shmup.html` from a local server, or `web/out/shmup-play.html` directly. Use the arrow keys or W, A, S and D to fly, and Space, Ctrl or K to fire. R starts again.
+To play the reference, open `web/shmup.html` from a local server, or `web/out/shmup-play.html` directly. Use the arrow keys or W, A, S and D to fly, and Space, Ctrl or K to fire. R goes back to the title. The reference has no sound.
 
 | File | What it is |
 |------|------------|
@@ -340,10 +343,11 @@ To play the reference, open `web/shmup.html` from a local server, or `web/out/sh
 | `web/shmup.html` | The reference, playable in a browser |
 | `showcase/shmup-pilot.js` | An autopilot that lines up under enemies and sidesteps what's coming |
 | `showcase/shmup.js` | The autopilot's run, as `showcase/out/shmup-run.mp4` |
+| `sound/shmup.js` | The music and sound effects (see *Sound*) |
 | `c64/shmup/shmup.s` | The 6502 engine (ca65) |
 | `c64/shmup/gen.js`, `build.js` | Turn the reference into the engine's characters, sprites, level rows, tables and screen shifts, and assemble it |
-| `test/shmup-check.js` | Plays the autopilot's run and a sweep that gets shot down in VICE, checks every pixel of the C64's frames against the reference, and checks that no frame and no sprite is late |
-| `showcase/shmup-c64-video.js` | Records the C64 engine's run in VICE, as `showcase/out/shmup-c64.mp4` |
+| `test/shmup-check.js` | Plays the autopilot's run and a sweep through a whole game (shot down three times, game over, the title, a new game) in VICE. Checks every pixel of the C64's frames and every tick's SID registers against the reference, and that no frame and no sprite is late |
+| `showcase/shmup-c64-video.js` | Records the C64 engine in VICE (the title, then the autopilot), with its sound, as `showcase/out/shmup-c64.mp4` |
 
 **Screen.** Multicolor characters, 40 columns by 24 rows. The VIC's vertical fine scroll moves the screen down one line a frame. Tiles are 16×16 pixels (2×2 characters), each drawn from its own kind and its neighbours:
 - *armour*: panels of 2×2 tiles with seams and corner rivets, and lit and shaded rims along the hull's edges. One panel in seven is recessed: dark, with a shadow along its top and left
@@ -361,20 +365,28 @@ The Dreadnought needs 140 characters. Colour RAM is one value for the whole scre
 - *the ship*: 2 pixels a frame in eight directions, with a twin shot every 8 frames while fire is held
 - *drones*: arrive in columns of four and snake down the screen
 - *swoopers*: dive, fire one aimed bullet, then turn back up and away
-- *turrets*: ride the hull and fire every 64 frames, taking three hits to destroy
+- *turrets*: ride the hull and fire every 64 frames (staggered, so turrets that arrive together don't fire together), taking three hits to destroy
 
 Bullets aim at one of 16 directions, chosen by integer comparisons. A hit costs a ship. You come back after a moment and are untouchable for 120 frames, blinking. The level wraps round.
 
+**The whole game.** The title shows DREADNOUGHT, the high score and a blinking PRESS FIRE while the level scrolls by. Fire (pressed, not just held) starts a game with three ships, wherever the level has got to, so the screen never has to be redrawn. Losing the last ship shows GAME OVER for 5 seconds, then the title again, with the high score if it was beaten. In play, the score (six digits) sits at the top left, with the ships left under its first three digits. All of it is sprites in a chunky 3×5 font with a drop shadow, one character to a byte of a sprite, so the C64 draws the score's digits by copying 6 bytes each into the two sprites it shows that frame, and only when they change. Each tick also lists what happened (a shot, an enemy firing, a turret hit, an explosion, the ship lost), and those start the sound effects; the music plays throughout.
+
 **The C64 engine.** Each frame it reads the controls, plays one tick of the game as `core/shmup.js` does (fixed slots, the same order, 16-bit positions), and works out the next frame, which the bottom-of-frame IRQ then shows:
-- *two screens*: every 8 frames the view moves a whole row, so the screen that isn't showing becomes the shown one moved down a row, with the level's next row at its top. It's copied a part at a time over the other 7 frames, ahead of time when a frame has spare time (by the raster), so a busy frame never pays for it. The screens swap at the bottom of the frame together with the fine scroll
+- *two screens*: every 8 frames the view moves a whole row, so the screen that isn't showing becomes the shown one moved down a row, with the level's next row at its top. It's copied in 25 small parts (the new top row, then each row) over the other 7 frames: each frame does at least its share, and more ahead while the raster says it has time to spare, so a busy frame seldom pays for much. The screens swap at the bottom of the frame together with the fine scroll
 - *two character sets*: the stars are redrawn in the one that isn't showing, so they never tear. Only their old and new bytes are touched, about 16 a frame
 - *the multiplexer*: the objects are sorted by (Y, slot), starting from last frame's order, so there is little to sort. Then they get hardware sprites by the reference's rule. Sprites 0–7 are set at the bottom of the frame. Each later one is set by a raster IRQ on the line after its hardware sprite's last object has drawn its last row (rows 18–20 are empty in every frame), and the IRQ chains straight on to one due a line later. The IRQ counts any sprite set up after its first line has begun, and there are none
-- *memory*: VIC bank 1 holds both screens, both character sets and the sprites; BASIC and the KERNAL are switched out
+- *the score and titles*: sprites like any other object, taken by the multiplexer after the bullets: up to 33 objects. The score's digits and the ships left are drawn into the pair of sprite blocks that isn't showing, when they change
+- *sound*: the kit's SID driver plays the music and starts the game's effects where the reference lists its events; the bottom-of-frame IRQ writes the SID at the same moment every frame
+- *memory*: VIC bank 1 holds both screens, both character sets and 32 sprite blocks; BASIC and the KERNAL are switched out
 
 | | PAL | NTSC |
 |---|---|---|
-| Frames late, and sprites late, in the autopilot's run and the sweep (2,400 ticks each) | 0 | 0 |
-| Slowest frame's work (a sweep frame with three turrets firing at once and 15 sprites) | 79% of a frame | 94% |
+| Sprites set up late | 0 | 0 |
+| Frames late in the autopilot's run (2,400 ticks) | 6 (0.25%) | 95 (4%) |
+| Frames late in the sweep through a whole game (2,400 ticks) | 9 (0.4%) | 160 (6.7%) |
+| Slowest frame's own work (before copying ahead) | 89% of a frame | 107% |
+
+The engine alone (before the score, titles and sound) was never late on PAL or NTSC. The whole game is a little over budget at its busiest moments: on PAL a frame is shown twice now and then, and on NTSC play slows a little in heavy fights. The timing test reports this as a failure until it's fixed.
 
 ```bash
 node showcase/shmup.js
@@ -382,6 +394,54 @@ node web/bundle.js
 node c64/shmup/build.js
 node test/shmup-check.js "C:\path\to\GTK3VICE-3.10-win64"
 node showcase/shmup-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
+```
+
+## The C64 kit
+
+What every C64 engine shares lives in `c64/kit/` and `test/`, so a new engine starts from a template instead of a copy of the last one.
+
+| File | What it is |
+|------|------------|
+| `c64/kit/build.js` | Assembles an engine with ca65 and ld65 (with the kit on the include path), and makes its test builds: a script of inputs played in place of the controls, and extra constants such as `PROFILE` |
+| `c64/kit/kit.inc` | The BASIC line, the machine's set-up (RAM in place of BASIC and the KERNAL, the IRQ vector, a cleared zero page), the script player, frame timing, late-frame counting, and the profiler's `MARK`s |
+| `c64/kit/mux.inc` | The sprite multiplexer, as the shoot-'em-up uses it: `SHOW` each object, `mux_build` sorts them and gives them hardware sprites, and two IRQs set them up down the screen |
+| `c64/kit/sid.inc`, `sidgen.js` | The SID driver, and the tables it plays from (see *Sound*) |
+| `test/kit.js` | The VICE checks: frames compared pixel for pixel, timing runs (late frames, late sprites, the slowest frame), the sound's registers, and a verdict |
+| `test/profile.js` | Plays an engine's script in a profiling build and shows how its slowest frame's cycles split between its parts |
+
+Every engine's test takes the same switches:
+- `--ntsc`, or `--model <name>` for any machine VICE has: `c64`, `c64c`, `c64old`, `ntsc`, `newntsc`, `oldntsc`, `drean`
+- `--quick` for a few frames, and `--timing` for the timing runs alone
+
+The tests have run on all of VICE's C64 models: the C64 (6569 VIC-II), the C64C (8565), the early C64 (6569R1), NTSC (6567R8) and the newer NTSC (8562), the old NTSC (6567R56A, 64 cycles a line and 262 lines), and the Argentinian Drean (PAL-N, 65 cycles a line). On every one, the raycaster, the platformer and the dungeon draw every frame exactly and are never late, the raster splits included, and the SID driver sets every register exactly. The shoot-'em-up draws every frame exactly on all of them; its timing is in its own section.
+
+A failing frame's screenshot is kept in the temp folder's `apex-check-failures`. Now and then VICE's autostart leaves the C64 at BASIC's READY prompt instead of running the program. Such a frame runs once more, and the test says so.
+
+The raycaster builds with the kit and plays its scripts, but keeps the KERNAL and its own IRQ set-up: its gradient's writes are tuned to the KERNAL's IRQ entry, to a cycle.
+
+```bash
+node test/profile.js "C:\path\to\GTK3VICE-3.10-win64" shmup sweep
+```
+
+## Sound
+
+Music and sound effects for the SID, made the way the pictures are: `core/sound.js` is the reference, and the 6502 driver `c64/kit/sid.inc` sets exactly the same 25 SID registers on every tick. The test compares registers, not audio. The driver keeps them in RAM, and copies them to the SID once a frame. The test checks a running checksum of every tick's registers, and the last tick's, against the reference.
+
+- *music*: three voices, each playing 32-row patterns from its own order list. A row is a note, a release, or nothing. Instruments set the waveform, ADSR, a sweeping pulse width, an arpeggio and a gate length. A new note restarts hard: one tick with the gate off
+- *effects*: steps of a waveform, a sliding frequency, ADSR and a length, played on voice 3 instead of the music, which goes on underneath. A new effect starts unless one of higher priority is playing
+- `sound/shmup.js`: the Dreadnought's music, a 31-second loop in A minor (bass, a pulse lead, arpeggiated chords), and its five effects
+
+| File | What it is |
+|------|------------|
+| `core/sound.js` | The reference player |
+| `c64/sound/` | A player program: the music, with the joystick (or a test's script) playing the effects |
+| `test/sound-check.js` | Plays the song for two loops, each effect alone, and effects piling up in VICE, and compares every tick's registers |
+| `showcase/sound-wav.js` | Records the player in VICE as `showcase/out/shmup-music.wav` |
+
+```bash
+node c64/sound/build.js
+node test/sound-check.js "C:\path\to\GTK3VICE-3.10-win64"
+node showcase/sound-wav.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
 ## Roadmap

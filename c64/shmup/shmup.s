@@ -28,14 +28,18 @@ CHARS_B  = $5000
 SPRITES  = $5800
 SPRPTR   = (SPRITES - $4000) / 64
 BOTTOM   = 250              ; the bottom-of-frame interrupt, below the 24-row display
+KIT_OWN_SLOWEST = 1         ; (profiles keep the slowest frame by its work before copying ahead)
 N_IDS    = 1 + N_SHOTS + N_ENEMIES + N_BULLETS ; objects: the ship, then the shots, enemies, bullets
+N_WORDS  = 11               ; then the words: at most the title's 11 sprites
 
-MUX_IDS      = N_IDS
+MUX_LIST     = 40
+MUX_IDS      = N_IDS + N_WORDS
 MUX_GAP      = GAP
 MUX_FREE_ROW = SPRITE_ROWS
 MUX_BOTTOM   = BOTTOM
 .include "kit.inc"
 .include "mux.inc"
+.include "sid.inc"
 
 .segment "ZEROPAGE"
 inp:     .res 1             ; joystick bits: 1 up, 2 down, 4 left, 8 right, 16 fire
@@ -77,14 +81,22 @@ py:      .res 1
 pdead:   .res 1
 pinv:    .res 1
 pcool:   .res 1
-score:   .res 2
+scoreb:  .res 3             ; the score, in BCD (low byte first), and the high score
+hib:     .res 3
+mode:    .res 1             ; MODE_TITLE, MODE_PLAY, MODE_OVER
+lives:   .res 1
+over:    .res 1             ; game over: ticks left
+held:    .res 1             ; fire, last tick (16 or 0)
+hp:      .res 2             ; the score's sprite blocks
+vb:      .res 4             ; the value they show, and the ships left
+hudval:  .res 8             ; and the value (and ships left) drawn in each frame's pair of blocks
 deaths:  .res 1
 hit:     .res 1
 ; the view
 ys:      .res 1             ; the fine scroll
 cyr:     .res 1             ; the level's character row at screen row 0
 cur:     .res 1             ; this frame's screen: 0 A, 1 B
-cdone:   .res 1             ; the other screen's parts done (7: ready)
+cdone:   .res 1             ; the other screen's parts done (25: ready)
 curcs:   .res 1             ; this frame's character set: 0 A, 1 B
 o1:      .res 1             ; the stars' offsets
 o2:      .res 1
@@ -101,6 +113,12 @@ p_d011:  .res 1
 p_ptr:   .res 1             ; the high byte of its screen's sprite pointers
 
 .segment "BSS"
+ymin:    .res 1             ; shot hits: the heights (+ 16) shots can reach, and the enemies there
+ymax:    .res 1
+ncand:   .res 1
+ci:      .res 1
+cand:    .res N_ENEMIES
+latef:   .res 1             ; 1: the bottom IRQ found this frame late
 ; enemies, shots, bullets: fixed slots, as in core/shmup.js
 e_kind:  .res N_ENEMIES
 e_xl:    .res N_ENEMIES
@@ -293,6 +311,16 @@ start:
     sta maxcore+1
     sta applied
     KIT_SCRIPT_START
+    jsr snd_init
+    lda #$ff                ; (no digits drawn yet)
+    ldx #7
+:   sta hudval,x
+    dex
+    bpl :-
+    lda #0
+    sta hib
+    sta hib+1
+    sta hib+2
     jsr reset_game
     jsr view                ; the first frame, before any tick
     lda #1
@@ -315,12 +343,15 @@ main:
     KIT_PROFILE_FRAME
     lda #0
     sta applied
+    sta latef
     jsr input
     bcc :+
     jmp kit_park
 :   MARK 0
     jsr tick
     MARK 6
+    jsr snd_tick
+    MARK 11
     jsr view
 @read:
     ldy $dc05               ; the work so far, before copying ahead (read again if the high byte moved)
@@ -340,6 +371,9 @@ main:
     tya
     eor #$ff
     sta maxcore+1
+.ifdef PROFILE
+    jsr kit_keep_prof       ; (the slowest frame by this measure)
+.endif
 :   jsr copy_more
     MARK 12
     KIT_TIMER_MAX           ; how long it took
@@ -419,13 +453,20 @@ reset_game:
     sta camyh
     lda #0
     sta gt
-    sta pdead
     sta pinv
     sta pcool
-    sta score
-    sta score+1
+    sta scoreb
+    sta scoreb+1
+    sta scoreb+2
     sta deaths
     sta cur
+    sta lives
+    sta over
+    sta held
+    lda #MODE_TITLE
+    sta mode
+    lda #1                  ; (not in play)
+    sta pdead
     lda #<START_X
     sta pxl
     lda #>START_X
@@ -456,7 +497,7 @@ reset_game:
     ldx #LEVEL_ROWS
 :   dex
     stx t3
-    lda #7
+    lda #25                 ; (both drawn: the other is ready)
     sta cdone
     ldx #1
     jmp draw_screen
@@ -503,9 +544,83 @@ draw_screen:
 tick:
     inc gt
 
+    ; ---- the game: fire (pressed from released) starts one from the title; game over ends in the title
+    lda inp
+    and #16
+    tax                     ; firing
+    lda held
+    stx held
+    bne @nopress
+    txa
+    beq @nopress
+    lda mode
+    bne @nopress
+    lda #MODE_PLAY          ; a game
+    sta mode
+    lda #LIVES
+    sta lives
+    lda #0
+    sta scoreb
+    sta scoreb+1
+    sta scoreb+2
+    sta pdead
+    sta pinv
+    sta pcool
+    ldx #N_SHOTS - 1
+:   sta s_on,x
+    dex
+    bpl :-
+    ldx #N_BULLETS - 1
+:   sta b_on,x
+    dex
+    bpl :-
+    ldx #N_ENEMIES - 1
+:   sta e_kind,x
+    dex
+    bpl :-
+    lda #<START_X
+    sta pxl
+    lda #>START_X
+    sta pxh
+    lda #START_Y
+    sta py
+    jmp @ship
+@nopress:
+    lda mode
+    cmp #MODE_OVER
+    bne @ship
+    dec over
+    bne @ship
+    lda #MODE_TITLE         ; the title again, and maybe a new high score
+    sta mode
+    ldx #2
+:   lda scoreb,x
+    cmp hib,x
+    bcc @ship
+    bne :+
+    dex
+    bpl :-
+    bmi @ship
+:   lda scoreb
+    sta hib
+    lda scoreb+1
+    sta hib+1
+    lda scoreb+2
+    sta hib+2
+
     ; ---- the ship, and its shots
+@ship:
     lda pdead
     beq @alive
+    ldx mode
+    cpx #MODE_PLAY
+    beq @inplay_dead
+    cmp #2                  ; out of play: it stays gone
+    bcs :+
+    jmp @shots
+:   dec pdead
+    jmp @shots
+@inplay_dead:
     dec pdead
     bne @shots
     lda #<START_X           ; back again, untouchable for a while
@@ -624,6 +739,8 @@ tick:
     sta s_yh,x
     lda #SHOT_COOL
     sta pcool
+    lda #SFX_SHOT
+    jsr snd_fx
 
     ; ---- the enemies
 @enemies:
@@ -780,7 +897,12 @@ tick:
 :   lda e_flash,x
     beq :+
     dec e_flash,x
-:   lda e_t,x
+:   txa                     ; (t + 8 slot) & 63 = 31: every 64 ticks, staggered by slot
+    asl
+    asl
+    asl
+    clc
+    adc e_t,x
     and #63
     cmp #31
     bne @tgone
@@ -897,11 +1019,14 @@ tick:
     bne :+
     dec camyh
 :   dec camyl
+    lda mode
+    cmp #MODE_PLAY
+    bne :+
     lda camyl
     and #15
     cmp #15
-    beq :+
-    jmp @hits
+    beq :++
+:   jmp @hits
 :   lda camyh               ; the tile row: camY >> 4
     sta t1
     lda camyl
@@ -1027,7 +1152,75 @@ tick:
     ; (core/shmup.js also skips enemies at y <= -21, but a shot's box never reaches above y = -15)
 @hits:
     MARK 4
-    ldy #0
+    ; The enemies a shot could hit: hittable, and within reach of some shot's height. A shot at y can
+    ; hit an enemy at y - 10 to y + 5 (the pairs' boxes: dy from Y0 + 1 >= -10 to Y1 - 1 <= 5), and
+    ; shots are at -5 to 255, so with 16 added their heights fit a byte.
+    lda #$ff
+    sta ymin
+    lda #0
+    sta ymax
+    sta ncand
+    ldy #N_SHOTS - 1
+@span:
+    lda s_on,y
+    beq @nspan
+    lda s_yl,y
+    clc
+    adc #16
+    cmp ymin
+    bcs :+
+    sta ymin
+:   cmp ymax
+    bcc @nspan
+    sta ymax
+@nspan:
+    dey
+    bpl @span
+    lda ymax
+    bne :+
+    jmp @hitsdone           ; no shots
+:   clc
+    adc #5                  ; (ymax + 5, at most 255)
+    bcc :+
+    lda #255
+:   sta ymax
+    lda ymin
+    sec
+    sbc #10
+    bcs :+
+    lda #0
+:   sta ymin
+    ldx #0
+@cand:
+    lda e_kind,x
+    beq @ncand
+    cmp #K_BOOM
+    bcs @ncand
+    lda e_yl,x              ; y + 16 within [ymin, ymax]?
+    clc
+    adc #16
+    sta t0
+    lda e_yh,x
+    adc #0
+    bne @ncand
+    lda t0
+    cmp ymin
+    bcc @ncand
+    cmp ymax
+    beq :+
+    bcs @ncand
+:   txa
+    ldy ncand
+    sta cand,y
+    inc ncand
+@ncand:
+    inx
+    cpx #N_ENEMIES
+    bne @cand
+    lda ncand
+    bne :+
+    jmp @hitsdone
+:   ldy #0
 @hshot:
     sty si
     lda s_on,y
@@ -1059,10 +1252,13 @@ tick:
     sta wyh+1,x
     dex
     bpl @win
-    ldx #0
+    lda #0
+    sta ci
 @htarget:
-    ldy e_kind,x
-    beq @nhtarget
+    ldx ci
+    lda cand,x
+    tax
+    ldy e_kind,x            ; (a candidate an earlier shot destroyed is a BOOM now)
     cpy #K_BOOM
     bcs @nhtarget
     lda e_yl,x              ; 0 <= y - wy < width
@@ -1092,19 +1288,30 @@ tick:
     beq :+
     lda #3
     sta e_flash,x
+    lda #SFX_HIT
+    jsr snd_fx
     jmp @nhshot
-:   ldy e_kind,x
-    lda SCORE,y
+:   ldy e_kind,x            ; the score, in BCD (no IRQ meanwhile: they add in binary)
+    sei
+    sed
     clc
-    adc score
-    sta score
-    bcc :+
-    inc score+1
-:   jsr explode
+    lda scoreb
+    adc SCORE_BCD,y
+    sta scoreb
+    lda scoreb+1
+    adc #0
+    sta scoreb+1
+    lda scoreb+2
+    adc #0
+    sta scoreb+2
+    cld
+    cli
+    jsr explode
     jmp @nhshot
 @nhtarget:
-    inx
-    cpx #N_ENEMIES
+    inc ci
+    lda ci
+    cmp ncand
     beq @nhshot
     jmp @htarget
 @nhshot:
@@ -1116,6 +1323,7 @@ tick:
 :
     MARK 5
 
+@hitsdone:
     ; ---- the ship is hit by a bullet or a flying enemy
     lda pdead
     ora pinv
@@ -1163,6 +1371,14 @@ tick:
     lda #DEAD_FOR
     sta pdead
     inc deaths
+    lda #SFX_DEATH
+    jsr snd_fx
+    dec lives
+    bne :+
+    lda #MODE_OVER
+    sta mode
+    lda #OVER_FOR
+    sta over
 :   rts
 
 ; The first free enemy slot in X, or C set if none.
@@ -1185,7 +1401,8 @@ explode:
     lda #0
     sta e_t,x
     sta e_flash,x
-    rts
+    lda #SFX_EXPLODE
+    jmp snd_fx
 
 ; Enemy X fires an aimed bullet, if a bullet is free and the ship is alive. Keeps X.
 fire:
@@ -1231,6 +1448,8 @@ fire:
     ldx sx2
     lda #1
     sta b_on,y
+    lda #SFX_ENEMY_FIRE
+    jsr snd_fx
     lda e_xl,x              ; x = (e.x + 9) << 4, y = (e.y + 7) << 4
     clc
     adc #9
@@ -1446,42 +1665,48 @@ view:
 call:
     jmp (jv)
 
-; The other screen, a part at a time (c64/shmup/gen.js PARTS): it must be this one moved down a row,
-; with the level's row above at its top, by the frame that shows it (fine scroll 0). It is free from
-; the frame after the last swap showed (fine scroll 1). So parts are copied ahead while a frame has
-; time to spare, by the raster, and the last frame before the swap does what is left.
+; The other screen, a part at a time: it must be this one moved down a row, with the level's row above
+; at its top, by the frame that shows it (fine scroll 0). It is free from the frame after the last swap
+; showed (fine scroll 1). Its 25 parts are the top row, then each row moved down (c64/shmup/gen.js).
+; Each frame does at least its share (by fine scroll k, NEED[k] parts), and more ahead while it has
+; time to spare, by the raster; the parts are small, so most frames can do some.
 copy_more:
-    lda ys
+    ldy ys
     beq @done               ; still showing
 @part:
     ldx cdone
-    cpx #7
+    cpx #25
     beq @done
-    lda ys
-    cmp #7
-    beq @go                 ; the last chance
-    lda $d011               ; time to spare: not within 36 lines before the bottom-of-frame IRQ
+    txa
+    cmp NEED,y
+    bcc @go                 ; its share
+    lda latef               ; (not once the frame is late)
+    bne @done
+    lda $d011               ; then more, with time to spare: not within 40 lines before the bottom IRQ
     bmi @go
     lda $d012
     cmp #BOTTOM
     bcs @go
-    cmp #BOTTOM - 36
+    cmp #BOTTOM - 40
     bcs @done
 @go:
     txa
-    ldy cur
+    beq @top
+    clc                     ; row cdone - 1 moved down
+    adc #$ff
+    ldy cur                 ; (into B while A shows, into A while B shows)
     beq :+
     clc
-    adc #7
+    adc #24
 :   tay
     lda COPY_LO,y
     sta jv
     lda COPY_HI,y
     sta jv+1
     jsr call
-    lda cdone
-    bne @next
-    ldx cyr                 ; with the first part, the top row: the level's row above this one's
+    jmp @next
+@top:
+    ldx cyr                 ; the top row: the level's row above this one's
     bne :+
     ldx #LEVEL_ROWS
 :   dex
@@ -1503,6 +1728,7 @@ copy_more:
     bpl :-
 @next:
     inc cdone
+    ldy ys
     jmp @part
 @done:
     rts
@@ -1701,9 +1927,261 @@ sprites:
     cpx #N_BULLETS
     bne @bullet
 
+    ; ids from 22: the words. On the title: HI, the high score, the title, PRESS FIRE (blinking);
+    ; else the score (with the ships left under it), and at game over GAME OVER
+    jsr hud_digits
+    ldy #N_IDS
+    lda mode
+    bne @inplay
+    ldx #W_HI
+    jsr word
+    lda #2                  ; (DIGITS_X_TITLE)
+    jsr digit_words
+    ldx #W_TITLE
+    jsr word
+    jsr word
+    jsr word
+    jsr word
+    lda gt
+    and #16
+    bne @words
+    jsr word                ; (X: W_PRESS)
+    jsr word
+    jsr word
+    jsr word
+    jmp @words
+@inplay:
+    lda #0                  ; (DIGITS_X)
+    jsr digit_words
+    lda mode
+    cmp #MODE_OVER
+    bne @words
+    ldx #W_OVER
+    jsr word
+    jsr word
+    jsr word
+@words:
+
     MARK 9
     jsr mux_build           ; sorted down the screen and given hardware sprites
     MARK 10
+    rts
+
+; Shows word X (sprites.bin's words, WORD_* tables) as object Y; X and Y move on.
+word:
+    txa
+    clc
+    adc #SPRPTR + F_WORDS
+    sta optr
+    lda WORD_COL,x
+    sta ocol
+    SHOW {WORD_XL,x}, {WORD_XH,x}, {WORD_Y,x}, zero, @no
+@no:
+    inx
+    iny
+    rts
+
+; Shows the score's two sprites (this frame's blocks) as objects Y and Y + 1, at the x's from
+; DIGITS_X + A (0 in play, 2 for DIGITS_X_TITLE, which gen.js puts right after it). Y moves on.
+digit_words:
+    sta t2
+    ldx #0
+@one:
+    lda curcs
+    asl
+    stx t0
+    clc
+    adc t0
+    adc #SPRPTR + F_DIGITS
+    sta optr
+    lda #C_DIGITS
+    sta ocol
+    txa
+    clc
+    adc t2
+    tax
+    lda DIGITS_X,x
+    sta t1
+    ldx t0
+    SHOW t1, zero, #HUD_Y, zero, @no
+@no:
+    iny
+    inx
+    cpx #2
+    beq :+
+    jmp @one
+:   rts
+
+; The score's digits (the high score's on the title) into this frame's two sprite blocks: each digit
+; a byte column of 6 rows.
+hud_digits:
+    ldx #2
+:   lda scoreb,x
+    ldy mode
+    bne :+
+    lda hib,x
+:   sta vb,x
+    dex
+    bpl :--
+    lda lives               ; (0 on the title)
+    ldy mode
+    bne :+
+    lda #0
+:   sta vb+3
+    lda curcs               ; drawn in these blocks already?
+    asl
+    asl
+    tay                     ; 4 curcs
+    ldx #3
+:   lda vb,x
+    cmp hudval,y
+    bne @draw
+    iny
+    dex
+    bpl :-
+    rts
+@draw:
+    lda curcs
+    asl
+    asl
+    tay
+    ldx #3
+:   lda vb,x
+    sta hudval,y
+    iny
+    dex
+    bpl :-
+    lda curcs               ; the blocks: F_DIGITS + 2 curcs, 64 bytes each
+    asl
+    clc
+    adc #F_DIGITS
+    sta t0
+    lsr
+    lsr
+    clc
+    adc #>SPRITES
+    sta hp+1
+    lda t0
+    and #3
+    tax
+    lda TIMES64,x
+    sta hp
+    ldx #0
+@digit:
+    stx t3
+    ldy DIG_BYTE,x          ; the digit: a nibble of the BCD value, most significant first
+    lda vb,y
+    cpx #0
+    beq @hi
+    cpx #2
+    beq @hi
+    cpx #4
+    beq @hi
+    and #$0f
+    jmp @got
+@hi:
+    lsr
+    lsr
+    lsr
+    lsr
+@got:
+    ldy DIG_OFS,x
+    tax
+    lda DIGIT_ROWS,x
+    sta (hp),y
+    iny
+    iny
+    iny
+    lda DIGIT_ROWS+10,x
+    sta (hp),y
+    iny
+    iny
+    iny
+    lda DIGIT_ROWS+20,x
+    sta (hp),y
+    iny
+    iny
+    iny
+    lda DIGIT_ROWS+30,x
+    sta (hp),y
+    iny
+    iny
+    iny
+    lda DIGIT_ROWS+40,x
+    sta (hp),y
+    iny
+    iny
+    iny
+    lda DIGIT_ROWS+50,x
+    sta (hp),y
+    ldx t3
+    inx
+    cpx #6
+    beq :+
+    jmp @digit
+:   ldy #LIVES_ROW * 3      ; the ships left, under the first three digits
+    ldx #0
+@ship:
+    cpx vb+3
+    bcc :+
+    lda #0                  ; (none here)
+    sta (hp),y
+    iny
+    iny
+    iny
+    sta (hp),y
+    iny
+    iny
+    iny
+    sta (hp),y
+    iny
+    iny
+    iny
+    sta (hp),y
+    iny
+    iny
+    iny
+    sta (hp),y
+    iny
+    iny
+    iny
+    sta (hp),y
+    jmp @nship
+:   lda SHIP_ROWS
+    sta (hp),y
+    iny
+    iny
+    iny
+    lda SHIP_ROWS+1
+    sta (hp),y
+    iny
+    iny
+    iny
+    lda SHIP_ROWS+2
+    sta (hp),y
+    iny
+    iny
+    iny
+    lda SHIP_ROWS+3
+    sta (hp),y
+    iny
+    iny
+    iny
+    lda SHIP_ROWS+4
+    sta (hp),y
+    iny
+    iny
+    iny
+    lda SHIP_ROWS+5
+    sta (hp),y
+@nship:
+    tya
+    sec
+    sbc #15 - 1             ; back up 5 rows, on a column
+    tay
+    inx
+    cpx #3
+    bne @ship
     rts
 
 ; ------------------------------------------------------------------ the raster IRQs
@@ -1714,6 +2192,7 @@ irq_bottom:
     stx sx
     sty sy
     IRQ_IN
+    jsr snd_out             ; the sound, at the same moment every frame
     lda ready
     beq @late
     lda p_d018
@@ -1729,6 +2208,8 @@ irq_bottom:
     jmp @set
 @late:
     KIT_LATE
+    lda #1
+    sta latef
 @set:
     jsr mux_bottom
     IRQ_OUT
@@ -1745,9 +2226,11 @@ D018_SCREEN: .byte ((SCREEN_A & $3c00) >> 6), ((SCREEN_B & $3c00) >> 6)
 D018_CHARS:  .byte ((CHARS_A & $3800) >> 10), ((CHARS_B & $3800) >> 10)
 STARS_LO:    .byte <(CHARS_A + STAR * 8), <(CHARS_B + STAR * 8)
 STARS_HI:    .byte >(CHARS_A + STAR * 8), >(CHARS_B + STAR * 8)
-COPY_LO:     .lobytes copy_b_0, copy_b_1, copy_b_2, copy_b_3, copy_b_4, copy_b_5, copy_b_6, copy_a_0, copy_a_1, copy_a_2, copy_a_3, copy_a_4, copy_a_5, copy_a_6
-COPY_HI:     .hibytes copy_b_0, copy_b_1, copy_b_2, copy_b_3, copy_b_4, copy_b_5, copy_b_6, copy_a_0, copy_a_1, copy_a_2, copy_a_3, copy_a_4, copy_a_5, copy_a_6
+NEED:        .byte 0, 4, 8, 11, 15, 18, 22, 25   ; the other screen's parts due by each fine scroll
 DRONE_Y:     .byte <-21, <-45, <-69, <-93
+TIMES64:     .byte 0, 64, 128, 192
+DIG_BYTE:    .byte 2, 2, 1, 1, 0, 0       ; the score's digits: their BCD byte, and their place in the
+DIG_OFS:     .byte 0, 1, 2, 64, 65, 66    ; two sprite blocks
 ; >> 4 of a signed 16-bit value: low byte SHR4[lo] | SHL4[hi], high byte ASR4[hi]
 .align 256
 SHR4:

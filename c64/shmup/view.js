@@ -200,8 +200,49 @@
   }
   const COLOR = { ship: 14, shot: 7, [G.DRONE]: 10, [G.SWOOPER]: 5, [G.TURRET]: 2, flash: 1, bullet: 7, boom: 8 };
 
-  // What the game shows as sprites, in order: the ship, its shots, the enemies, their bullets.
-  // [{ x, y, frame, color }]
+
+  // ------------------------------------------------------------------ text
+  // A chunky font for the score and the titles: 3 x 5 fat pixels a character, drawn in the sprite's
+  // own colour with a dark grey shadow down and right. A character takes 4 fat pixels across (one
+  // byte of a sprite row), so a sprite holds 3; titles are drawn twice as tall.
+  const FONT = {
+    '0': '111 101 101 101 111', '1': '010 110 010 010 111', '2': '111 001 111 100 111', '3': '111 001 111 001 111',
+    '4': '101 101 111 001 001', '5': '111 100 111 001 111', '6': '111 100 111 101 111', '7': '111 001 010 010 010',
+    '8': '111 101 111 101 111', '9': '111 101 111 001 111', A: '010 101 111 101 101', D: '110 101 101 101 110',
+    E: '111 100 110 100 111', F: '111 100 110 100 100', G: '111 100 101 101 111', H: '101 101 111 101 101',
+    I: '111 010 010 010 111', M: '101 111 111 101 101', N: '110 101 101 101 101', O: '010 101 101 101 010',
+    P: '110 101 110 100 100', R: '110 101 110 101 101', S: '011 100 010 001 110', T: '111 010 010 010 010',
+    U: '101 101 101 101 111', V: '101 101 101 101 010', ' ': '000 000 000 000 000', '^': '010 010 111 111 101',
+  };
+  // A sprite image (21 rows of 12 fat pixels) of up to 3 characters, `tall` times as high.
+  function textImage(text, tall = 1) {
+    const rows = Array.from({ length: 21 }, () => new Array(12).fill(0));
+    [...text].forEach((ch, k) => {
+      const g = FONT[ch].split(' ');
+      for (let y = 0; y < 5 * tall; y++) for (let x = 0; x < 3; x++) if (g[Math.floor(y / tall)][x] === '1') {
+        rows[y][4 * k + x] = 2;
+        if (!(x < 2 && g[Math.floor((y + 1) / tall)] && g[Math.floor(y / tall)][x + 1] === '1')) { /* shadow below */ }
+      }
+    });
+    // shadows: down and right of each lit pixel, where nothing is lit
+    const lit = rows.map(r => r.map(v => v === 2));
+    for (let y = 0; y < 20; y++) for (let x = 0; x < 11; x++) if (lit[y][x] && !lit[y + 1][x + 1]) rows[y + 1][x + 1] = 3;
+    return rows;
+  }
+  const digits = (v, n) => String(v % 10 ** n).padStart(n, '0');
+  // What the game shows in words: per mode, [text, x, y, colour, tall].
+  const HUD_Y = 6;
+  const TEXT = {
+    title: [['DRE', 112, 70, 7, 2], ['ADN', 136, 70, 7, 2], ['OUG', 160, 70, 7, 2], ['HT ', 184, 70, 7, 2]],
+    press: [['PRE', 112, 110, 1, 1], ['SS ', 136, 110, 1, 1], ['FIR', 160, 110, 1, 1], ['E  ', 184, 110, 1, 1]],
+    over: [['GAM', 124, 88, 10, 2], ['E O', 148, 88, 10, 2], ['VER', 172, 88, 10, 2]],
+    hi: ['HI ', 100, HUD_Y, 1, 1],
+  };
+  const SCORE_X = [16, 40], LIVES_ROW = 8; // the ships left: under the score's first sprite
+
+  // What the game shows as sprites, in order: the ship, its shots, the enemies, their bullets, then
+  // the words: the score and ships left in play and at game over, the title and the high score on the
+  // title (PRESS FIRE blinking), GAME OVER. [{ x, y, frame or image, color }]
   function objects(g) {
     const out = [], p = g.player;
     if (!p.dead) {
@@ -215,6 +256,20 @@
       out.push({ x: e.x, y: e.y, frame, color: e.flash ? COLOR.flash : COLOR[e.kind] });
     }
     for (const b of g.bullets) if (b.on) out.push({ x: b.x >> 4, y: b.y >> 4, frame: 'bullet', color: COLOR.bullet });
+    const words = ([text, x, y, color, tall]) => out.push({ x, y, image: textImage(text, tall), color });
+    if (g.mode === G.TITLE) {
+      words(TEXT.hi);
+      const d = digits(g.hi, 6);
+      SCORE_X.forEach((x, k) => words([d.slice(3 * k, 3 * k + 3), x + 108, HUD_Y, 1, 1]));
+      TEXT.title.forEach(words);
+      if (!(g.t & 16)) TEXT.press.forEach(words);
+    } else {
+      const d = digits(g.score, 6), first = textImage(d.slice(0, 3)), ships = textImage('^'.repeat(g.lives).padEnd(3));
+      for (let y = 0; y + LIVES_ROW < 21; y++) for (let x = 0; x < 12; x++) if (ships[y][x]) first[y + LIVES_ROW][x] = ships[y][x];
+      out.push({ x: SCORE_X[0], y: HUD_Y, image: first, color: 1 });
+      words([d.slice(3), SCORE_X[1], HUD_Y, 1, 1]);
+      if (g.mode === G.OVER) TEXT.over.forEach(words);
+    }
     return out;
   }
 
@@ -253,7 +308,7 @@
     // sprites, the highest hardware sprite first so the lowest ends up in front
     const sprites = multiplex(objects(g));
     for (const s of [...sprites].sort((a, b) => b.slot - a.slot)) {
-      const f = FRAMES[s.frame], scols = [null, SPRITE.mc1, s.color, SPRITE.mc2];
+      const f = s.image || FRAMES[s.frame], scols = [null, SPRITE.mc1, s.color, SPRITE.mc2];
       for (let r = 0; r < 21; r++) for (let c = 0; c < 12; c++) {
         const v = f[r][c];
         if (!v) continue;
@@ -267,5 +322,5 @@
     return { pixels: out, scroll: sc, sprites };
   }
 
-  return { COLORS, GAP, SPRITE, FRAME_NAMES, FRAMES, COLOR, STAR, STAR_CODES, NEAR, FAR, tilePixel, starCode, starOffsets, starGlyph, prepare, scroll, objects, multiplex, frame };
+  return { COLORS, GAP, SPRITE, FRAME_NAMES, FRAMES, COLOR, FONT, textImage, TEXT, HUD_Y, SCORE_X, LIVES_ROW, STAR, STAR_CODES, NEAR, FAR, tilePixel, starCode, starOffsets, starGlyph, prepare, scroll, objects, multiplex, frame };
 });

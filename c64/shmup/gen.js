@@ -1,16 +1,24 @@
 // Generates the C64 shoot-'em-up's data and code from the reference (core/shmup.js, c64/shmup/view.js),
 // so the 6502 engine plays and draws exactly as the reference does:
 //   gen.inc      constants and tables (ca65 source)
-//   copy.inc     the screen's row shifts: a seventh of one screen copied a row down into the other,
-//                unrolled, for each seventh and each direction
+//   copy.inc     the screen's row shifts: each row of one screen copied a row down into the other,
+//                for each direction, and their table (COPY_LO, COPY_HI: into B, then into A)
 //   charset.bin  the level's characters, then the stars' (as at frame 0)
-//   sprites.bin  the 12 sprite frames, in view.FRAME_NAMES order
+//   sprites.bin  the sprite frames: view.FRAME_NAMES' 12, then the words (WORDS: the title, PRESS
+//                FIRE, GAME OVER, HI), then 4 blocks for the score's digits and the ships left (2
+//                sprites, 2 frames' worth)
+//   sound.inc    the music and effects (sound/shmup.js), for the kit's SID driver
 //   rows.bin     the level's screen: 40 codes a character row, top to bottom
 //
 // gen(level, dir) writes the files; build.js assembles them.
 const fs = require('fs'), path = require('path');
 const G = require('../../core/shmup.js');
 const VIEW = require('./view.js');
+const S = require('../../core/sound.js');
+const { sidgen } = require('../kit/sidgen.js');
+
+// The words as sprites, in sprites.bin's order after the frames: [text, x, y, colour, tall].
+const WORDS = [...VIEW.TEXT.title, ...VIEW.TEXT.press, ...VIEW.TEXT.over, VIEW.TEXT.hi];
 
 const SPRITE_ROWS = 18; // every frame's rows from here are empty, so a hardware sprite is free once its
                         // object's 18th row is drawn (see the multiplexer in shmup.s)
@@ -26,9 +34,10 @@ function gen(L, outDir) {
   fs.writeFileSync(path.join(outDir, 'charset.bin'), charset);
   fs.writeFileSync(path.join(outDir, 'rows.bin'), Buffer.from(P.rows));
 
-  const sprites = Buffer.alloc(VIEW.FRAME_NAMES.length * 64);
-  VIEW.FRAME_NAMES.forEach((name, f) => {
-    const rows = VIEW.FRAMES[name];
+  const images = [...VIEW.FRAME_NAMES.map(n => [n, VIEW.FRAMES[n]]), ...WORDS.map(([t, , , , tall]) => [`'${t}'`, VIEW.textImage(t, tall)])];
+  const sprites = Buffer.alloc((images.length + 4) * 64);
+  if (images.length + 4 > 32) throw new Error('more than 32 sprite blocks');
+  images.forEach(([name, rows], f) => {
     rows.forEach((r, y) => {
       if (y >= SPRITE_ROWS && r.some(v => v)) throw new Error(`sprite ${name}: row ${y} must be empty`);
       for (let b = 0; b < 3; b++) {
@@ -39,21 +48,22 @@ function gen(L, outDir) {
     });
   });
   fs.writeFileSync(path.join(outDir, 'sprites.bin'), sprites);
+  sidgen(S.compile(require('../../sound/shmup.js')), outDir);
 
   // ---------------------------------------------------------------- code
-  // copy_<a|b>_<q>: screen <a|b> rows r + 1 = the other screen's rows r, for the rows of part q.
-  // (the first part is short: the level's new row goes with it)
-  const PARTS = [[0, 2], [2, 6], [6, 10], [10, 14], [14, 18], [18, 21], [21, 24]];
+  // copy_<a|b>_<r>: screen <a|b> row r + 1 = the other screen's row r (small parts, so a frame with a
+  // little time to spare can still do one)
   const copy = [];
-  for (const to of ['A', 'B']) {
+  for (const to of ['B', 'A']) {
     const from = to === 'A' ? 'SCREEN_B' : 'SCREEN_A';
-    for (let q = 0; q < PARTS.length; q++) {
-      const label = `copy_${to.toLowerCase()}_${q}`;
-      copy.push(`${label}:`, '    ldx #39', `${label}_loop:`);
-      for (let r = PARTS[q][0]; r < PARTS[q][1]; r++) copy.push(`    lda ${from}+${r * 40},x`, `    sta SCREEN_${to}+${(r + 1) * 40},x`);
-      copy.push('    dex', `    bpl ${label}_loop`, '    rts', '');
+    for (let r = 0; r < 24; r++) {
+      const label = `copy_${to.toLowerCase()}_${r}`;
+      copy.push(`${label}:`, '    ldx #39', `${label}_loop:`, `    lda ${from}+${r * 40},x`, `    sta SCREEN_${to}+${(r + 1) * 40},x`,
+        '    dex', `    bpl ${label}_loop`, '    rts', '');
     }
   }
+  const copies = ['b', 'a'].flatMap(t => Array.from({ length: 24 }, (_, r) => `copy_${t}_${r}`));
+  copy.push(`COPY_LO: .lobytes ${copies.join(',')}`, `COPY_HI: .hibytes ${copies.join(',')}`, '');
   fs.writeFileSync(path.join(outDir, 'copy.inc'), copy.join('\n') + '\n');
 
   // ---------------------------------------------------------------- constants and tables
@@ -68,6 +78,9 @@ function gen(L, outDir) {
     COL_BORDER: VIEW.COLORS.border, COL_BG: VIEW.COLORS.bg, COL_MC1: VIEW.COLORS.mc1, COL_MC2: VIEW.COLORS.mc2, COL_RAM: VIEW.COLORS.ram + 8,
     SPR_MC1: VIEW.SPRITE.mc1, SPR_MC2: VIEW.SPRITE.mc2,
     STAR: VIEW.STAR,
+    MODE_TITLE: G.TITLE, MODE_PLAY: G.PLAY, MODE_OVER: G.OVER, LIVES: G.LIVES, OVER_FOR: G.OVER_FOR,
+    F_WORDS: VIEW.FRAME_NAMES.length, F_DIGITS: VIEW.FRAME_NAMES.length + WORDS.length,
+    W_TITLE: 0, W_PRESS: 4, W_OVER: 8, W_HI: 11, C_DIGITS: 1, HUD_Y: VIEW.HUD_Y, LIVES_ROW: VIEW.LIVES_ROW,
   };
   // the screen's first row at the start (view.js scroll)
   const ys0 = (3 - C.START_CAMY) & 7;
@@ -96,6 +109,24 @@ function gen(L, outDir) {
   table('DIR_X', dx); table('DIR_Y', dy);
   table('SWAY', G.SWAY);
   table('AIM_VX', G.AIM.map(a => a[0])); table('AIM_VY', G.AIM.map(a => a[1]));
+  // the words: per word its x (low, high), y, colour
+  table('WORD_XL', WORDS.map(w => w[1] & 255)); table('WORD_XH', WORDS.map(w => w[1] >> 8));
+  table('WORD_Y', WORDS.map(w => w[2])); table('WORD_COL', WORDS.map(w => w[3]));
+  // the score's sprites: x in play and on the title (with the high score)
+  table('DIGITS_X', VIEW.SCORE_X); table('DIGITS_X_TITLE', VIEW.SCORE_X.map(x => x + 108));
+  // each digit's 6 rows as sprite bytes (its shadow included): DIGIT_ROWS + 10 r + d
+  const digitRows = [];
+  for (let r = 0; r < 6; r++) for (let d = 0; d < 10; d++) {
+    const img = VIEW.textImage(String(d), 1);
+    if (img[r].slice(4).some(v => v)) throw new Error('a digit spills into the next byte');
+    digitRows.push((img[r][0] << 6) | (img[r][1] << 4) | (img[r][2] << 2) | img[r][3]);
+  }
+  table('DIGIT_ROWS', digitRows);
+  // a ship left's 6 rows, the same way
+  const ship = VIEW.textImage('^', 1);
+  table('SHIP_ROWS', Array.from({ length: 6 }, (_, r) => (ship[r][0] << 6) | (ship[r][1] << 4) | (ship[r][2] << 2) | ship[r][3]));
+  // the score per enemy kind, in BCD
+  table('SCORE_BCD', G.SCORE.map(v => parseInt(String(v), 16)));
   // per enemy kind (0 free, 1 drone, 2 swooper, 3 turret)
   table('HP', G.HP); table('SCORE', G.SCORE);
   table('KIND_FRAME', [0, 0, VIEW.FRAME_NAMES.indexOf('swooper'), VIEW.FRAME_NAMES.indexOf('turret')]);
@@ -119,4 +150,4 @@ function gen(L, outDir) {
   return { P, C };
 }
 
-module.exports = { gen, SPRITE_ROWS };
+module.exports = { gen, SPRITE_ROWS, WORDS };

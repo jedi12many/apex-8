@@ -233,7 +233,16 @@ kit_timer_max:
     sta maxcyc
     lda kit_t1
     sta maxcyc+1
+.if .defined(PROFILE) .and .not .defined(KIT_OWN_SLOWEST)
+    jsr kit_keep_prof
+.endif
+@done:
+    rts
+
 .ifdef PROFILE
+; This frame's parts (and its IRQ cycles and number) as the slowest frame's. kit_timer_max calls it,
+; unless the engine defines KIT_OWN_SLOWEST and calls it itself, by its own measure.
+kit_keep_prof:
     lda irqc
     sta pcur+26
     lda irqc+1
@@ -243,14 +252,12 @@ kit_timer_max:
     lda nticks+1
     sta pcur+29
     ldx #31
-@copy:
-    lda pcur,x
+:   lda pcur,x
     sta prof,x
     dex
-    bpl @copy
-.endif
-@done:
+    bpl :-
     rts
+.endif
 
 .ifdef PROFILE
 ; The cycles since the last mark into pcur[n] (n: the byte after the jsr).

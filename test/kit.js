@@ -10,6 +10,9 @@
 //   checkTiming(o, runs)    each run { name, ticks, build() -> { prg, lbl } } plays to script_park;
 //                    reports late frames (missed), late sprites (latespr, where the engine has it)
 //                    and the slowest frame (maxcyc, and maxcore where the engine has it)
+//   checkSound(o, runs)     each run { name, ticks, build() -> { prg, lbl }, sound() -> { sum, image } }
+//                    plays to script_park; the SID driver's checksum of every tick's registers
+//                    (snd_sum) and its last registers (snd_img) must be the reference's
 //   finish(o, failures, what)   the verdict line and exit code
 const fs = require('fs'), os = require('os'), path = require('path');
 const { findVice, screenshot, compare, readMemory, labels, frameCycles } = require('./vice-lib.js');
@@ -79,10 +82,26 @@ async function checkTiming(o, runs) {
   return failures;
 }
 
+async function checkSound(o, runs) {
+  let failures = 0;
+  if (o.quick) return 0;
+  for (const r of runs) {
+    const { prg, lbl: lblFile } = r.build();
+    const lbl = labels(lblFile);
+    const img = await readMemory(o.exe, prg, lbl.script_park, lbl.snd_img, 25, o.vice);
+    const [s0, s1] = await readMemory(o.exe, prg, lbl.script_park, lbl.snd_sum, 2, o.vice);
+    const want = r.sound(), sum = s0 + 256 * s1;
+    const ok = sum === want.sum && img.every((b, i) => b === want.image[i]);
+    console.log(`${r.name} (${r.ticks} ticks): ${ok ? "every tick's SID registers match" : `SID checksum ${sum.toString(16)}, want ${want.sum.toString(16)}`}`);
+    if (!ok) failures++;
+  }
+  return failures;
+}
+
 function finish(o, failures, what) {
   fs.rmSync(o.scratch, { recursive: true, force: true });
   console.log(failures ? `FAIL: ${failures} problem(s)` : `PASS: ${what}, on ${o.machine}`);
   process.exitCode = failures ? 1 : 0;
 }
 
-module.exports = { options, checkFrames, checkTiming, finish };
+module.exports = { options, checkFrames, checkTiming, checkSound, finish };

@@ -8,6 +8,7 @@
 ;                   higher priority. Keeps X and Y
 ;   snd_tick        one tick: the next row, each voice, the effect, into the register image snd_img.
 ;                   SCRIPT builds also fold the image into the checksum snd_sum, as the tests do
+;                   (unless SND_NOSUM: timing builds leave it out, as the game itself does)
 ;   snd_out         the register image to the SID ($D400-$D418): once a frame, at a steady time
 
 .include "sound.inc"
@@ -218,7 +219,7 @@ snd_tick:
     sta snd_img+23
     lda #$0f
     sta snd_img+24
-.ifdef SCRIPT
+.if .defined(SCRIPT) .and .not .defined(SND_NOSUM)
     ldx #0                  ; the checksum: rotate left, add
 :   lda snd_sum+1
     asl
@@ -241,7 +242,16 @@ snd_tick:
 snd_voice:
     ldy V_BASE,x
     sty snd_b
-    lda #0                  ; (the image starts empty)
+    lda v_ins,x
+    bmi @silent
+    cpx #2
+    bne @emit
+    lda sfx                 ; (under an effect, which sets them)
+    bmi @emit
+    ldy v_ins,x
+    jmp @state
+@silent:
+    lda #0                  ; no instrument yet: nothing
     sta snd_img,y
     sta snd_img+1,y
     sta snd_img+2,y
@@ -249,14 +259,9 @@ snd_voice:
     sta snd_img+4,y
     sta snd_img+5,y
     sta snd_img+6,y
-    ldy v_ins,x
-    bpl :+
     rts
-:   cpx #2
-    bne @emit
-    lda sfx
-    bpl @state
 @emit:
+    ldy v_ins,x
     lda INS_AD,y
     sta snd_ad
     lda INS_SR,y
@@ -336,11 +341,10 @@ snd_voice:
     rts
 
 snd_out:
-    ldx #24
-:   lda snd_img,x
-    sta $d400,x
-    dex
-    bpl :-
+.repeat 25, I
+    lda snd_img+I
+    sta $d400+I
+.endrepeat
     rts
 
 .segment "RODATA"

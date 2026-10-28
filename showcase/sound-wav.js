@@ -9,7 +9,7 @@ const { findVice } = require('../test/vice-lib.js');
 const { song, build, runs } = require('../c64/sound/build.js');
 
 const args = process.argv.slice(2), secArg = args.indexOf('--seconds');
-const viceDir = args.find((a, i) => !a.startsWith('--') && i !== secArg + 1);
+const viceDir = args.find((a, i) => !a.startsWith('--') && (secArg < 0 || i !== secArg + 1));
 const seconds = secArg >= 0 ? +args[secArg + 1] : 34;
 if (!viceDir) { console.error('usage: node showcase/sound-wav.js <VICE folder> [--seconds 34]'); process.exit(2); }
 
@@ -22,7 +22,7 @@ build(dir, { script: runs(inputs) });
 const out = path.join(__dirname, 'out', 'shmup-music.wav');
 fs.mkdirSync(path.dirname(out), { recursive: true });
 try { fs.unlinkSync(out); } catch (e) { /* not there yet */ }
-spawnSync(exe, ['-default', '-sound', '-sounddev', 'dummy', '-soundrecdev', 'wav', '-soundrecarg', out, '+confirmonexit',
+spawnSync(exe, ['-default', '-sound', '-sounddev', 'dump', '-soundarg', path.join(dir, 'sid.dump'), '-soundrecdev', 'wav', '-soundrecarg', out, '+confirmonexit',
   '-autostartprgmode', '1', '-limitcycles', String(Math.round((seconds + 3) * 985248)), '-autostart', path.join(dir, 'sound.prg')], { timeout: (seconds + 60) * 1000 });
 fs.rmSync(dir, { recursive: true, force: true });
 if (!fs.existsSync(out)) throw new Error('VICE wrote no WAV');

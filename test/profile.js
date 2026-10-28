@@ -17,7 +17,7 @@ const P = mod.PROFILE, name = scriptName || Object.keys(P.scripts)[0], ticks = +
 
 (async () => {
   const dir = path.join(o.scratch, 'profile');
-  mod.build(dir, { script: mod.runs(P.scripts[name](ticks)), defines: { PROFILE: 1 } });
+  mod.build(dir, { script: mod.runs(P.scripts[name](ticks)), defines: { PROFILE: 1, SND_NOSUM: 1 } });
   const lbl = labels(path.join(dir, `${P.name}.lbl`));
   const b = await readMemory(o.exe, path.join(dir, `${P.name}.prg`), lbl.script_park, lbl.prof, 30, o.vice);
   const word = i => b[2 * i] + 256 * b[2 * i + 1], frame = frameCycles(o.vice);

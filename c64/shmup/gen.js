@@ -3,10 +3,10 @@
 //   gen.inc      constants and tables (ca65 source)
 //   copy.inc     the screen's row shifts: each row of one screen copied a row down into the other,
 //                for each direction, and their table (COPY_LO, COPY_HI: into B, then into A)
-//   charset.bin  the level's characters, then the stars' (as at frame 0)
+//   charset.bin  the level's characters, the status bar's (from view.BAR) and the stars' (as at
+//                frame 0)
 //   sprites.bin  the sprite frames: view.FRAME_NAMES' 12, then the words (WORDS: the title, PRESS
-//                FIRE, GAME OVER, HI), then 4 blocks for the score's digits and the ships left (2
-//                sprites, 2 frames' worth)
+//                FIRE, GAME OVER)
 //   sound.inc    the music and effects (sound/shmup.js), for the kit's SID driver
 //   rows.bin     the level's screen: 40 codes a character row, top to bottom
 //
@@ -18,7 +18,7 @@ const S = require('../../core/sound.js');
 const { sidgen } = require('../kit/sidgen.js');
 
 // The words as sprites, in sprites.bin's order after the frames: [text, x, y, colour, tall].
-const WORDS = [...VIEW.TEXT.title, ...VIEW.TEXT.press, ...VIEW.TEXT.over, VIEW.TEXT.hi];
+const WORDS = [...VIEW.TEXT.title, ...VIEW.TEXT.press, ...VIEW.TEXT.over];
 
 const SPRITE_ROWS = 18; // every frame's rows from here are empty, so a hardware sprite is free once its
                         // object's 18th row is drawn (see the multiplexer in shmup.s)
@@ -35,8 +35,8 @@ function gen(L, outDir) {
   fs.writeFileSync(path.join(outDir, 'rows.bin'), Buffer.from(P.rows));
 
   const images = [...VIEW.FRAME_NAMES.map(n => [n, VIEW.FRAMES[n]]), ...WORDS.map(([t, , , , tall]) => [`'${t}'`, VIEW.textImage(t, tall)])];
-  const sprites = Buffer.alloc((images.length + 4) * 64);
-  if (images.length + 4 > 32) throw new Error('more than 32 sprite blocks');
+  const sprites = Buffer.alloc(images.length * 64);
+  if (images.length > 32) throw new Error('more than 32 sprite blocks');
   images.forEach(([name, rows], f) => {
     rows.forEach((r, y) => {
       if (y >= SPRITE_ROWS && r.some(v => v)) throw new Error(`sprite ${name}: row ${y} must be empty`);
@@ -52,18 +52,19 @@ function gen(L, outDir) {
 
   // ---------------------------------------------------------------- code
   // copy_<a|b>_<r>: screen <a|b> row r + 1 = the other screen's row r (small parts, so a frame with a
-  // little time to spare can still do one)
-  const copy = [];
+  // little time to spare can still do one), unrolled whole: 8 cycles a character. (11K of code, in
+  // the COPY segment, above the level.)
+  const copy = ['.segment "COPY"'];
   for (const to of ['B', 'A']) {
     const from = to === 'A' ? 'SCREEN_B' : 'SCREEN_A';
     for (let r = 0; r < 24; r++) {
-      const label = `copy_${to.toLowerCase()}_${r}`;
-      copy.push(`${label}:`, '    ldx #39', `${label}_loop:`, `    lda ${from}+${r * 40},x`, `    sta SCREEN_${to}+${(r + 1) * 40},x`,
-        '    dex', `    bpl ${label}_loop`, '    rts', '');
+      copy.push(`copy_${to.toLowerCase()}_${r}:`);
+      for (let c = 0; c < 40; c++) copy.push(`    lda ${from}+${r * 40 + c}`, `    sta SCREEN_${to}+${(r + 1) * 40 + c}`);
+      copy.push('    rts', '');
     }
   }
   const copies = ['b', 'a'].flatMap(t => Array.from({ length: 24 }, (_, r) => `copy_${t}_${r}`));
-  copy.push(`COPY_LO: .lobytes ${copies.join(',')}`, `COPY_HI: .hibytes ${copies.join(',')}`, '');
+  copy.push('.segment "RODATA"', `COPY_LO: .lobytes ${copies.join(',')}`, `COPY_HI: .hibytes ${copies.join(',')}`, '.segment "CODE"', '');
   fs.writeFileSync(path.join(outDir, 'copy.inc'), copy.join('\n') + '\n');
 
   // ---------------------------------------------------------------- constants and tables
@@ -79,8 +80,10 @@ function gen(L, outDir) {
     SPR_MC1: VIEW.SPRITE.mc1, SPR_MC2: VIEW.SPRITE.mc2,
     STAR: VIEW.STAR,
     MODE_TITLE: G.TITLE, MODE_PLAY: G.PLAY, MODE_OVER: G.OVER, LIVES: G.LIVES, OVER_FOR: G.OVER_FOR,
-    F_WORDS: VIEW.FRAME_NAMES.length, F_DIGITS: VIEW.FRAME_NAMES.length + WORDS.length,
-    W_TITLE: 0, W_PRESS: 4, W_OVER: 8, W_HI: 11, C_DIGITS: 1, HUD_Y: VIEW.HUD_Y, LIVES_ROW: VIEW.LIVES_ROW,
+    F_WORDS: VIEW.FRAME_NAMES.length, W_TITLE: 0, W_PRESS: 4, W_OVER: 8,
+    // the status bar: its characters (blank, 0-9, a ship, H, I from BAR), and its columns
+    BAR: VIEW.BAR, BAR_SPACE: VIEW.BAR, BAR_0: VIEW.BAR + 1, BAR_SHIP: VIEW.BAR + 11, BAR_H: VIEW.BAR + 12, BAR_I: VIEW.BAR + 13,
+    SCORE_COL: VIEW.SCORE_COL, SHIPS_COL: VIEW.SHIPS_COL, HI_COL: VIEW.HI_COL, BAR_LINE: VIEW.BAR_LINE,
   };
   // the screen's first row at the start (view.js scroll)
   const ys0 = (3 - C.START_CAMY) & 7;
@@ -112,19 +115,6 @@ function gen(L, outDir) {
   // the words: per word its x (low, high), y, colour
   table('WORD_XL', WORDS.map(w => w[1] & 255)); table('WORD_XH', WORDS.map(w => w[1] >> 8));
   table('WORD_Y', WORDS.map(w => w[2])); table('WORD_COL', WORDS.map(w => w[3]));
-  // the score's sprites: x in play and on the title (with the high score)
-  table('DIGITS_X', VIEW.SCORE_X); table('DIGITS_X_TITLE', VIEW.SCORE_X.map(x => x + 108));
-  // each digit's 6 rows as sprite bytes (its shadow included): DIGIT_ROWS + 10 r + d
-  const digitRows = [];
-  for (let r = 0; r < 6; r++) for (let d = 0; d < 10; d++) {
-    const img = VIEW.textImage(String(d), 1);
-    if (img[r].slice(4).some(v => v)) throw new Error('a digit spills into the next byte');
-    digitRows.push((img[r][0] << 6) | (img[r][1] << 4) | (img[r][2] << 2) | img[r][3]);
-  }
-  table('DIGIT_ROWS', digitRows);
-  // a ship left's 6 rows, the same way
-  const ship = VIEW.textImage('^', 1);
-  table('SHIP_ROWS', Array.from({ length: 6 }, (_, r) => (ship[r][0] << 6) | (ship[r][1] << 4) | (ship[r][2] << 2) | ship[r][3]));
   // the score per enemy kind, in BCD
   table('SCORE_BCD', G.SCORE.map(v => parseInt(String(v), 16)));
   // per enemy kind (0 free, 1 drone, 2 swooper, 3 turret)

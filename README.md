@@ -329,7 +329,7 @@ node showcase/iso-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 
 ## Shoot-'em-up
 
-A vertical-scrolling shooter for the C64, over the hull of a space dreadnought, and the first APEX game that is a whole game: a title, three ships, a score and a high score, game over, music and sound effects. Everything that moves is a hardware sprite: the ship, its shots, the enemies, their bullets, the explosions, and the score and titles too. That is more than the VIC's eight, so a sprite multiplexer shares them out down the screen. A JavaScript reference defines every frame and every SID register; the 6502 engine draws exactly the same frames and plays exactly the same sound at 50 frames a second, checked in VICE.
+A vertical-scrolling shooter for the C64, over the hull of a space dreadnought, and the first APEX game that is a whole game: a title, three ships, a score and a high score, game over, music and sound effects. Everything that moves is a hardware sprite: the ship, its shots, the enemies, their bullets, the explosions and the titles. The score sits in a status bar that stays still while the level scrolls above it. That is more than the VIC's eight, so a sprite multiplexer shares them out down the screen. A JavaScript reference defines every frame and every SID register; the 6502 engine draws exactly the same frames and plays exactly the same sound at 50 frames a second, checked in VICE.
 
 To play on a C64 or in VICE, load `c64/out/shmup.prg` with `LOAD"*",8,1`, then `RUN`, and press fire. Use a joystick in port 2, or W, A, S and D to fly and Space to fire (hold it for autofire); R goes back to the title. `showcase/out/shmup-c64.mp4` is a recording of it running in VICE, with its sound.
 
@@ -369,24 +369,28 @@ The Dreadnought needs 140 characters. Colour RAM is one value for the whole scre
 
 Bullets aim at one of 16 directions, chosen by integer comparisons. A hit costs a ship. You come back after a moment and are untouchable for 120 frames, blinking. The level wraps round.
 
-**The whole game.** The title shows DREADNOUGHT, the high score and a blinking PRESS FIRE while the level scrolls by. Fire (pressed, not just held) starts a game with three ships, wherever the level has got to, so the screen never has to be redrawn. Losing the last ship shows GAME OVER for 5 seconds, then the title again, with the high score if it was beaten. In play, the score (six digits) sits at the top left, with the ships left under its first three digits. All of it is sprites in a chunky 3×5 font with a drop shadow, one character to a byte of a sprite, so the C64 draws the score's digits by copying 6 bytes each into the two sprites it shows that frame, and only when they change. Each tick also lists what happened (a shot, an enemy firing, a turret hit, an explosion, the ship lost), and those start the sound effects; the music plays throughout.
+**The whole game.** The title shows DREADNOUGHT and a blinking PRESS FIRE while the level scrolls by, with the high score in the status bar. Fire (pressed, not just held) starts a game with three ships, wherever the level has got to, so the screen never has to be redrawn. Losing the last ship shows GAME OVER for 5 seconds, then the title again, with the high score if it was beaten. In play, the status bar along the bottom shows the score (six digits) at the left and a ship for each ship left at the right. The titles are sprites and the bar is characters, both in the same chunky 3×5 font with a drop shadow. Each tick also lists what happened (a shot, an enemy firing, a turret hit, an explosion, the ship lost), and those start the sound effects; the music plays throughout.
 
 **The C64 engine.** Each frame it reads the controls, plays one tick of the game as `core/shmup.js` does (fixed slots, the same order, 16-bit positions), and works out the next frame, which the bottom-of-frame IRQ then shows:
 - *two screens*: every 8 frames the view moves a whole row, so the screen that isn't showing becomes the shown one moved down a row, with the level's next row at its top. It's copied in 25 small parts (the new top row, then each row) over the other 7 frames: each frame does at least its share, and more ahead while the raster says it has time to spare, so a busy frame seldom pays for much. The screens swap at the bottom of the frame together with the fine scroll
 - *two character sets*: the stars are redrawn in the one that isn't showing, so they never tear. Only their old and new bytes are touched, about 16 a frame
 - *the multiplexer*: the objects are sorted by (Y, slot), starting from last frame's order, so there is little to sort. Then they get hardware sprites by the reference's rule. Sprites 0–7 are set at the bottom of the frame. Each later one is set by a raster IRQ on the line after its hardware sprite's last object has drawn its last row (rows 18–20 are empty in every frame), and the IRQ chains straight on to one due a line later. The IRQ counts any sprite set up after its first line has begun, and there are none
-- *the score and titles*: sprites like any other object, taken by the multiplexer after the bullets: up to 33 objects. The score's digits and the ships left are drawn into the pair of sprite blocks that isn't showing, when they change
+- *the status bar*: the last 8 lines of the screen are a character row that doesn't scroll. The multiplexer has a split hook. On the line before the bar it sets the fine scroll to 7 and points the VIC at a third screen. A fine scroll of 7 makes the bar's first line a bad line, so the VIC fetches a character row there whatever the playfield's scroll. The row it fetches is always row 23. At fine scroll 0–6 the playfield's row 23 is under way, and a bad line in the middle of a row fetches that same row again, because the VIC only moves on to the next row after a row's 8th line. At fine scroll 7, row 23 starts there anyway. So the bar's screen holds the bar in row 23, rewritten only when it changes. Sprites below the split take their pointers from that screen, so the 8 pointers are copied across. Sprites due within 2 lines of the split wait until after it, which is still in time. The bottom IRQ puts the playfield's scroll, screen and pointers back
+- *the titles*: sprites like any other object, taken by the multiplexer after the bullets: up to 30 objects
+- *the screen copy*: fully unrolled, 8 cycles a character, as 11K of code loaded under BASIC's ROM
 - *sound*: the kit's SID driver plays the music and starts the game's effects where the reference lists its events; the bottom-of-frame IRQ writes the SID at the same moment every frame
-- *memory*: VIC bank 1 holds both screens, both character sets and 32 sprite blocks; BASIC and the KERNAL are switched out
+- *memory*: VIC bank 1 holds both screens, both character sets, the sprites and the status bar's screen; BASIC and the KERNAL are switched out
 
 | | PAL | NTSC |
 |---|---|---|
-| Sprites set up late | 0 | 0 |
-| Frames late in the autopilot's run (2,400 ticks) | 7 (0.3%) | 115 (4.8%) |
-| Frames late in the sweep through a whole game (2,400 ticks) | 12 (0.5%) | 170 (7.1%) |
-| Slowest frame's own work (before copying ahead) | 89% of a frame | 107% |
+| Sprites set up late, and frames lost any other way | 0 | 0 |
+| Frames late in the autopilot's run (2,400 ticks) | 0 | 18 (0.75%) |
+| Frames late in the sweep through a whole game (2,400 ticks) | 0 | 0 |
+| Slowest frame's own work (before copying ahead) | 75% of a frame | 89% |
 
-The engine alone (before the score, titles and sound) was never late on PAL or NTSC. The whole game is a little over budget at its busiest moments: on PAL a frame is shown twice now and then, and on NTSC play slows a little in heavy fights. The timing test reports this as a failure until it's fixed.
+On PAL, the machine it's made for, the whole game is never late. NTSC frames are 13% shorter, and in the autopilot's busiest stretch a frame there is shown twice now and then; the NTSC timing test reports that as a failure.
+
+The timing test also times each whole script with VICE's stopwatch, so a frame lost any other way, such as an IRQ chain that misses the bottom of a frame, would show up too.
 
 ```bash
 node showcase/shmup.js
@@ -404,7 +408,7 @@ What every C64 engine shares lives in `c64/kit/` and `test/`, so a new engine st
 |------|------------|
 | `c64/kit/build.js` | Assembles an engine with ca65 and ld65 (with the kit on the include path), and makes its test builds: a script of inputs played in place of the controls, and extra constants such as `PROFILE` |
 | `c64/kit/kit.inc` | The BASIC line, the machine's set-up (RAM in place of BASIC and the KERNAL, the IRQ vector, a cleared zero page), the script player, frame timing, late-frame counting, and the profiler's `MARK`s |
-| `c64/kit/mux.inc` | The sprite multiplexer, as the shoot-'em-up uses it: `SHOW` each object, `mux_build` sorts them and gives them hardware sprites, and two IRQs set them up down the screen |
+| `c64/kit/mux.inc` | The sprite multiplexer, as the shoot-'em-up uses it: `SHOW` each object, `mux_build` sorts them and gives them hardware sprites, and two IRQs set them up down the screen. An engine can add a raster split of its own, which the chain fits between sprites |
 | `c64/kit/sid.inc`, `sidgen.js` | The SID driver, and the tables it plays from (see *Sound*) |
 | `test/kit.js` | The VICE checks: frames compared pixel for pixel, timing runs (late frames, late sprites, the slowest frame), the sound's registers, and a verdict |
 | `test/profile.js` | Plays an engine's script in a profiling build and shows how its slowest frame's cycles split between its parts |

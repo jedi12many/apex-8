@@ -2,7 +2,8 @@
  * The C64 shoot-'em-up view: what the screen shows each frame, exactly as the engine is to show it.
  *
  * Multicolor characters, 40 columns by 24 rows, scrolled down a line a frame by the VIC's vertical fine
- * scroll. The level's tiles are 2x2 characters, drawn from each tile and its neighbours: armour panels
+ * scroll, all but the last 8 lines: a status bar that stays put (see barCodes). The level's tiles are
+ * 2x2 characters, drawn from each tile and its neighbours: armour panels
  * with lit and shaded rims, seams and rivets, some recessed; vents, lamps, pipes, hazard stripes, domes,
  * raised blocks of superstructure with lit windows along their fronts, turret bases, and the hull's
  * front face hanging below it over space. Behind it, two layers of stars drift slower than the hull,
@@ -143,6 +144,8 @@
       rows[R * 40 + c] = byLook.get(key);
     }
     for (let i = 0; i < STAR_CODES; i++) chars[STAR + i] = starGlyph(STAR + i, 0);
+    if (byLook.size > BAR) throw new Error(`${L.name}: more than ${BAR} characters`);
+    BAR_CHARS.forEach((ch, k) => { chars[BAR + k] = barGlyph(ch); });
     const P = { chars, count: byLook.size, rows };
     prepared.set(L, P);
     return P;
@@ -230,19 +233,41 @@
     return rows;
   }
   const digits = (v, n) => String(v % 10 ** n).padStart(n, '0');
+  // ------------------------------------------------------------------ the status bar
+  // The last 8 lines of the screen (display lines 188-195) are a row of characters that doesn't
+  // scroll: a raster split makes the VIC start a new character row there whatever the fine scroll.
+  // It shows the score and the ships left in play and at game over, and the high score on the title,
+  // in the same chunky font as the titles: each character's 3 x 5 fat pixels in white (colour RAM),
+  // a dark grey shadow ($D022) down and right, a blank line above.
+  const BAR_LINE = 188;
+  const BAR_CHARS = [' ', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '^', 'H', 'I'];
+  const BAR = STAR - BAR_CHARS.length; // their codes
+  function barGlyph(ch) {
+    const g = FONT[ch].split(' '), px = Array.from({ length: 8 }, () => new Array(4).fill(0));
+    for (let y = 0; y < 5; y++) for (let x = 0; x < 3; x++) if (g[y][x] === '1') px[y + 1][x] = 3;
+    for (let y = 1; y < 7; y++) for (let x = 0; x < 3; x++) if (px[y][x] === 3 && px[y + 1][x + 1] !== 3) px[y + 1][x + 1] = 1;
+    return Uint8Array.from(px.map(r => (r[0] << 6) | (r[1] << 4) | (r[2] << 2) | r[3]));
+  }
+  // The bar's 40 character codes: the score at columns 1-6 and a ship per ship left at 36-38, or on
+  // the title HI and the high score in the middle.
+  const SCORE_COL = 1, SHIPS_COL = 36, HI_COL = 15;
+  function barCodes(g) {
+    const t = new Array(40).fill(' ');
+    const put = (col, text) => [...text].forEach((ch, k) => { t[col + k] = ch; });
+    if (g.mode === G.TITLE) put(HI_COL, 'HI ' + digits(g.hi, 6));
+    else { put(SCORE_COL, digits(g.score, 6)); put(SHIPS_COL, '^'.repeat(g.lives)); }
+    return t.map(ch => BAR + BAR_CHARS.indexOf(ch));
+  }
+
   // What the game shows in words: per mode, [text, x, y, colour, tall].
-  const HUD_Y = 6;
   const TEXT = {
     title: [['DRE', 112, 70, 7, 2], ['ADN', 136, 70, 7, 2], ['OUG', 160, 70, 7, 2], ['HT ', 184, 70, 7, 2]],
     press: [['PRE', 112, 110, 1, 1], ['SS ', 136, 110, 1, 1], ['FIR', 160, 110, 1, 1], ['E  ', 184, 110, 1, 1]],
     over: [['GAM', 124, 88, 10, 2], ['E O', 148, 88, 10, 2], ['VER', 172, 88, 10, 2]],
-    hi: ['HI ', 100, HUD_Y, 1, 1],
   };
-  const SCORE_X = [16, 40], LIVES_ROW = 8; // the ships left: under the score's first sprite
 
   // What the game shows as sprites, in order: the ship, its shots, the enemies, their bullets, then
-  // the words: the score and ships left in play and at game over, the title and the high score on the
-  // title (PRESS FIRE blinking), GAME OVER. [{ x, y, frame or image, color }]
+  // the words: the title (PRESS FIRE blinking) or GAME OVER. [{ x, y, frame or image, color }]
   function objects(g) {
     const out = [], p = g.player;
     if (!p.dead) {
@@ -258,18 +283,9 @@
     for (const b of g.bullets) if (b.on) out.push({ x: b.x >> 4, y: b.y >> 4, frame: 'bullet', color: COLOR.bullet });
     const words = ([text, x, y, color, tall]) => out.push({ x, y, image: textImage(text, tall), color });
     if (g.mode === G.TITLE) {
-      words(TEXT.hi);
-      const d = digits(g.hi, 6);
-      SCORE_X.forEach((x, k) => words([d.slice(3 * k, 3 * k + 3), x + 108, HUD_Y, 1, 1]));
       TEXT.title.forEach(words);
       if (!(g.t & 16)) TEXT.press.forEach(words);
-    } else {
-      const d = digits(g.score, 6), first = textImage(d.slice(0, 3)), ships = textImage('^'.repeat(g.lives).padEnd(3));
-      for (let y = 0; y + LIVES_ROW < 21; y++) for (let x = 0; x < 12; x++) if (ships[y][x]) first[y + LIVES_ROW][x] = ships[y][x];
-      out.push({ x: SCORE_X[0], y: HUD_Y, image: first, color: 1 });
-      words([d.slice(3), SCORE_X[1], HUD_Y, 1, 1]);
-      if (g.mode === G.OVER) TEXT.over.forEach(words);
-    }
+    } else if (g.mode === G.OVER) TEXT.over.forEach(words);
     return out;
   }
 
@@ -300,11 +316,15 @@
         const code = P.rows[row * 40 + c], ch = code >= STAR ? starGlyph(code, g.t) : P.chars[code];
         for (let y = 0; y < 8; y++) {
           const Y = 8 * r + y + sc.ys - 3;
-          if (Y < 0 || Y >= 200) continue;
+          if (Y < 0 || Y >= BAR_LINE) continue;
           for (let x = 0; x < 8; x++) put(8 * c + x, Y, PAL[cols[(ch[y] >> (6 - 2 * (x >> 1))) & 3]]);
         }
       }
     }
+    barCodes(g).forEach((code, c) => {
+      const ch = P.chars[code];
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) put(8 * c + x, BAR_LINE + y, PAL[cols[(ch[y] >> (6 - 2 * (x >> 1))) & 3]]);
+    });
     // sprites, the highest hardware sprite first so the lowest ends up in front
     const sprites = multiplex(objects(g));
     for (const s of [...sprites].sort((a, b) => b.slot - a.slot)) {
@@ -322,5 +342,5 @@
     return { pixels: out, scroll: sc, sprites };
   }
 
-  return { COLORS, GAP, SPRITE, FRAME_NAMES, FRAMES, COLOR, FONT, textImage, TEXT, HUD_Y, SCORE_X, LIVES_ROW, STAR, STAR_CODES, NEAR, FAR, tilePixel, starCode, starOffsets, starGlyph, prepare, scroll, objects, multiplex, frame };
+  return { COLORS, GAP, SPRITE, FRAME_NAMES, FRAMES, COLOR, FONT, textImage, TEXT, BAR_LINE, BAR_CHARS, BAR, barGlyph, barCodes, SCORE_COL, SHIPS_COL, HI_COL, STAR, STAR_CODES, NEAR, FAR, tilePixel, starCode, starOffsets, starGlyph, prepare, scroll, objects, multiplex, frame };
 });

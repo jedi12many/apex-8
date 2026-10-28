@@ -9,13 +9,15 @@
 //                    that never started the program (VICE's autostart left it at BASIC) runs again
 //   checkTiming(o, runs)    each run { name, ticks, build() -> { prg, lbl } } plays to script_park;
 //                    reports late frames (missed), late sprites (latespr, where the engine has it)
-//                    and the slowest frame (maxcyc, and maxcore where the engine has it)
+//                    and the slowest frame (maxcyc, and maxcore where the engine has it); and times
+//                    the whole run from main with VICE's stopwatch, so frames lost any other way (an
+//                    IRQ chain that misses the bottom of a frame, say) count too
 //   checkSound(o, runs)     each run { name, ticks, build() -> { prg, lbl }, sound() -> { sum, image } }
 //                    plays to script_park; the SID driver's checksum of every tick's registers
 //                    (snd_sum) and its last registers (snd_img) must be the reference's
 //   finish(o, failures, what)   the verdict line and exit code
 const fs = require('fs'), os = require('os'), path = require('path');
-const { findVice, screenshot, compare, readMemory, labels, frameCycles } = require('./vice-lib.js');
+const { findVice, screenshot, compare, readMemory, cyclesBetween, labels, frameCycles } = require('./vice-lib.js');
 const APEXSCII = require('../apexscii/apexscii.js');
 
 function options(usage) {
@@ -73,11 +75,14 @@ async function checkTiming(o, runs) {
     const missed = await read(lbl.missed), slowest = await read(lbl.maxcyc);
     const late = lbl.latespr !== undefined ? await read(lbl.latespr) : null;
     const core = lbl.maxcore !== undefined ? await read(lbl.maxcore) : null;
+    // the whole run: frames taken beyond one a tick (the first frame's set-up before main aside)
+    const cycles = await cyclesBetween(o.exe, prg, lbl.main, lbl.script_park, o.vice);
+    const lost = Math.max(0, Math.round(cycles / frame) - r.ticks - missed - 1);
     const work = core !== null
       ? `the slowest frame's work took ${core} cycles (${pc(core)} of a frame), ${slowest} (${pc(slowest)}) with work done ahead into spare time`
       : `the slowest frame's work took ${slowest} cycles (${pc(slowest)} of a frame)`;
-    console.log(`${r.name} (${r.ticks} ticks): ${missed} late frame(s)${late !== null ? `, ${late} late sprite(s)` : ''}; ${work}`);
-    if (missed || late) failures++;
+    console.log(`${r.name} (${r.ticks} ticks): ${missed} late frame(s)${late !== null ? `, ${late} late sprite(s)` : ''}, ${lost} frame(s) lost besides; ${work}`);
+    if (missed || late || lost) failures++;
   }
   return failures;
 }

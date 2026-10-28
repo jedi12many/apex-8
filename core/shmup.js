@@ -41,7 +41,7 @@
   const DIRS = [];
   DIRS[1] = [0, -SPEED]; DIRS[2] = [0, SPEED]; DIRS[4] = [-SPEED, 0]; DIRS[8] = [SPEED, 0];
   DIRS[5] = [-SPEED, -SPEED]; DIRS[9] = [SPEED, -SPEED]; DIRS[6] = [-SPEED, SPEED]; DIRS[10] = [SPEED, SPEED];
-  const BOUNDS = { x0: 8, x1: 288, y0: 24, y1: 172 };
+  const BOUNDS = { x0: 8, x1: 288, y0: 24, y1: 170 }; // (its lowest row just above the status bar)
   const START = { x: 148, y: 160 };
   const SHOT = { speed: 6, cool: 8 }; // a twin shot every 8 frames at most, 6 pixels a frame
   const DEAD_FOR = 64, INVULN = 120; // frames dead (the first 16 exploding), then frames untouchable

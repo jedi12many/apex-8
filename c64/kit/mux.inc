@@ -15,6 +15,10 @@
 ;                  its next object from the line its last object draws this row
 ;   MUX_BOTTOM     the bottom-of-frame IRQ's raster line, after every sprite; and irq_bottom, its
 ;                  handler, which calls mux_bottom
+;   MUX_SPLIT      (optional) a raster line where the engine needs an interrupt of its own each frame
+;                  (a split): mux_split_hook is called there (between sprites; one due within 2 lines
+;                  of it, or after, is set after it: a sprite is set at least 5 lines before its first,
+;                  so it is still in time). It may change A, X and Y
 ;
 ; Each frame, while the last one shows:
 ;   jsr mux_start, then for each object to show: Y = its id, optr and ocol its sprite pointer and
@@ -51,6 +55,7 @@ mux_it:   .res 1            ; the IRQ's own
 mux_sa:   .res 1            ; registers saved by mux_irq
 mux_sx:   .res 1
 mux_sy:   .res 1
+mux_spl:  .res 1            ; MUX_SPLIT: 1 once this frame's split is done
 
 .segment "BSS"
 ; the objects to show this frame, by id, and their order down the screen
@@ -184,7 +189,28 @@ mux_build:
     jmp @keep
 :   lda #0                  ; (vis back to 0 for the next frame)
     sta mux_vis,y
+    ldx mux_on              ; after the last one placed? (most are: objects keep their order) Then
+    beq @end                ; straight on the end, without @insert
+    sty mux_t0
+    lda o_y,y
+    ldy mux_order-1,x
+    cmp o_y,y
+    beq :+
+    bcs @end0
+    ldy mux_t0
     jsr @insert
+    jmp @keep
+:   cpy mux_t0              ; the same Y: after it if its id is lower
+    bcc @end0
+    ldy mux_t0
+    jsr @insert
+    jmp @keep
+@end0:
+    ldy mux_t0
+@end:
+    tya
+    sta mux_order,x
+    inc mux_on
     jmp @keep
 @kept:
     lda #0
@@ -329,9 +355,13 @@ mux_swap:
     sta mux_disp
     rts
 
-; In irq_bottom: the showing list's first 8 sprites, and the interrupt for the rest (mux_irq), or the
-; next bottom of the frame.
+; In irq_bottom: the showing list's first 8 sprites, and the interrupt for the rest (mux_irq), the
+; split, or the next bottom of the frame.
 mux_bottom:
+.ifdef MUX_SPLIT
+    lda #0                  ; the split still to come
+    sta mux_spl
+.endif
     ldy mux_disp
     lda d_end,y
     sta mux_end
@@ -347,7 +377,7 @@ mux_bottom:
 .repeat 8, K                 ; the first 8, on hardware sprites 0-7
     cpx mux_end
     bne :+
-    jmp @none
+    jmp mux_i_none
 :   ldy #K
     lda d_ptr,x
     sta (mux_pp),y
@@ -360,23 +390,36 @@ mux_bottom:
     inx
 .endrepeat
     cpx mux_end
-    beq @none
-@more:
-    stx mux_nx
+    beq mux_i_none
+    stx mux_nx              ; the next sprite's interrupt (or, near or after the split, the split's)
     lda d_e,x
+.ifdef MUX_SPLIT
+    cmp #MUX_SPLIT - 2
+    bcs mux_i_none
+.endif
     sta $d012
     lda #<mux_irq
     sta $fffe
     lda #>mux_irq
     sta $ffff
     rts
-@none:
+mux_i_none:
+    stx mux_nx              ; (X is mux_end: no sprites left)
+.ifdef MUX_SPLIT
+    lda #MUX_SPLIT
+    sta $d012
+    lda #<mux_split_irq
+    sta $fffe
+    lda #>mux_split_irq
+    sta $ffff
+.else
     lda #MUX_BOTTOM
     sta $d012
     lda #<irq_bottom
     sta $fffe
     lda #>irq_bottom
     sta $ffff
+.endif
     rts
 
 ; A sprite's turn: set it, and the ones after it due within a line.
@@ -385,7 +428,7 @@ mux_irq:
     stx mux_sx
     sty mux_sy
     IRQ_IN
-@next:
+mux_i_next:
     ldx mux_nx
     txa
     and #7
@@ -414,30 +457,48 @@ mux_irq:
 :   inx
     stx mux_nx
     cpx mux_end
-    beq @last
-    lda d_e,x               ; the next: now, after a short wait, or by interrupt
+    beq mux_i_last
+; The next sprite (X): now, after a short wait, or by interrupt; with a split, one due near or after
+; its line waits for the split.
+mux_i_decide:
+    lda d_e,x
+.ifdef MUX_SPLIT
+    ldy mux_spl
+    bne :+
+    cmp #MUX_SPLIT - 2
+    bcs mux_i_split
+:
+.endif
     sec
     sbc $d012
-    bcc @next
-    beq @next
+    bcc mux_i_next
+    beq mux_i_next
     cmp #2
-    bcs @later
+    bcs mux_i_later
 :   lda $d012
     cmp d_e,x
     bcc :-
-    jmp @next
-@later:
+    jmp mux_i_next
+mux_i_later:
     lda d_e,x
     sta $d012
-    jmp @out
-@last:
+    lda #<mux_irq
+    sta $fffe
+    lda #>mux_irq
+    sta $ffff
+    jmp mux_i_out
+mux_i_last:
+.ifdef MUX_SPLIT
+    lda mux_spl
+    beq mux_i_split
+.endif
     lda #MUX_BOTTOM
     sta $d012
     lda #<irq_bottom
     sta $fffe
     lda #>irq_bottom
     sta $ffff
-@out:
+mux_i_out:
     IRQ_OUT
     lda #1
     sta $d019
@@ -445,6 +506,40 @@ mux_irq:
     ldx mux_sx
     ldy mux_sy
     rti
+
+.ifdef MUX_SPLIT
+; The split: by interrupt at its line, or now if that's here already.
+mux_i_split:
+    lda $d012
+    cmp #MUX_SPLIT
+    bcs :+
+    lda #MUX_SPLIT
+    sta $d012
+    lda #<mux_split_irq
+    sta $fffe
+    lda #>mux_split_irq
+    sta $ffff
+    jmp mux_i_out
+:   jsr mux_split_hook
+    inc mux_spl
+    ldx mux_nx
+    cpx mux_end
+    beq mux_i_last
+    jmp mux_i_decide
+
+mux_split_irq:
+    sta mux_sa
+    stx mux_sx
+    sty mux_sy
+    IRQ_IN
+    jsr mux_split_hook
+    inc mux_spl
+    ldx mux_nx
+    cpx mux_end
+    beq :+
+    jmp mux_i_decide
+:   jmp mux_i_last
+.endif
 
 .segment "RODATA"
 ; by place in a list: its hardware sprite's bit in $D010, and the rest

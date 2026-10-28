@@ -26,17 +26,19 @@ SCREEN_B = $4400
 CHARS_A  = $4800
 CHARS_B  = $5000
 SPRITES  = $5800
+BARSCR   = $6000            ; the status bar's screen: its row 23 (see mux_split_hook)
 SPRPTR   = (SPRITES - $4000) / 64
 BOTTOM   = 250              ; the bottom-of-frame interrupt, below the 24-row display
 KIT_OWN_SLOWEST = 1         ; (profiles keep the slowest frame by its work before copying ahead)
 N_IDS    = 1 + N_SHOTS + N_ENEMIES + N_BULLETS ; objects: the ship, then the shots, enemies, bullets
-N_WORDS  = 11               ; then the words: at most the title's 11 sprites
+N_WORDS  = 8                ; then the words: at most the title's 8 sprites
 
 MUX_LIST     = 40
 MUX_IDS      = N_IDS + N_WORDS
 MUX_GAP      = GAP
 MUX_FREE_ROW = SPRITE_ROWS
 MUX_BOTTOM   = BOTTOM
+MUX_SPLIT    = 50 + BAR_LINE  ; the status bar's raster split (mux_split_hook): the line before it
 .include "kit.inc"
 .include "mux.inc"
 .include "sid.inc"
@@ -88,8 +90,16 @@ lives:   .res 1
 over:    .res 1             ; game over: ticks left
 held:    .res 1             ; fire, last tick (16 or 0)
 hp:      .res 2             ; the score's sprite blocks
-vb:      .res 4             ; the value they show, and the ships left
-hudval:  .res 8             ; and the value (and ships left) drawn in each frame's pair of blocks
+vb:      .res 4             ; the status bar: the value it shows, and the ships left ($ff: the title)
+barlast: .res 4             ; the same, as barrow was last built
+barver:  .res 1             ; barrow's version (moves on when it changes)
+barshown: .res 1            ; the version the showing screen has
+bp:      .res 2             ; the bottom IRQ's: where the bar goes
+cur_d011: .res 1            ; $D011, $D018 and the sprite pointers' page for the frame showing
+cur_d018: .res 1
+cur_ptr: .res 1
+p_ys:    .res 1             ; the next frame's fine scroll and screen
+p_scr:   .res 1
 deaths:  .res 1
 hit:     .res 1
 ; the view
@@ -113,9 +123,13 @@ p_d011:  .res 1
 p_ptr:   .res 1             ; the high byte of its screen's sprite pointers
 
 .segment "BSS"
+barrow:  .res 40                    ; the status bar's codes
 ymin:    .res 1             ; shot hits: the heights (+ 16) shots can reach, and the enemies there
 ymax:    .res 1
 ncand:   .res 1
+sylo:    .res 1
+syhi:    .res 1
+cy:      .res N_ENEMIES
 ci:      .res 1
 cand:    .res N_ENEMIES
 latef:   .res 1             ; 1: the bottom IRQ found this frame late
@@ -312,11 +326,12 @@ start:
     sta applied
     KIT_SCRIPT_START
     jsr snd_init
-    lda #$ff                ; (no digits drawn yet)
-    ldx #7
-:   sta hudval,x
-    dex
-    bpl :-
+    lda #$fe                ; (no status bar built yet)
+    sta barlast+3
+    lda #0
+    sta barver
+    lda #$ff
+    sta barshown
     lda #0
     sta hib
     sta hib+1
@@ -1212,6 +1227,8 @@ tick:
 :   txa
     ldy ncand
     sta cand,y
+    lda t0                  ; (and its height + 16, a byte)
+    sta cy,y
     inc ncand
 @ncand:
     inx
@@ -1252,11 +1269,23 @@ tick:
     sta wyh+1,x
     dex
     bpl @win
+    lda ay0                 ; this shot's own reach, + 16: y - 10 to y + 5 (as for the candidates)
+    clc
+    adc #16 - 10
+    sta sylo
+    adc #15
+    sta syhi
     lda #0
     sta ci
 @htarget:
     ldx ci
-    lda cand,x
+    lda cy,x                ; within this shot's reach? (most aren't: two compares)
+    cmp sylo
+    bcc @nhtarget
+    cmp syhi
+    beq :+
+    bcs @nhtarget
+:   lda cand,x
     tax
     ldy e_kind,x            ; (a candidate an earlier shot destroyed is a BOOM now)
     cpy #K_BOOM
@@ -1648,8 +1677,11 @@ view:
 @scrolled:
     MARK 8
     lda ys
+    sta p_ys
     ora #$10                ; display on, 24 rows
     sta p_d011
+    lda cur
+    sta p_scr
     ldx cur
     lda D018_SCREEN,x
     ldx curcs
@@ -1682,12 +1714,12 @@ copy_more:
     bcc @go                 ; its share
     lda latef               ; (not once the frame is late)
     bne @done
-    lda $d011               ; then more, with time to spare: not within 40 lines before the bottom IRQ
+    lda $d011               ; then more, with time to spare: not within 24 lines before the bottom IRQ
     bmi @go
     lda $d012
     cmp #BOTTOM
     bcs @go
-    cmp #BOTTOM - 40
+    cmp #BOTTOM - 24
     bcs @done
 @go:
     txa
@@ -1927,16 +1959,11 @@ sprites:
     cpx #N_BULLETS
     bne @bullet
 
-    ; ids from 22: the words. On the title: HI, the high score, the title, PRESS FIRE (blinking);
-    ; else the score (with the ships left under it), and at game over GAME OVER
-    jsr hud_digits
+    ; ids from 22: the words: the title (PRESS FIRE blinking), or GAME OVER
+    jsr bar_update
     ldy #N_IDS
     lda mode
-    bne @inplay
-    ldx #W_HI
-    jsr word
-    lda #2                  ; (DIGITS_X_TITLE)
-    jsr digit_words
+    bne @nottitle
     ldx #W_TITLE
     jsr word
     jsr word
@@ -1950,10 +1977,7 @@ sprites:
     jsr word
     jsr word
     jmp @words
-@inplay:
-    lda #0                  ; (DIGITS_X)
-    jsr digit_words
-    lda mode
+@nottitle:
     cmp #MODE_OVER
     bne @words
     ldx #W_OVER
@@ -1981,40 +2005,9 @@ word:
     iny
     rts
 
-; Shows the score's two sprites (this frame's blocks) as objects Y and Y + 1, at the x's from
-; DIGITS_X + A (0 in play, 2 for DIGITS_X_TITLE, which gen.js puts right after it). Y moves on.
-digit_words:
-    sta t2
-    ldx #0
-@one:
-    lda curcs
-    asl
-    stx t0
-    clc
-    adc t0
-    adc #SPRPTR + F_DIGITS
-    sta optr
-    lda #C_DIGITS
-    sta ocol
-    txa
-    clc
-    adc t2
-    tax
-    lda DIGITS_X,x
-    sta t1
-    ldx t0
-    SHOW t1, zero, #HUD_Y, zero, @no
-@no:
-    iny
-    inx
-    cpx #2
-    beq :+
-    jmp @one
-:   rts
-
-; The score's digits (the high score's on the title) into this frame's two sprite blocks: each digit
-; a byte column of 6 rows.
-hud_digits:
+; The status bar's 40 codes in barrow (view.js barCodes), built again when what it shows changes: the
+; score and the ships left, or on the title HI and the high score.
+bar_update:
     ldx #2
 :   lda scoreb,x
     ldy mode
@@ -2023,54 +2016,45 @@ hud_digits:
 :   sta vb,x
     dex
     bpl :--
-    lda lives               ; (0 on the title)
+    lda lives
     ldy mode
     bne :+
-    lda #0
+    lda #$ff                ; (the title)
 :   sta vb+3
-    lda curcs               ; drawn in these blocks already?
-    asl
-    asl
-    tay                     ; 4 curcs
-    ldx #3
+    ldx #3                  ; as last built?
 :   lda vb,x
-    cmp hudval,y
-    bne @draw
-    iny
+    cmp barlast,x
+    bne @build
     dex
     bpl :-
     rts
-@draw:
-    lda curcs
-    asl
-    asl
-    tay
+@build:
     ldx #3
 :   lda vb,x
-    sta hudval,y
-    iny
+    sta barlast,x
     dex
     bpl :-
-    lda curcs               ; the blocks: F_DIGITS + 2 curcs, 64 bytes each
-    asl
-    clc
-    adc #F_DIGITS
-    sta t0
-    lsr
-    lsr
-    clc
-    adc #>SPRITES
-    sta hp+1
-    lda t0
-    and #3
-    tax
-    lda TIMES64,x
-    sta hp
+    ldx #39
+    lda #BAR_SPACE
+:   sta barrow,x
+    dex
+    bpl :-
+    ldy #SCORE_COL          ; where the digits go
+    lda vb+3
+    bpl @digits
+    lda #BAR_H              ; the title: HI and the high score
+    sta barrow+HI_COL
+    lda #BAR_I
+    sta barrow+HI_COL+1
+    ldy #HI_COL + 3
+@digits:
     ldx #0
 @digit:
-    stx t3
-    ldy DIG_BYTE,x          ; the digit: a nibble of the BCD value, most significant first
-    lda vb,y
+    stx t3                  ; a nibble of the BCD value, most significant first
+    lda DIG_BYTE,x
+    tax
+    lda vb,x
+    ldx t3
     cpx #0
     beq @hi
     cpx #2
@@ -2085,103 +2069,57 @@ hud_digits:
     lsr
     lsr
 @got:
-    ldy DIG_OFS,x
-    tax
-    lda DIGIT_ROWS,x
-    sta (hp),y
+    clc
+    adc #BAR_0
+    sta barrow,y
     iny
-    iny
-    iny
-    lda DIGIT_ROWS+10,x
-    sta (hp),y
-    iny
-    iny
-    iny
-    lda DIGIT_ROWS+20,x
-    sta (hp),y
-    iny
-    iny
-    iny
-    lda DIGIT_ROWS+30,x
-    sta (hp),y
-    iny
-    iny
-    iny
-    lda DIGIT_ROWS+40,x
-    sta (hp),y
-    iny
-    iny
-    iny
-    lda DIGIT_ROWS+50,x
-    sta (hp),y
-    ldx t3
     inx
     cpx #6
-    beq :+
-    jmp @digit
-:   ldy #LIVES_ROW * 3      ; the ships left, under the first three digits
-    ldx #0
-@ship:
-    cpx vb+3
-    bcc :+
-    lda #0                  ; (none here)
-    sta (hp),y
-    iny
-    iny
-    iny
-    sta (hp),y
-    iny
-    iny
-    iny
-    sta (hp),y
-    iny
-    iny
-    iny
-    sta (hp),y
-    iny
-    iny
-    iny
-    sta (hp),y
-    iny
-    iny
-    iny
-    sta (hp),y
-    jmp @nship
-:   lda SHIP_ROWS
-    sta (hp),y
-    iny
-    iny
-    iny
-    lda SHIP_ROWS+1
-    sta (hp),y
-    iny
-    iny
-    iny
-    lda SHIP_ROWS+2
-    sta (hp),y
-    iny
-    iny
-    iny
-    lda SHIP_ROWS+3
-    sta (hp),y
-    iny
-    iny
-    iny
-    lda SHIP_ROWS+4
-    sta (hp),y
-    iny
-    iny
-    iny
-    lda SHIP_ROWS+5
-    sta (hp),y
-@nship:
-    tya
-    sec
-    sbc #15 - 1             ; back up 5 rows, on a column
-    tay
-    inx
-    cpx #3
-    bne @ship
+    bne @digit
+    ldx vb+3                ; the ships left
+    bmi @done
+    beq @done
+    lda #BAR_SHIP
+:   sta barrow+SHIPS_COL-1,x
+    dex
+    bne :-
+@done:
+    inc barver
+    rts
+
+; The raster split before the status bar, on the line before it. Fine scroll 7 makes the bar's first
+; line a bad line, so the VIC fetches a character row there and shows its 8 lines, whatever the
+; playfield's fine scroll; and the screen is now the bar's. The row it fetches is row 23 either way:
+; at fine scroll 0-6 the playfield's row 23 is under way, and a bad line in the middle of a row
+; fetches that row again (the VIC only moves to the next row after a row's 8th line); at 7 the
+; playfield's row 22 has just ended and row 23 starts there. So the bar's screen has the bar in
+; row 23. Sprites showing below the split take their pointers from that screen too: they're copied
+; over, and the multiplexer sets the rest there. The bottom IRQ sets the playfield's back.
+mux_split_hook:
+    lda #$17                ; display on, 24 rows, fine scroll 7
+    sta $d011
+    lda cur_d018            ; the bar's screen, the same characters
+    and #$0f
+    ora #((BARSCR & $3c00) >> 6)
+    sta $d018
+    ldy #7
+:   lda (mux_pp),y
+    sta BARSCR + $3f8,y
+    dey
+    bpl :-
+    lda #>(BARSCR + $3f8)
+    sta mux_pp+1
+    rts
+
+; The bar into its screen's row 23, while it isn't showing (in the bottom IRQ).
+bar_out:
+    ldy #39
+:   lda barrow,y
+    sta BARSCR + 23 * 40,y
+    dey
+    bpl :-
+    lda barver
+    sta barshown
     rts
 
 ; ------------------------------------------------------------------ the raster IRQs
@@ -2196,11 +2134,17 @@ irq_bottom:
     lda ready
     beq @late
     lda p_d018
-    sta $d018
+    sta cur_d018
     lda p_d011
-    sta $d011
+    sta cur_d011
     lda p_ptr
+    sta cur_ptr
     jsr mux_swap
+    lda barver              ; the bar, when it changes
+    cmp barshown
+    beq :+
+    jsr bar_out
+:
     lda #0
     sta ready
     lda #1
@@ -2211,6 +2155,12 @@ irq_bottom:
     lda #1
     sta latef
 @set:
+    lda cur_d011            ; the playfield's fine scroll, screen and sprite pointers (the split left
+    sta $d011               ; the bar's)
+    lda cur_d018
+    sta $d018
+    lda cur_ptr
+    sta mux_pp+1
     jsr mux_bottom
     IRQ_OUT
     lda #1
@@ -2226,11 +2176,9 @@ D018_SCREEN: .byte ((SCREEN_A & $3c00) >> 6), ((SCREEN_B & $3c00) >> 6)
 D018_CHARS:  .byte ((CHARS_A & $3800) >> 10), ((CHARS_B & $3800) >> 10)
 STARS_LO:    .byte <(CHARS_A + STAR * 8), <(CHARS_B + STAR * 8)
 STARS_HI:    .byte >(CHARS_A + STAR * 8), >(CHARS_B + STAR * 8)
-NEED:        .byte 0, 4, 8, 11, 15, 18, 22, 25   ; the other screen's parts due by each fine scroll
+NEED:        .byte 0, 0, 2, 5, 9, 14, 19, 25   ; the other screen's parts due by each fine scroll (back-loaded: frames with time to spare do most of it ahead)
 DRONE_Y:     .byte <-21, <-45, <-69, <-93
-TIMES64:     .byte 0, 64, 128, 192
-DIG_BYTE:    .byte 2, 2, 1, 1, 0, 0       ; the score's digits: their BCD byte, and their place in the
-DIG_OFS:     .byte 0, 1, 2, 64, 65, 66    ; two sprite blocks
+DIG_BYTE:    .byte 2, 2, 1, 1, 0, 0       ; the score's digits: their BCD byte
 ; >> 4 of a signed 16-bit value: low byte SHR4[lo] | SHL4[hi], high byte ASR4[hi]
 .align 256
 SHR4:

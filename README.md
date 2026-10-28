@@ -278,14 +278,18 @@ A Diablo-style dungeon for the C64: an isometric 2:1 view that scrolls smoothly 
 |------|------------|
 | `core/iso.js` | Maps, and the hero's movement and collision, in integer maths |
 | `c64/iso/view.js` | What the C64 screen shows each frame |
-| `levels/iso/d1.txt` | The Crypt: nine rooms and their corridors on a 48×48 map |
+| `levels/iso/d1.txt` | The Crypt: nine rooms and their corridors on a 48×48 map, with wall torches and cracked flagstones |
 | `web/iso.html` | The reference, playable in a browser (`web/bundle.js` makes one-file versions in `web/out/`) |
 | `showcase/iso-pilot.js` | An autopilot that tours the rooms along shortest paths |
 | `showcase/iso.js` | The autopilot's tour, as `showcase/out/iso-run.mp4` |
 
-**Screen.** Multicolor characters, 38 columns by 24 rows, with the VIC's fine scroll in both directions. Tiles are 32×16 pixel diamonds and walls are cubes 16 pixels high. On a 2:1 grid each screen character can show parts of at most four tiles, and which four depends only on its phase: its place on the grid, one of four. Each character is therefore a table lookup by its phase and those tiles' kinds (void, floor, wall), which is 144 cases. They need only 47 distinct characters, all made from the faces' textures.
+**Screen.** Multicolor characters, 38 columns by 24 rows, with the VIC's fine scroll in both directions. Tiles are 32×16 pixel diamonds and walls are cubes 16 pixels high. On a 2:1 grid each screen character can show parts of at most four tiles, and which four depends only on its phase: its place on the grid, one of four. Each character is therefore a table lookup by its phase and those tiles' looks: void, floor, cracked floor, wall, or wall with a torch. The phase also fixes which part of each tile a character shows, so textures can follow the tiles: flagstones with joints along the diamonds, wall tops in half mortar, lit sides in two courses of brick, shaded sides in alternate lines, and a contact shadow at each wall's foot. Only the cases a map uses get a character: the Crypt needs 53, out of a limit of 128.
 
-**Light.** Bit pair 11 of every character takes its colour from colour RAM, which holds rings around the hero (yellow, then red, then dark) and never changes. The dungeon scrolls under the light while the colour RAM stays still. The other bit pairs are black (void and floor joints) and dark grey (mortar), so outside the light the walls still show faintly as grey outlines.
+**Light.** The light never changes as the dungeon scrolls under it, and it comes in two parts:
+- *colour RAM* gives bit pair 11 (the lit stone) its colour, in rings around the hero: yellow, then red, then black
+- *half-lit characters*: every character also exists half-lit, with its lit stone thinned to a checkerboard, as codes 128–255. Bit 7 of each screen code picks the half-lit one, in rings fixed on the screen
+
+Together they make five steps from full light to dark, blended across the rings with a 2×2 ordered dither. The other bit pairs are fixed colours. Black is void and floor joints. White is torch flames, so torches glow in the dark. Dark grey is mortar, so outside the light the walls still show faintly as grey outlines. On the C64 the half-lit bit costs an `and` and an `ora` per character when the screen shifts.
 
 **Movement.** One tick per 50 Hz frame, in 1/256 tile:
 - walking: the eight joystick directions at one speed, 2 pixels a frame across the screen and 1 up and down

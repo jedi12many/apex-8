@@ -699,7 +699,8 @@
  * APEX isometric dungeon: the reference for dungeon maps and the hero's movement. Integer maths only,
  * so a 6502 port that follows the same steps lands on exactly the same position every frame.
  *
- *   - the map is square tiles: 0 void, 1 floor, 2 wall; outside the map is void
+ *   - the map is square tiles: 0 void, 1 floor, 2 wall; outside the map is void. A tile can also carry
+ *     a decoration (a crack in the floor, a torch on a wall), which only changes how it looks
  *   - positions are 8.8 fixed point in tiles (256 = one tile); x runs down-right on the screen,
  *     y down-left (isometric 2:1: a tile is a 32x16 pixel diamond)
  *   - one tick per 50 Hz frame; input is the joystick's bits: 1 up, 2 down, 4 left, 8 right
@@ -726,27 +727,31 @@
   DIRS[1] = [-STEP, -STEP]; DIRS[2] = [STEP, STEP]; DIRS[4] = [-STEP, STEP]; DIRS[8] = [STEP, -STEP];
   DIRS[5] = [-DIAG, 0]; DIRS[9] = [0, -DIAG]; DIRS[6] = [0, DIAG]; DIRS[10] = [DIAG, 0];
 
-  // Map text: one character per tile, '#' wall, '.' floor, 'P' the start (floor); anything else is
-  // void. Lines starting with ';' are comments; the first names the map.
+  // Map text: one character per tile, '#' wall, 't' wall with a torch, '.' floor, ',' cracked floor,
+  // 'P' the start (floor); anything else is void. Lines starting with ';' are comments; the first
+  // names the map.
   function parse(text) {
     const lines = text.replace(/\r/g, '').split('\n');
     const name = (lines.find(l => l.startsWith(';')) || '; dungeon').slice(1).trim();
     const rows = lines.filter(l => !l.startsWith(';') && l.length);
     const h = rows.length, w = Math.max(...rows.map(r => r.length));
-    const tiles = new Uint8Array(w * h);
+    const tiles = new Uint8Array(w * h), deco = new Uint8Array(w * h);
     let start = null;
     rows.forEach((r, y) => {
       for (let x = 0; x < w; x++) {
         const ch = r[x] || ' ';
-        tiles[y * w + x] = ch === '#' ? WALL : ch === '.' || ch === 'P' ? FLOOR : VOID;
+        tiles[y * w + x] = '#t'.includes(ch) ? WALL : '.,P'.includes(ch) ? FLOOR : VOID;
+        deco[y * w + x] = 't,'.includes(ch) ? 1 : 0;
         if (ch === 'P') start = { x, y };
       }
     });
     if (!start) throw new Error('map has no P');
-    return { name, w, h, tiles, start };
+    return { name, w, h, tiles, deco, start };
   }
 
-  const tileAt = (M, tx, ty) => (tx < 0 || ty < 0 || tx >= M.w || ty >= M.h ? VOID : M.tiles[ty * M.w + tx]);
+  const inside = (M, tx, ty) => tx >= 0 && ty >= 0 && tx < M.w && ty < M.h;
+  const tileAt = (M, tx, ty) => (inside(M, tx, ty) ? M.tiles[ty * M.w + tx] : VOID);
+  const decoAt = (M, tx, ty) => (inside(M, tx, ty) ? M.deco[ty * M.w + tx] : 0);
   // Is the hero's square at (x, y) all on floor?
   function clear(M, x, y) {
     for (const ty of [(y - RADIUS) >> 8, (y + RADIUS - 1) >> 8])
@@ -776,7 +781,7 @@
   // Where the hero stands on the screen's isometric plane, in whole pixels.
   const screen = h => ({ x: (h.x - h.y) >> 4, y: (h.x + h.y) >> 5 });
 
-  return { TILE, VOID, FLOOR, WALL, RADIUS, DIRS, parse, tileAt, clear, hero, tick, screen };
+  return { TILE, VOID, FLOOR, WALL, RADIUS, DIRS, parse, tileAt, decoAt, clear, hero, tick, screen };
 });
 
 </script>
@@ -789,12 +794,17 @@
  * walls are cubes 16 pixels high. Every character of the screen shows the part of the dungeon under
  * it, and with tiles on a 2:1 grid that part depends on at most 4 tiles: which 4 depends on where the
  * character sits on the grid (its phase, 0-3), and the character is a table lookup by phase and those
- * tiles' kinds. The whole dungeon takes a few dozen characters.
+ * tiles' looks (void, floor, cracked floor, wall, wall with a torch). Textures are laid out on each
+ * tile (flagstones, brick courses along the walls), so the phase also fixes which part of a tile a
+ * character shows. Only the cases a map uses get characters, at most 128.
  *
- * Light: the bit pair 11 of every character is the light's colour, which comes from colour RAM. Colour
- * RAM never changes: it holds rings around the hero, so the light is fixed on the screen and the
- * dungeon moves under it. The other bit pairs ($D021 void and joints, $D023 mortar) are the same
- * everywhere, so the dungeon's shape stays faintly visible in the dark.
+ * Light, in two parts that never change while the dungeon scrolls under them:
+ *   - colour RAM gives bit pair 11 (the lit stone) its colour in rings around the hero: yellow, red, black
+ *   - each character comes twice: as itself, and half-lit (its lit stone thinned by a dither). The
+ *     screen codes' bit 7 picks the half-lit one, again in rings, fixed on the screen
+ * Together they make five steps from full light to dark, blended by ordered dithering. The other bit
+ * pairs are fixed colours: $D021 black (void, floor joints), $D022 white (torch flames, which glow in
+ * the dark), $D023 dark grey (mortar, so walls stay faintly visible in the dark).
  *
  * Works in Node and in the browser (global APEXISOVIEW, needing APEXSCII and APEXISO).
  */
@@ -808,33 +818,43 @@
   const COLS = 38, ROWS = 24; // what the 38-column, 24-row screen shows
   // The visible window: X 7-310, Y 4-195 of the 320x200 display. The hero's feet are always at HERO.
   const HERO = { x: 158, y: 112 };
-  const COLORS = { border: 0, bg: 0, mc1: 9, mc2: 11 }; // $D020, $D021 void and joints, $D022 (unused), $D023 mortar
-  // The light: colour RAM (0-7) by distance from the hero, in rings out to the dark.
-  const LIGHT = { center: { x: HERO.x, y: HERO.y - 10 }, rings: [[72, 7], [116, 2]], dark: 0 };
+  const COLORS = { border: 0, bg: 0, mc1: 1, mc2: 11 }; // $D020, $D021 void and joints, $D022 flames, $D023 mortar
+  // The light's steps, brightest first: [colour RAM, half-lit]. A character's step is its distance
+  // from the light (vertical distance counts double: the floor is squashed 2:1), past FULL, in steps
+  // of STEP pixels, dithered with a 2x2 ordered pattern.
+  const LIGHT = { center: { x: HERO.x, y: HERO.y - 10 }, full: 52, step: 20, steps: [[7, 0], [7, 1], [2, 0], [2, 1], [0, 0]] };
 
   // ------------------------------------------------------------------ geometry
+  // A tile's look: 0 void, 1 floor, 2 cracked floor, 3 wall, 4 wall with a torch.
+  const lookAt = (M, tx, ty) => {
+    const k = ISO.tileAt(M, tx, ty), d = ISO.decoAt(M, tx, ty);
+    return k === ISO.FLOOR ? 1 + d : k === ISO.WALL ? 3 + d : 0;
+  };
   // Screen-plane pixel (sx, sy) -> world (in tiles): sx = 16 (wx - wy), sy = 8 (wx + wy).
   const inv = (sx, sy) => [(sx / 16 + sy / 8) / 2, (sy / 8 - sx / 16) / 2];
   // What's at a screen-plane point: the nearest wall face, else the floor. { f: E void, G floor,
-  // T wall top, L wall's lit side, R wall's shaded side; t: which tile }
-  function surface(kind, sx, sy) {
+  // T wall top, L wall's lit side, R wall's shaded side; t: the tile; look; where on the tile: a, b
+  // across a floor or top, along and h (height) up a side }
+  function surface(look, sx, sy) {
     const [wx, wy] = inv(sx, sy), bx = Math.floor(wx), by = Math.floor(wy);
     let best = null, depth = -Infinity;
     for (let ty = by - 1; ty <= by + 3; ty++) for (let tx = bx - 1; tx <= bx + 3; tx++) {
-      if (kind(tx, ty) !== ISO.WALL || tx + ty <= depth) continue;
-      let f = null;
-      const [ux, uy] = inv(sx, sy + WALL_H);
-      if (Math.floor(ux) === tx && Math.floor(uy) === ty) f = 'T';
+      const lk = look(tx, ty);
+      if (lk < 3 || tx + ty <= depth) continue;
+      const t = tx + ',' + ty, [ux, uy] = inv(sx, sy + WALL_H);
+      let s = null;
+      if (Math.floor(ux) === tx && Math.floor(uy) === ty) s = { f: 'T', a: ux - tx, b: uy - ty };
       else {
-        const u = sx / 16 + ty + 1; // on the lower-left edge's face?
-        if (u >= tx && u < tx + 1 && sy >= 8 * (u + ty + 1) - WALL_H && sy < 8 * (u + ty + 1)) f = 'L';
-        const v = tx + 1 - sx / 16; // the lower-right edge's?
-        if (!f && v >= ty && v < ty + 1 && sy >= 8 * (tx + 1 + v) - WALL_H && sy < 8 * (tx + 1 + v)) f = 'R';
+        const u = sx / 16 + ty + 1, hu = 8 * (u + ty + 1) - sy; // on the lower-left edge's face?
+        if (u >= tx && u < tx + 1 && hu > 0 && hu <= WALL_H) s = { f: 'L', along: u - tx, h: hu };
+        const v = tx + 1 - sx / 16, hv = 8 * (tx + 1 + v) - sy; // the lower-right edge's?
+        if (!s && v >= ty && v < ty + 1 && hv > 0 && hv <= WALL_H) s = { f: 'R', along: ty + 1 - v, h: hv };
       }
-      if (f) { best = { f, t: tx + ',' + ty }; depth = tx + ty; }
+      if (s) { best = Object.assign(s, { t, look: lk }); depth = tx + ty; }
     }
     if (best) return best;
-    return { f: kind(bx, by) === ISO.FLOOR ? 'G' : 'E', t: bx + ',' + by };
+    const lk = look(bx, by);
+    return lk ? { f: 'G', t: bx + ',' + by, look: lk, a: wx - bx, b: wy - by } : { f: 'E', t: bx + ',' + by, look: 0 };
   }
 
   // A screen-plane character (cx, cy) covers pixels 8cx.. x 8cy..; its phase and anchor tile.
@@ -848,97 +868,130 @@
   const REL = [0, 1, 2, 3].map(p => {
     const [ax, ay] = anchorOf(p, 0), floors = [], walls = [];
     for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
-      const looks = new Set();
-      for (const k of [ISO.VOID, ISO.FLOOR, ISO.WALL]) {
-        const kind = (x, y) => (x === ax + dx && y === ay + dy ? k : ISO.FLOOR);
+      const kinds = new Set();
+      for (const k of [0, 1, 3]) {
+        const look = (x, y) => (x === ax + dx && y === ay + dy ? k : 1);
         let s = '';
-        for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) s += surface(kind, ...sample(p, 0, f, y)).f;
-        looks.add(s);
+        for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) s += surface(look, ...sample(p, 0, f, y)).f;
+        kinds.add(s);
       }
-      if (looks.size === 3) floors.push([dx, dy]);
-      else if (looks.size === 2) walls.push([dx, dy]);
+      if (kinds.size === 3) floors.push([dx, dy]);
+      else if (kinds.size === 2) walls.push([dx, dy]);
     }
     if (floors.length !== 2 || walls.length !== 2) throw new Error(`phase ${p}: expected 2 floor and 2 wall tiles`);
     return [...floors, ...walls];
   });
-  // A character's pattern: kinds of its REL tiles, a + 3 b + 9 (c is wall) + 18 (d is wall): 0-35.
-  const PATTERNS = 36;
+  // A character's pattern: the looks of its REL tiles, l0 + 5 l1 + 25 w2 + 75 w3 (0-224), where w is
+  // 0 not a wall, 1 wall, 2 wall with a torch.
+  const PATTERNS = 225;
+  const wallOf = lk => (lk >= 3 ? lk - 2 : 0);
   function patternOf(M, cx, cy) {
     const p = phaseOf(cx, cy), [ax, ay] = anchorOf(cx, cy), r = REL[p];
-    const k = i => ISO.tileAt(M, ax + r[i][0], ay + r[i][1]);
-    return k(0) + 3 * k(1) + 9 * (k(2) === ISO.WALL) + 18 * (k(3) === ISO.WALL);
+    const lk = i => lookAt(M, ax + r[i][0], ay + r[i][1]);
+    return lk(0) + 5 * lk(1) + 25 * wallOf(lk(2)) + 75 * wallOf(lk(3));
   }
 
   // ------------------------------------------------------------------ textures
-  // Fat pixels (4 x 8, tiled every character): 0 void and joints, 1 ($D022, unused so far), 2 mortar ($D023),
-  // 3 light (colour RAM). Floor joints (0) are drawn where one floor tile meets another, and a wall's
-  // top is edged in mortar, so in the dark only the walls' mortar shows.
-  const tex = rows => (f, y) => +rows[y][f];
-  const TEX = {
-    E: tex(['0000', '0000', '0000', '0000', '0000', '0000', '0000', '0000']),
-    G: tex(['3333', '3303', '3333', '3333', '3033', '3333', '3333', '3333']),
-    T: tex(['3333', '3333', '3333', '3333', '3333', '3333', '3333', '3333']),
-    L: tex(['2222', '3323', '3323', '3323', '2222', '2333', '2333', '2333']),
-    R: tex(['2222', '3032', '0302', '3032', '2222', '2303', '2030', '2303']),
-  };
-
-  // ------------------------------------------------------------------ characters
-  const base = APEXSCII.buildDefault('mc', 'iso', 'crypt');
-  const chars = base.glyphs.map(g => Uint8Array.from(g));
-  const FREE = [];
-  for (const r of base.regions) if (r.name === 'free') for (let c = r.from; c <= r.to; c++) FREE.push(c);
-  const glyphCodes = new Map();
-  let nextFree = 0;
-  function glyph(bytes) {
-    const key = bytes.join(',');
-    if (glyphCodes.has(key)) return glyphCodes.get(key);
-    if (nextFree >= FREE.length) throw new Error('out of characters');
-    const code = FREE[nextFree++];
-    chars[code] = Uint8Array.from(bytes);
-    glyphCodes.set(key, code);
-    return code;
-  }
-  // CODES[phase * 36 + pattern]: the character, drawn from the faces at each fat pixel.
-  const CODES = new Uint8Array(4 * PATTERNS);
-  for (let p = 0; p < 4; p++) {
-    const [ax, ay] = anchorOf(p, 0);
-    for (let n = 0; n < PATTERNS; n++) {
-      const k = [n % 3, Math.floor(n / 3) % 3, Math.floor(n / 9) % 2 ? ISO.WALL : ISO.FLOOR, Math.floor(n / 18) ? ISO.WALL : ISO.FLOOR];
-      const kind = (x, y) => { for (let i = 0; i < 4; i++) if (x === ax + REL[p][i][0] && y === ay + REL[p][i][1]) return k[i]; return ISO.FLOOR; };
-      const s = [];
-      for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) s.push(surface(kind, ...sample(p, 0, f, y)));
-      const bytes = [];
-      for (let y = 0; y < 8; y++) {
-        let b = 0;
-        for (let f = 0; f < 4; f++) {
-          const here = s[y * 4 + f];
-          let v = TEX[here.f](f, y);
-          // a floor joint: the floor tile above or to the left is another tile
-          const near = [f ? s[y * 4 + f - 1] : null, y ? s[(y - 1) * 4 + f] : null, f < 3 ? s[y * 4 + f + 1] : null, y < 7 ? s[(y + 1) * 4 + f] : null];
-          if (here.f === 'G') for (const o of near.slice(0, 2)) if (o && o.f === 'G' && o.t !== here.t) v = 0;
-          if (here.f === 'T') for (const o of near) if (o && (o.f !== 'T' || o.t !== here.t)) v = 2;
-          b |= v << (6 - 2 * f);
-        }
-        bytes.push(b);
+  // Fat pixels: 0 black, 1 flame ($D022), 2 mortar ($D023), 3 lit stone (colour RAM). Each surface
+  // is split into regions (a floor tile, a wall's bricks in two courses along its sides) and a joint
+  // or mortar line is drawn where a region meets the one above it, or beside it on a wall.
+  function region(s) {
+    switch (s.f) {
+      case 'G': case 'T': return s.f + s.t;
+      case 'L': case 'R': {
+        const course = Math.floor((s.h - 0.5) / 8);
+        return `${s.f}${s.t}:${course}:${Math.floor(2 * s.along + (course & 1) / 2)}`;
       }
-      CODES[p * PATTERNS + n] = glyph(bytes);
+      default: return 'E';
     }
   }
-  const codeAt = (M, cx, cy) => CODES[phaseOf(cx, cy) * PATTERNS + patternOf(M, cx, cy)];
+  function shade(s, f, y, left, up) {
+    const id = region(s), meets = n => n && region(n) !== id;
+    if (s.f === 'E') return 0;
+    if (s.f === 'G') {
+      if (up && up.f === 'G' && meets(up)) return 0; // a joint between tiles
+      if (up && (up.f === 'L' || up.f === 'R')) return 0; // the shadow at a wall's foot
+      if (s.look === 2 && Math.abs(s.a - 0.5 - (s.b - 0.5) * 0.6) < 0.05 && s.b > 0.15 && s.b < 0.85) return 0; // a crack
+      if (s.look === 2 && s.a > 0.6 && s.b < 0.35) return (f + y) & 1 ? 0 : 3; // and broken stone
+      return 3;
+    }
+    if (s.f === 'T') return [left, up].some(meets) || (f + y) & 1 ? 2 : 3; // half mortar: darker than the floor
+    // a wall's side: a torch, else bricks
+    if (s.look === 4) {
+      const c = Math.abs(s.along - 0.5) * 16; // pixels from the middle
+      if (c < 2 && s.h >= 7 && s.h < 12) return 1;
+      if (c < 1 && s.h >= 12 && s.h < 13) return 1;
+      if (c < 2 && s.h >= 4 && s.h < 7) return 0;
+    }
+    if ([left, up].some(n => n && n.f === s.f && n.t === s.t && meets(n))) return 2;
+    return s.f === 'R' && y & 1 ? 0 : 3;
+  }
+  // Half-lit: lit stone thinned to a checkerboard of fat pixels.
+  const halfLit = (v, f, y) => (v === 3 && (f + y) & 1 ? 0 : v);
+
+  // The character for a phase and pattern: 8 bytes, as itself and half-lit.
+  function draw(p, n) {
+    const [ax, ay] = anchorOf(p, 0), lk = [n % 5, Math.floor(n / 5) % 5];
+    const w = [Math.floor(n / 25) % 3, Math.floor(n / 75)].map(v => (v ? v + 2 : 1));
+    const looks = [...lk, ...w];
+    const look = (x, y) => { for (let i = 0; i < 4; i++) if (x === ax + REL[p][i][0] && y === ay + REL[p][i][1]) return looks[i]; return 1; };
+    const s = [];
+    for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) s.push(surface(look, ...sample(p, 0, f, y)));
+    const v = [];
+    for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) v.push(shade(s[y * 4 + f], f, y, f ? s[y * 4 + f - 1] : null, y ? s[(y - 1) * 4 + f] : null));
+    const bytes = half => Array.from({ length: 8 }, (_, y) => {
+      let b = 0;
+      for (let f = 0; f < 4; f++) b |= (half ? halfLit(v[y * 4 + f], f, y) : v[y * 4 + f]) << (6 - 2 * f);
+      return b;
+    });
+    return { full: bytes(false), half: bytes(true) };
+  }
+
+  // ------------------------------------------------------------------ a map's characters
+  // Characters 0-127 are the patterns the map uses (sharing any that look the same); 128-255 are the
+  // same, half-lit. codes[phase * 225 + pattern] is a pattern's character, -1 where the map never
+  // shows it.
+  const prepared = new WeakMap();
+  function prepare(M) {
+    if (prepared.has(M)) return prepared.get(M);
+    const used = new Set();
+    // every character the map can show, with a margin for the walls' height
+    for (let cy = -2; cy <= M.w + M.h + 4; cy++) for (let cx = -2 * M.h - 4; cx <= 2 * M.w + 4; cx++)
+      used.add(phaseOf(cx, cy) * PATTERNS + patternOf(M, cx, cy));
+    for (let p = 0; p < 4; p++) used.add(p * PATTERNS); // all void
+    const chars = Array.from({ length: 256 }, () => new Uint8Array(8)), codes = new Int16Array(4 * PATTERNS).fill(-1);
+    const byLook = new Map();
+    for (const i of [...used].sort((a, b) => a - b)) {
+      const g = draw(Math.floor(i / PATTERNS), i % PATTERNS), key = g.full.join(',');
+      if (!byLook.has(key)) {
+        const code = byLook.size;
+        if (code >= 128) throw new Error(`${M.name}: more than 128 characters`);
+        chars[code] = Uint8Array.from(g.full);
+        chars[code + 128] = Uint8Array.from(g.half);
+        byLook.set(key, code);
+      }
+      codes[i] = byLook.get(key);
+    }
+    const P = {
+      chars, codes, count: byLook.size,
+      codeAt: (cx, cy) => {
+        const c = codes[phaseOf(cx, cy) * PATTERNS + patternOf(M, cx, cy)];
+        if (c < 0) throw new Error(`no character for ${cx},${cy}`);
+        return c;
+      },
+    };
+    prepared.set(M, P);
+    return P;
+  }
 
   // ------------------------------------------------------------------ the light
-  // Colour RAM for the 40 x 25 screen: each character's ring by its centre's distance from the light
-  // (vertical distance counts double, as the floor is squashed 2:1). Between rings, a checkerboard.
-  const LIGHT_RAM = new Uint8Array(1000);
+  // Per character of the 40 x 25 screen: LIGHT_RAM its colour RAM, LIGHT_HALF 1 for half-lit.
+  const LIGHT_RAM = new Uint8Array(1000), LIGHT_HALF = new Uint8Array(1000);
+  const ORDER = [[0, 0.5], [0.75, 0.25]];
   for (let r = 0; r < 25; r++) for (let c = 0; c < 40; c++) {
     const dx = 8 * c + 8 - LIGHT.center.x, dy = 2 * (8 * r + 4 - LIGHT.center.y), d = Math.hypot(dx, dy);
-    let col = LIGHT.dark;
-    for (let i = LIGHT.rings.length - 1; i >= 0; i--) {
-      const [rad, colour] = LIGHT.rings[i];
-      if (d < rad - 6) col = colour;
-      else if (d < rad + 6 && ((r + c) & 1)) col = colour;
-    }
-    LIGHT_RAM[r * 40 + c] = col;
+    const step = Math.max(0, Math.min(LIGHT.steps.length - 1, Math.floor((d - LIGHT.full) / LIGHT.step + 1 - ORDER[r & 1][c & 1])));
+    [LIGHT_RAM[r * 40 + c], LIGHT_HALF[r * 40 + c]] = LIGHT.steps[step];
   }
 
   // ------------------------------------------------------------------ scrolling
@@ -978,11 +1031,12 @@
   const PAL = APEXSCII.PALETTE.map(hx => [1, 3, 5].map(i => parseInt(hx.substr(i, 2), 16)));
   // What the screen shows: { pixels (320x200 RGBA, the border drawn), scroll }.
   function frame(M, h) {
-    const out = new Uint8ClampedArray(320 * 200 * 4);
+    const P = prepare(M), out = new Uint8ClampedArray(320 * 200 * 4);
     const put = (x, y, c) => { const i = (y * 320 + x) * 4; out[i] = c[0]; out[i + 1] = c[1]; out[i + 2] = c[2]; out[i + 3] = 255; };
     const sc = scroll(h);
     for (let r = 0; r < 25; r++) for (let c = 0; c < 39; c++) {
-      const g = chars[codeAt(M, sc.cX + c, sc.cY + r)], cols = [COLORS.bg, COLORS.mc1, COLORS.mc2, LIGHT_RAM[r * 40 + c]];
+      const g = P.chars[P.codeAt(sc.cX + c, sc.cY + r) | (LIGHT_HALF[r * 40 + c] << 7)];
+      const cols = [COLORS.bg, COLORS.mc1, COLORS.mc2, LIGHT_RAM[r * 40 + c]];
       for (let y = 0; y < 8; y++) {
         const Y = 8 * r + y + sc.ys - 3;
         if (Y < 0 || Y >= 200) continue;
@@ -1002,12 +1056,12 @@
     return { pixels: out, scroll: sc };
   }
 
-  return { WALL_H, COLS, ROWS, HERO, COLORS, LIGHT, LIGHT_RAM, REL, PATTERNS, CODES, chars, FREE, glyphsUsed: () => nextFree,
-    phaseOf, anchorOf, patternOf, codeAt, surface, scroll, SPRITE, FRAMES, spriteFrame, frame };
+  return { WALL_H, COLS, ROWS, HERO, COLORS, LIGHT, LIGHT_RAM, LIGHT_HALF, REL, PATTERNS, lookAt,
+    phaseOf, anchorOf, patternOf, surface, prepare, scroll, SPRITE, FRAMES, spriteFrame, frame };
 });
 
 </script>
-<script>window.LEVEL_TEXT = "; The Crypt\n------------------------------------------------\n------------------------------------------------\n-----------------############-------------------\n---##########----#..........#-------------------\n---#........#----#..........#----###########----\n---#........#----#..........######.........#----\n---#........######.........................#----\n---#....P..................................#----\n---#........................######.........#----\n---#........######..........#----#.........#----\n---#####..###----######..####----#.........#----\n-------#..#-----------#..#-------#.........#----\n-------#..#-----------#..#-------#.........#----\n-------#..#-----------#..#-------######..###----\n-------#..#-----------#..#------------#..#------\n-------#..#-----#######..#####--------#..#------\n----####..###---#............#--------#..#------\n----#.......#---#............#--------#..#------\n----#.......#---#............#----#####..###----\n----#.......#---#...#....#...#----#........#----\n----#.......#####............######........#----\n----#......................................#----\n----#......................................#----\n----#.......#####...#....#...######........#----\n----#.......#---#............#----#........#----\n----#.......#---#............#----#........#----\n----#####..##---#######..#####----####..####----\n--------#..#----------#..#-----------#..#-------\n--------#..#----------#..#-----------#..#-------\n--------#..#----------#..#-----------#..#-------\n--------#..#----------#..#-----------#..#-------\n--------#..#------#####..###---------#..#-------\n---######..####---#........#----######..####----\n---#..........#---#........#----#..........#----\n---#..........#---#........#----#..........#----\n---#..........#---#........######..........#----\n---#..........#####........................#----\n---#.......................................#----\n---#.......................######..........#----\n---#..........#####........#----#..........#----\n---#..........#---#........#----#..........#----\n---############---##########----#..........#----\n--------------------------------#..........#----\n--------------------------------############----\n------------------------------------------------\n------------------------------------------------\n------------------------------------------------\n------------------------------------------------\n";</script>
+<script>window.LEVEL_TEXT = "; The Crypt\r\n------------------------------------------------\r\n------------------------------------------------\r\n-----------------######t#####-------------------\r\n---####t#####----#...,......#-------------------\r\n---#........#----#..........#----##t########----\r\n---#.....,..#----#....,.....##t###.,.......#----\r\n---t........##t###...........,............,#----\r\n---#....P.,............,............,......#----\r\n---#,............,..........######.........#----\r\n---#.......,######......,...#----#...,.....#----\r\n---#####..###----######..####----#.........#----\r\n-------#..#-----------t..#-------t....,....#----\r\n-------#..#-----------#..#-------#.........#----\r\n-------#..#-----------#..#-------######,.###----\r\n-------t..#-----------#..#------------#..#------\r\n-------#..#-----#######..#####--------#.,#------\r\n----####,.###---#....,.......#--------#..#------\r\n----#.......#---#...........,#--------#..#------\r\n----#....,..#---#.....,......#----#####..#t#----\r\n----t.......#---#...#....#...#----#.......,#----\r\n----#.....,.#####......,.....###t##.,......#----\r\n----#............,............,............#----\r\n----#......,............,............,.....#----\r\n----#,......#####.,.#....#...######........#----\r\n----#.......#---#........,...#----t...,....#----\r\n----#.,.....#---#..,.........#----#........#----\r\n----#####..##---#######..#####----####.,####----\r\n--------t..#----------#..#-----------#..#-------\r\n--------#..#----------#..#-----------#..#-------\r\n--------#..#----------#..#-----------#..#-------\r\n--------#..#----------#..#-----------t..#-------\r\n--------#,.#------###t#..###---------#..#-------\r\n---##t###..####---#........#----######..####----\r\n---#......,...#---#....,...#----#...,......#----\r\n---#,.........#---#........#----#..........#----\r\n---#.......,..#---#.....,..######....,.....#----\r\n---#.,........####t............,...........#----\r\n---#........,............,............,....#----\r\n---#..,............,.......######..........#----\r\n---t.........,#####.......,#----#......,...#----\r\n---#...,......#---#.,......#----#,.........#----\r\n---############---##########----#.......,..#----\r\n--------------------------------t.,........#----\r\n--------------------------------############----\r\n------------------------------------------------\r\n------------------------------------------------\r\n------------------------------------------------\r\n------------------------------------------------\r\n";</script>
 <script>
 // The APEX isometric dungeon reference, playable: the same movement and the same frames the C64
 // engine draws, at a fixed 50 ticks a second, inside a C64-sized border.

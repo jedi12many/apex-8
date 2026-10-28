@@ -16,7 +16,8 @@
 ; its last row (rows from SPRITE_ROWS on are empty in every frame), and before its own first line.
 ;
 ; Controls: joystick in port 2, or W / A / S / D and Space to fire; R restarts.
-; Assemble with c64/shmup/build.js.
+; Assemble with c64/shmup/build.js. The machine set-up, scripts, timing and profiling come from the kit
+; (c64/kit/kit.inc), and the multiplexer is the kit's (c64/kit/mux.inc).
 
 .include "gen.inc"
 
@@ -27,7 +28,14 @@ CHARS_B  = $5000
 SPRITES  = $5800
 SPRPTR   = (SPRITES - $4000) / 64
 BOTTOM   = 250              ; the bottom-of-frame interrupt, below the 24-row display
-LIST     = 32               ; each sprite list's room
+N_IDS    = 1 + N_SHOTS + N_ENEMIES + N_BULLETS ; objects: the ship, then the shots, enemies, bullets
+
+MUX_IDS      = N_IDS
+MUX_GAP      = GAP
+MUX_FREE_ROW = SPRITE_ROWS
+MUX_BOTTOM   = BOTTOM
+.include "kit.inc"
+.include "mux.inc"
 
 .segment "ZEROPAGE"
 inp:     .res 1             ; joystick bits: 1 up, 2 down, 4 left, 8 right, 16 fire
@@ -52,8 +60,6 @@ dp:      .res 2             ; a screen row
 sp:      .res 2             ; a star texture
 jv:      .res 2             ; a routine to call through
 sx2:     .res 1             ; X kept by aim
-it3:     .res 1             ; the bottom IRQ's own
-pp:      .res 2             ; the showing screen's sprite pointers
 si:      .res 1             ; hit tests: the shot
 ax0:     .res 2             ; hit tests: the shot's or the ship's x and y
 ay0:     .res 2
@@ -61,10 +67,6 @@ wxl:     .res 4             ; shot hits: per enemy kind, the window's corner
 wxh:     .res 4
 wyl:     .res 4
 wyh:     .res 4
-plast:   .res 2             ; PROFILE: the time at the last mark
-ient:    .res 2             ; PROFILE: the time an IRQ began
-irqc:    .res 2             ; PROFILE: this frame's IRQ cycles
-nticks:  .res 2             ; PROFILE: ticks so far
 ; the game (core/shmup.js)
 gt:      .res 1             ; the frame count (only its low byte matters)
 camyl:   .res 1             ; the level line at the top of the screen
@@ -87,30 +89,13 @@ curcs:   .res 1             ; this frame's character set: 0 A, 1 B
 o1:      .res 1             ; the stars' offsets
 o2:      .res 1
 sid:     .res 1
-optr:    .res 1             ; an object to show: its pointer and colour
-ocol:    .res 1
-on:      .res 1             ; objects shown (ids: 0 the ship, then the shots, enemies, bullets)
-pn:      .res 1             ; last frame's
-nn:      .res 1             ; new this frame
 zero:    .res 1             ; 0
-lb:      .res 1             ; the list being built: its first index (0 or LIST)
-msb:     .res 1             ; $D010 so far
-; showing frames
-disp:    .res 1             ; the list showing: 0 or 1
-nx:      .res 1             ; the next sprite to set (an index in the list showing)
-nend:    .res 1             ; and the end of that list
 sa:      .res 1             ; registers saved by the IRQs
 sx:      .res 1
 sy:      .res 1
 ready:   .res 1             ; 1: the next frame is worked out (p_*)
 applied: .res 1             ; 1: the IRQ showed it
-counting: .res 1            ; 1 while late frames count
-missed:  .res 2             ; frames shown twice because the next wasn't ready
-latespr: .res 2             ; sprites set after their first line had started
-maxcyc:  .res 2             ; the most cycles a frame's work took (input to ready)
 maxcore: .res 2             ; the same, before copying the other screen ahead
-sptr:    .res 2             ; SCRIPT builds: the next (input, ticks) pair
-scount:  .res 1
 p_d018:  .res 1             ; the next frame
 p_d011:  .res 1
 p_ptr:   .res 1             ; the high byte of its screen's sprite pointers
@@ -148,41 +133,8 @@ b_sxl:   .res N_BULLETS             ; whole pixels
 b_sxh:   .res N_BULLETS
 b_syl:   .res N_BULLETS
 b_syh:   .res N_BULLETS
-; the objects to show this frame, by id, and their order down the screen
-N_IDS = 1 + N_SHOTS + N_ENEMIES + N_BULLETS
-vis:     .res LIST                  ; 1 shown this frame (back to 0 once in order)
-inord:   .res LIST                  ; 1 in last frame's order
-newl:    .res LIST                  ; shown, and new to the order
-o_y:     .res LIST
-o_xl:    .res LIST
-o_xh:    .res LIST
-o_ptr:   .res LIST
-o_col:   .res LIST
-order:   .res LIST
-; two sprite lists (the one showing, the one being built), LIST apart: per sprite its Y and X
-; registers, $D010 after it, colour, pointer, and the line from which its hardware sprite is free
-d_y:     .res 2 * LIST
-d_x:     .res 2 * LIST
-d_msb:   .res 2 * LIST
-d_col:   .res 2 * LIST
-d_ptr:   .res 2 * LIST
-d_e:     .res 2 * LIST
-d_end:   .res 2                     ; per list: its end index, $D015, $D010 for its first 8
-d_en:    .res 2
-d_msb0:  .res 2
 rec_near: .res 8                    ; per character set and texture: the lines its stars are on
 rec_far: .res 8
-prof:    .res 32                    ; PROFILE: the slowest frame's parts' cycles (16-bit)
-pcur:    .res 32                    ; PROFILE: this frame's
-
-.segment "LOADADDR"
-    .word $0801
-
-.segment "EXEHDR"           ; 10 SYS2061
-    .word @next, 10
-    .byte $9e, "2061", 0
-@next:
-    .word 0
 
 ; ------------------------------------------------------------------ 16-bit signed compares
 ; Jump to L if the signed 16-bit value at lo, hi is below the constant C (jlt), or not (jge).
@@ -284,116 +236,9 @@ pcur:    .res 32                    ; PROFILE: this frame's
     bcs L
 .endmacro
 
-; Shows object Y (its id) at xl/xh, yl/yh (pointer optr, colour ocol) unless it's wholly in the
-; border: it shows if -17 < y < 196 and -24 < x < 320. One new to the order joins newl. Jumps to L
-; if not shown. Keeps X and Y.
-.macro SHOW xl, xh, yl, yh, L
-    lda yh                  ; y: 0 to 195, or -16 to -1
-    beq :+
-    cmp #$ff
-    bne L
-    lda yl
-    cmp #<-16
-    bcc L
-    bcs :++
-:   lda yl
-    cmp #196
-    bcs L
-:   lda xl                  ; x + 24: 1 to 343
-    clc
-    adc #24
-    sta o_xl,y
-    lda xh
-    adc #0
-    beq :+
-    cmp #1
-    bne L
-    lda o_xl,y
-    cmp #<344
-    bcs L
-    lda #1
-    bne :++
-:   lda o_xl,y
-    beq L
-    lda #0
-:   sta o_xh,y
-    lda yl
-    clc
-    adc #50
-    sta o_y,y
-    lda optr
-    sta o_ptr,y
-    lda ocol
-    sta o_col,y
-    lda #1
-    sta vis,y
-    lda inord,y
-    bne :+
-    sty t0
-    tya
-    ldy nn
-    sta newl,y
-    inc nn
-    ldy t0
-:
-.endmacro
-
-; PROFILE builds: the IRQs' cycles this frame, in irqc (IRQ_IN at the start, IRQ_OUT before the rti).
-.macro IRQ_IN
-.ifdef PROFILE
-    lda $dc04
-    sta ient
-    lda $dc05
-    sta ient+1
-.endif
-.endmacro
-.macro IRQ_OUT
-.ifdef PROFILE
-    sec
-    lda ient
-    sbc $dc04
-    sta ient
-    lda ient+1
-    sbc $dc05
-    sta ient+1
-    lda ient
-    clc
-    adc irqc
-    sta irqc
-    lda ient+1
-    adc irqc+1
-    sta irqc+1
-.endif
-.endmacro
-
-; PROFILE builds: how many cycles each part of the slowest frame took, in prof (MARK n ends part n).
-.macro MARK n
-.ifdef PROFILE
-    jsr mark
-    .byte n
-.endif
-.endmacro
-
 .segment "CODE"
 start:
-    sei
-    lda #$35                ; RAM in place of BASIC and the KERNAL; I/O stays
-    sta $01
-    lda #$7f                ; no CIA interrupts
-    sta $dc0d
-    sta $dd0d
-    lda $dc0d
-    lda $dd0d
-    lda #<nmi
-    sta $fffa
-    lda #>nmi
-    sta $fffb
-    lda #<irq_bottom
-    sta $fffe
-    lda #>irq_bottom
-    sta $ffff
-    lda #$0b                ; screen off while setting up
-    sta $d011
+    KIT_INIT irq_bottom
     lda $dd02               ; VIC bank 1 ($4000-$7FFF)
     ora #3
     sta $dd02
@@ -431,9 +276,6 @@ start:
     sta $d025
     lda #SPR_MC2
     sta $d026
-    lda #$ff                ; CIA 1 timer A times each frame's work
-    sta $dc04
-    sta $dc05
     ldx #3                  ; both character sets hold the stars as at frame 0
 :   lda NEAR_LINE,x
     sta rec_near,x
@@ -444,55 +286,15 @@ start:
     dex
     bpl :-
 
+    jsr mux_init
     lda #0
-    sta pn
     sta zero
-    ldx #LIST - 1
-:   sta vis,x
-    sta inord,x
-    dex
-    bpl :-
-    sta counting
-    sta missed
-    sta missed+1
-    sta latespr
-    sta latespr+1
-    sta maxcyc
-    sta maxcyc+1
     sta maxcore
     sta maxcore+1
-    sta scount
-    sta disp
     sta applied
-    lda #0                  ; no sprites in either list yet
-    sta d_end
-    sta d_en
-    sta d_en+1
-    sta d_msb0
-    sta d_msb0+1
-    lda #LIST
-    sta d_end+1
-.ifdef SCRIPT
-    lda #<SCRIPT_DATA
-    sta sptr
-    lda #>SCRIPT_DATA
-    sta sptr+1
-.endif
-.ifdef PROFILE
-    lda #0
-    sta nticks
-    sta nticks+1
-    ldx #31
-:   sta prof,x
-    dex
-    bpl :-
-.endif
+    KIT_SCRIPT_START
     jsr reset_game
     jsr view                ; the first frame, before any tick
-    lda #$f8                ; sprite pointers at the screen's $3f8
-    sta pp
-    lda #>(SCREEN_A + $3f8)
-    sta pp+1
     lda #1
     sta ready
     lda #BOTTOM
@@ -509,26 +311,14 @@ start:
 main:
     lda applied             ; wait for the last frame to show
     beq main
-    lda #%00010001          ; time this frame's work
-    sta $dc0e
+    KIT_TIMER_START         ; time this frame's work
+    KIT_PROFILE_FRAME
     lda #0
     sta applied
-    lda #0
-    sta plast
-    sta plast+1
-.ifdef PROFILE
-    sta irqc
-    sta irqc+1
-.endif
     jsr input
-    bcs script_done
-.ifdef PROFILE
-    inc nticks
-    bne :+
-    inc nticks+1
-:
-.endif
-    MARK 0
+    bcc :+
+    jmp kit_park
+:   MARK 0
     jsr tick
     MARK 6
     jsr view
@@ -552,127 +342,17 @@ main:
     sta maxcore+1
 :   jsr copy_more
     MARK 12
-    lda #0                  ; how long it took
-    sta $dc0e
-    lda #$ff
-    sec
-    sbc $dc04
-    sta t0
-    lda #$ff
-    sbc $dc05
-    sta t1
-    lda t0
-    cmp maxcyc
-    lda t1
-    sbc maxcyc+1
-    bcc @shown
-    lda t0
-    sta maxcyc
-    lda t1
-    sta maxcyc+1
-.ifdef PROFILE
-    lda irqc
-    sta pcur+26
-    lda irqc+1
-    sta pcur+27
-    lda nticks
-    sta pcur+28
-    lda nticks+1
-    sta pcur+29
-    ldx #31                 ; the slowest frame's parts
-@copy:
-    lda pcur,x
-    sta prof,x
-    dex
-    bpl @copy
-.endif
-@shown:
+    KIT_TIMER_MAX           ; how long it took
     lda #1
     sta ready
     jmp main
-
-; SCRIPT builds stop here when the script ends; the last frame stays on the screen.
-script_done:
-    lda #0
-    sta counting
-script_park:
-    jmp script_park
-
-nmi:
-    rti
-
-.ifdef PROFILE
-; The cycles since the last mark, into prof[n] if the most yet (n: the byte after the jsr).
-mark:
-    pla
-    sta jv
-    pla
-    sta jv+1
-@read:
-    ldy $dc05               ; elapsed = $ffff - timer (read again if the high byte moved)
-    ldx $dc04
-    cpy $dc05
-    bne @read
-    tya
-    eor #$ff
-    tay
-    txa
-    eor #$ff
-    tax
-    sec                     ; this part's cycles: elapsed - plast
-    txa
-    sbc plast
-    sta t0
-    tya
-    sbc plast+1
-    sta t1
-    stx plast
-    sty plast+1
-    ldy #1                  ; this frame's part n
-    lda (jv),y
-    asl
-    tax
-    lda t0
-    sta pcur,x
-    lda t1
-    sta pcur+1,x
-    lda jv                  ; return past the byte
-    clc
-    adc #2
-    sta jv
-    bcc :+
-    inc jv+1
-:   jmp (jv)
-.endif
 
 ; ------------------------------------------------------------------ controls
 ; inp from the joystick in port 2 and W / A / S / D / Space; C set when a SCRIPT build's script has
 ; ended.
 input:
 .ifdef SCRIPT
-    ldy #1                  ; SCRIPT builds: input sptr[0] for sptr[1] ticks, pairs until a 0 count
-    lda (sptr),y
-    bne :+
-    sec
-    rts
-:   dey
-    lda (sptr),y
-    sta inp
-    inc scount
-    lda scount
-    iny
-    cmp (sptr),y
-    bne :+
-    lda #0
-    sta scount
-    lda sptr
-    clc
-    adc #2
-    sta sptr
-    bcc :+
-    inc sptr+1
-:   clc
-    rts
+    jmp kit_script
 .else
     lda #$ff                ; no keyboard row: $DC00 reads the joystick
     sta $dc00
@@ -1906,8 +1586,7 @@ stars:
 ; The objects to show (view.js objects()), sorted down the screen and given hardware sprites by the
 ; multiplexer's rule (view.js multiplex()), into the list that isn't showing.
 sprites:
-    lda #0
-    sta nn
+    jsr mux_start
     lda pdead               ; id 0: the ship, or its explosion
     bne @pboom
     lda pinv
@@ -2023,161 +1702,8 @@ sprites:
     bne @bullet
 
     MARK 9
-    ; The order down the screen: last frame's, without the objects gone, then the new ones (in id
-    ; order), insertion sorted by (Y, id). Ids follow objects() order, so ties come out as in the
-    ; reference; and as most objects move little from frame to frame, there is little to sort.
-    ldx #0                  ; X reads last frame's order, Y writes this one's
-    ldy #0
-@keep:
-    cpx pn
-    beq @kept
-    lda order,x
-    inx
-    stx t1
-    tax
-    lda vis,x
-    beq @gone
-    lda #0                  ; (vis back to 0 for the next frame)
-    sta vis,x
-    txa
-    sta order,y
-    iny
-    ldx t1
-    jmp @keep
-@gone:
-    sta inord,x             ; (A is 0)
-    ldx t1
-    jmp @keep
-@kept:
-    ldx #0
-@new:
-    cpx nn
-    beq @newdone
-    lda newl,x
-    sta order,y
-    iny
-    stx t1
-    tax
-    lda #0
-    sta vis,x
-    lda #1
-    sta inord,x
-    ldx t1
-    inx
-    jmp @new
-@newdone:
-    sty on
-    sty pn
-    ldx #1
-@sort:
-    cpx on
-    bcs @sorted
-    lda order,x
-    sta t0                  ; the one to place: its id, and Y
-    tay
-    lda o_y,y
-    sta t1
-    stx t2
-@shift:
-    cpx #0
-    beq @place
-    ldy order-1,x
-    lda o_y,y
-    cmp t1
-    bcc @place
-    bne @move
-    cpy t0                  ; the same Y: the lower id first
-    bcc @place
-@move:
-    tya
-    sta order,x
-    dex
-    jmp @shift
-@place:
-    lda t0
-    sta order,x
-    ldx t2
-    inx
-    jmp @sort
-@sorted:
+    jsr mux_build           ; sorted down the screen and given hardware sprites
     MARK 10
-    ; the multiplexer: the n-th object shown gets hardware sprite n mod 8, if it starts GAP lines
-    ; below the one before it on that sprite (the list's entry 8 back)
-    lda disp
-    eor #1
-    beq :+
-    lda #LIST
-:   sta lb
-    clc
-    adc #8
-    sta t3                  ; the list's 9th place: from there, sprites are reused
-    lda #0
-    sta msb
-    sta t2                  ; the next object in order
-    ldx lb                  ; X: the next place in the list
-@mux:
-    ldy t2
-    cpy on
-    beq @muxed
-    inc t2
-    lda order,y
-    tay                     ; Y: the object
-    cpx t3
-    bcc @take
-    lda o_y,y
-    sec
-    sbc d_y-8,x
-    cmp #GAP
-    bcc @mux                ; too close: left out, and the next tries this sprite
-    lda d_y-8,x             ; free from the line after that one's rows (C is set)
-    adc #SPRITE_ROWS
-    sta d_e,x
-@take:
-    lda o_y,y
-    sta d_y,x
-    lda o_xl,y
-    sta d_x,x
-    lda o_col,y
-    sta d_col,x
-    lda o_ptr,y
-    sta d_ptr,x
-    lda o_xh,y              ; $D010 with this one's bit
-    beq :+
-    lda msb
-    ora LBIT,x
-    jmp :++
-:   lda msb
-    and LNOTBIT,x
-:   sta msb
-    sta d_msb,x
-    inx
-    jmp @mux
-@muxed:
-    MARK 11
-    ldy disp                ; this list's end, $D015, and $D010 after its first 8
-    tya
-    eor #1
-    tay
-    txa
-    sta d_end,y
-    sec
-    sbc lb
-    cmp #8
-    bcc :+
-    lda #8
-:   sta t0
-    tax
-    lda MASK,x
-    sta d_en,y
-    lda #0
-    ldx t0
-    beq :+
-    txa
-    clc
-    adc lb
-    tax
-    lda d_msb-1,x
-:   sta d_msb0,y
     rts
 
 ; ------------------------------------------------------------------ the raster IRQs
@@ -2195,135 +1721,16 @@ irq_bottom:
     lda p_d011
     sta $d011
     lda p_ptr
-    sta pp+1
-    lda disp
-    eor #1
-    sta disp
+    jsr mux_swap
     lda #0
     sta ready
     lda #1
     sta applied
     jmp @set
 @late:
-    lda counting
-    beq @set
-    inc missed
-    bne @set
-    inc missed+1
+    KIT_LATE
 @set:
-    ldy disp
-    lda d_end,y
-    sta nend
-    lda d_en,y
-    sta $d015
-    lda d_msb0,y
-    sta $d010
-    ldx #0
-    tya
-    beq :+
-    ldx #LIST
-:   stx nx
-    txa                     ; the first 8
-    clc
-    adc #8
-    sta it3
-@first:
-    cpx nend
-    beq @none
-    cpx it3
-    beq @more
-    txa
-    and #7
-    tay
-    lda d_ptr,x
-    sta (pp),y
-    lda d_col,x
-    sta $d027,y
-    tya
-    asl
-    tay
-    lda d_y,x
-    sta $d001,y
-    lda d_x,x
-    sta $d000,y
-    inx
-    jmp @first
-@more:
-    stx nx
-    lda d_e,x
-    sta $d012
-    lda #<irq_mux
-    sta $fffe
-    lda #>irq_mux
-    sta $ffff
-@none:
-    IRQ_OUT
-    lda #1
-    sta $d019
-    lda sa
-    ldx sx
-    ldy sy
-    rti
-
-; A sprite's turn: set it, and the ones after it that are due within a couple of lines.
-irq_mux:
-    sta sa
-    stx sx
-    sty sy
-    IRQ_IN
-@next:
-    ldx nx
-    txa
-    and #7
-    tay
-    lda d_ptr,x
-    sta (pp),y
-    lda d_col,x
-    sta $d027,y
-    tya
-    asl
-    tay
-    lda d_y,x
-    sta $d001,y
-    lda d_x,x
-    sta $d000,y
-    lda d_msb,x
-    sta $d010
-    lda $d012               ; too late? (its first line already begun)
-    cmp d_y,x
-    bcc :+
-    lda counting
-    beq :+
-    inc latespr
-    bne :+
-    inc latespr+1
-:   inx
-    stx nx
-    cpx nend
-    beq @last
-    lda d_e,x               ; the next: now, after a short wait, or by interrupt
-    sec
-    sbc $d012
-    bcc @next
-    beq @next
-    cmp #2
-    bcs @later
-:   lda $d012
-    cmp d_e,x
-    bcc :-
-    jmp @next
-@later:
-    lda d_e,x
-    sta $d012
-    jmp @out
-@last:
-    lda #BOTTOM
-    sta $d012
-    lda #<irq_bottom
-    sta $fffe
-    lda #>irq_bottom
-    sta $ffff
-@out:
+    jsr mux_bottom
     IRQ_OUT
     lda #1
     sta $d019
@@ -2340,16 +1747,6 @@ STARS_LO:    .byte <(CHARS_A + STAR * 8), <(CHARS_B + STAR * 8)
 STARS_HI:    .byte >(CHARS_A + STAR * 8), >(CHARS_B + STAR * 8)
 COPY_LO:     .lobytes copy_b_0, copy_b_1, copy_b_2, copy_b_3, copy_b_4, copy_b_5, copy_b_6, copy_a_0, copy_a_1, copy_a_2, copy_a_3, copy_a_4, copy_a_5, copy_a_6
 COPY_HI:     .hibytes copy_b_0, copy_b_1, copy_b_2, copy_b_3, copy_b_4, copy_b_5, copy_b_6, copy_a_0, copy_a_1, copy_a_2, copy_a_3, copy_a_4, copy_a_5, copy_a_6
-; by place in a list: its hardware sprite's bit in $D010, and the rest
-LBIT:
-.repeat 2 * LIST, I
-    .byte 1 << (I & 7)
-.endrepeat
-LNOTBIT:
-.repeat 2 * LIST, I
-    .byte $ff ^ (1 << (I & 7))
-.endrepeat
-MASK:        .byte 0, 1, 3, 7, 15, 31, 63, 127, 255
 DRONE_Y:     .byte <-21, <-45, <-69, <-93
 ; >> 4 of a signed 16-bit value: low byte SHR4[lo] | SHL4[hi], high byte ASR4[hi]
 .align 256
@@ -2376,10 +1773,6 @@ HIT_Y0L:     .lobytes HS_DRONE_Y0 + 1, HS_SWOOPER_Y0 + 1, HS_TURRET_Y0 + 1, HP_B
 HIT_Y0H:     .hibytes HS_DRONE_Y0 + 1, HS_SWOOPER_Y0 + 1, HS_TURRET_Y0 + 1, HP_BULLET_Y0 + 1, HP_DRONE_Y0 + 1, HP_SWOOPER_Y0 + 1
 HIT_YW:      .byte HS_DRONE_Y1 - HS_DRONE_Y0 - 1, HS_SWOOPER_Y1 - HS_SWOOPER_Y0 - 1, HS_TURRET_Y1 - HS_TURRET_Y0 - 1
              .byte HP_BULLET_Y1 - HP_BULLET_Y0 - 1, HP_DRONE_Y1 - HP_DRONE_Y0 - 1, HP_SWOOPER_Y1 - HP_SWOOPER_Y0 - 1
-.ifdef SCRIPT
-SCRIPT_DATA:
-.include "script.inc"
-.endif
 
 .include "copy.inc"
 

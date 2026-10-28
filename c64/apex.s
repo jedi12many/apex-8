@@ -8,9 +8,12 @@
 ;   show  the status panel below the view in the ROM font, through a raster split
 ;
 ; Controls: joystick in port 2 or W/S to walk, A/D or joystick left/right to turn.
-; Assemble with c64/build.js; build/gen.inc holds the generated tables and constants.
+; Assemble with c64/build.js; build/gen.inc holds the generated tables and constants. The BASIC line
+; and the scripts come from the kit (c64/kit/kit.inc); the engine keeps the KERNAL and its own IRQ
+; set-up, as the gradient's timing is tuned to them.
 
 .include "gen.inc"
+.include "kit.inc"
 
 SQ1LO    = $c000            ; quarter-square tables, built at start-up (512 entries each)
 SQ1HI    = $c200
@@ -71,8 +74,6 @@ xl:      .res 1
 xh:      .res 1
 yl:      .res 1
 yh:      .res 1
-sidx:    .res 1             ; SCRIPT builds only
-scount:  .res 1
 frames:  .res 1             ; BENCH builds only
 ticks0:  .res 1
 ticks_used: .res 1
@@ -93,15 +94,6 @@ uq:      .res 1             ; the quadrant of the angle whose sine gives u
 col:     .res 1             ; the joint pass's screen column
 HITL:    .res RAYS          ; per ray: the address of the tile it hit
 HITH:    .res RAYS          ; (high byte, plus bit 7 for a north/south face)
-
-.segment "LOADADDR"
-    .word $0801
-
-.segment "EXEHDR"           ; 10 SYS2061
-    .word @next, 10
-    .byte $9e, "2061", 0
-@next:
-    .word 0
 
 .segment "CODE"
 start:
@@ -184,11 +176,7 @@ start:
     sta $d025
     lda #SPR_MC2
     sta $d026
-.ifdef SCRIPT
-    lda #0
-    sta sidx
-    sta scount
-.endif
+    KIT_SCRIPT_START
 
     ; The first frame goes straight into screen A, then the split starts.
     jsr moved
@@ -1565,21 +1553,10 @@ input:
     rts
 .endif
 .ifdef SCRIPT
-    ldx sidx                ; scripted test: SCRIPT_IN[i] for SCRIPT_N[i] ticks, then nothing
-    lda SCRIPT_N,x
-    bne :+
+    jsr kit_script          ; scripted test: the script's inputs, then nothing
+    bcc :+
     lda #0
     sta inp
-    rts
-:   lda SCRIPT_IN,x
-    sta inp
-    inc scount
-    lda scount
-    cmp SCRIPT_N,x
-    bne :+
-    inc sidx
-    lda #0
-    sta scount
 :   rts
 .endif
     lda $dc00

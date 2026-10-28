@@ -3,22 +3,18 @@
 // Scripted builds also play the controls (turning, walking, sliding along and into walls) and must
 // end on the same frame as the same moves made here.
 //
-//   node test/c64-check.js <path to VICE folder> [--ntsc]
+//   node test/c64-check.js <path to VICE folder> [--ntsc | --model <name>]
 //
 // Needs cc65 (ca65, ld65) on the PATH.
-const fs = require('fs'), os = require('os'), path = require('path');
-const { findVice, screenshot, compare } = require('./vice-lib.js');
-const APEXSCII = require('../apexscii/apexscii.js');
+const path = require('path');
+const kit = require('./kit.js');
 const APEXRAY = require('../core/raycast.js');
 const VIEW = require('../c64/view.js');
 const { MOVE_SPEED, HEADING_STEP, WALL_RADIUS, OBJ_RADIUS } = require('../c64/gen.js');
 const { map, build } = require('../c64/build.js');
 const walk = require('../showcase/walk.js');
 
-const args = process.argv.slice(2);
-const viceDir = args.find(a => !a.startsWith('--'));
-const ntsc = args.includes('--ntsc');
-if (!viceDir) { console.error('usage: node test/c64-check.js <VICE folder> [--ntsc]'); process.exit(2); }
+const o = kit.options('node test/c64-check.js');
 
 // The engine's controls, tick by tick from the start: turn by HEADING_STEP, or step MOVE_SPEED along
 // the heading (backwards negates the step), each axis only if the square WALL_RADIUS around the
@@ -47,25 +43,19 @@ const SCRIPTS = [
   ['into a guard', [[8, 32], [1, 150]]],
 ];
 
-const { exe, rom } = findVice(viceDir);
-const shots = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-c64-'));
-const route = walk.path(), dir = path.join(shots, 'build');
+const route = walk.path(), dir = path.join(o.scratch, 'build');
+const frameCase = (name, pose, prg) => ({
+  name, cycles: 30000000, prg,
+  want: () => { const f = VIEW.frame(map, pose, 'mc', VIEW.statusLines(map, pose)); return f.rgba(o.rom, true); },
+});
 const cases = [
-  { name: 'start', pose: map.start, prg: () => build(map.start, dir) },
-  ...[60, 150, 200, 230, 290, 350, 480, 570, 700, 900].map(k => ({ name: `walk ${k}`, pose: route[k], prg: () => build(route[k], dir) })),
-  ...SCRIPTS.map(([name, script]) => ({ name, pose: play(script), prg: () => build(null, dir, { script }) })),
+  frameCase('start', map.start, () => build(map.start, dir)),
+  ...[60, 150, 200, 230, 290, 350, 480, 570, 700, 900].map(k => frameCase(`walk ${k}`, route[k], () => build(route[k], dir))),
+  ...SCRIPTS.map(([name, script]) => frameCase(name, play(script), () => build(null, dir, { script }))),
 ];
-let failures = 0;
-for (const c of cases) {
-  const prg = path.join(shots, `${c.name.replace(/\W+/g, '-')}.prg`), shot = prg.replace(/\.prg$/, '.png');
-  fs.writeFileSync(prg, c.prg());
-  const want = VIEW.frame(map, c.pose, 'mc', VIEW.statusLines(map, c.pose));
-  const label = c.name.padEnd(14);
-  if (!screenshot(exe, prg, shot, { ntsc, cycles: 30000000 })) { console.log(`${label} no screenshot (did VICE start?)`); failures++; continue; }
-  const r = compare(shot, want.rgba(rom, true), want.opts.border, APEXSCII.PALETTE);
-  console.log(`${label} ${r.bad ? `${r.bad} pixels differ, first at ${r.first}` : 'all 64000 pixels match'}${r.borderOk ? '' : ' · border colour WRONG'}`);
-  if (r.bad || !r.borderOk) failures++;
-}
-fs.rmSync(shots, { recursive: true, force: true });
-console.log(failures ? `FAIL: ${failures} frame(s) differ` : `PASS: the 6502 engine draws every frame exactly like the reference${ntsc ? ' (NTSC)' : ''}`);
-process.exitCode = failures ? 1 : 0;
+
+(async () => {
+  const border = VIEW.frame(map, map.start, 'mc', VIEW.statusLines(map, map.start)).opts.border;
+  const failures = await kit.checkFrames(o, cases, { border, width: 14 });
+  kit.finish(o, failures, 'the 6502 raycaster draws every frame exactly like the reference');
+})().catch(e => { console.error(e.message); process.exit(1); });

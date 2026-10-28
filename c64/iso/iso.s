@@ -10,9 +10,11 @@
 ; looked up; then the screens swap at the bottom of the frame together with the fine scroll.
 ;
 ; Controls: joystick in port 2, or W / A / S / D (two at once for diagonals); R restarts.
-; Assemble with c64/iso/build.js.
+; Assemble with c64/iso/build.js. The machine set-up, scripts and timing come from the kit
+; (c64/kit/kit.inc).
 
 .include "gen.inc"
+.include "kit.inc"
 
 SCREEN_A = $0400
 SCREEN_B = $3000
@@ -71,45 +73,14 @@ sx:      .res 1
 sy:      .res 1
 ready:   .res 1             ; 1: the next frame is worked out (p_*)
 applied: .res 1             ; 1: the IRQ showed it
-counting: .res 1            ; 1 while late frames count
-missed:  .res 2             ; frames shown twice because the next wasn't ready
-maxcyc:  .res 2             ; the most cycles a frame's work took (input to ready)
-sptr:    .res 2             ; SCRIPT builds: the next (input, ticks) pair
-scount:  .res 1
 p_d018:  .res 1             ; the next frame
 p_d016:  .res 1
 p_d011:  .res 1
 p_ptr:   .res 1
 
-.segment "LOADADDR"
-    .word $0801
-
-.segment "EXEHDR"           ; 10 SYS2061
-    .word @next, 10
-    .byte $9e, "2061", 0
-@next:
-    .word 0
-
 .segment "CODE"
 start:
-    sei
-    lda #$35                ; RAM in place of BASIC and the KERNAL; I/O stays
-    sta $01
-    lda #$7f                ; no CIA interrupts
-    sta $dc0d
-    sta $dd0d
-    lda $dc0d
-    lda $dd0d
-    lda #<nmi
-    sta $fffa
-    lda #>nmi
-    sta $fffb
-    lda #<irq
-    sta $fffe
-    lda #>irq
-    sta $ffff
-    lda #$0b                ; screen off while setting up
-    sta $d011
+    KIT_INIT irq
     lda #COL_BORDER
     sta $d020
     lda #COL_BG
@@ -148,25 +119,12 @@ start:
     sta $d026
     lda #SPR_COLOR
     sta $d027
-    lda #$ff                ; CIA 1 timer A times each frame's work
-    sta $dc04
-    sta $dc05
 
-    lda #0
-    sta counting
-    sta missed
-    sta missed+1
-    sta scount
     lda #1                  ; the first frame goes to screen A
     sta front
     lda #$80                ; (no screen drawn yet: a whole redraw)
     sta fcx
-.ifdef SCRIPT
-    lda #<SCRIPT_DATA
-    sta sptr
-    lda #>SCRIPT_DATA
-    sta sptr+1
-.endif
+    KIT_SCRIPT_START
     jsr reset_hero
     jsr view
     jsr apply
@@ -174,8 +132,7 @@ start:
     lda #IRQ_LINE + 2       ; start just after the bottom of a frame, so the first frame has a whole
 :   cmp $d012               ; frame's time like every other
     bne :-
-    lda #%00010001          ; and time it from there (the KERNAL left the timer on its own latch)
-    sta $dc0e
+    KIT_TIMER_START         ; and time it from there
     lda #0
     sta maxcyc
     sta maxcyc+1
@@ -190,53 +147,21 @@ start:
 main:
     lda applied             ; wait for the last frame to show
     beq main
-    lda #%00010001          ; time this frame's work
-    sta $dc0e
+    KIT_TIMER_START         ; time this frame's work
     lda #0
     sta applied
     jsr input
-    bcs script_done
-    jsr tick
+    bcc :+
+    jmp kit_park
+:   jsr tick
     jsr view
     jmp main
-
-; SCRIPT builds stop here when the script ends; the last frame stays on the screen.
-script_done:
-    lda #0
-    sta counting
-script_park:
-    jmp script_park
-
-nmi:
-    rti
 
 ; ------------------------------------------------------------------ controls
 ; inp from the joystick in port 2 and W / A / S / D; C set when a SCRIPT build's script has ended.
 input:
 .ifdef SCRIPT
-    ldy #1                  ; SCRIPT builds: input sptr[0] for sptr[1] ticks, pairs until a 0 count
-    lda (sptr),y
-    bne :+
-    sec
-    rts
-:   dey
-    lda (sptr),y
-    sta inp
-    inc scount
-    lda scount
-    iny
-    cmp (sptr),y
-    bne :+
-    lda #0
-    sta scount
-    lda sptr
-    clc
-    adc #2
-    sta sptr
-    bcc :+
-    inc sptr+1
-:   clc
-    rts
+    jmp kit_script
 .else
     lda #$ff                ; no keyboard row: $DC00 reads the joystick
     sta $dc00
@@ -967,11 +892,7 @@ irq:
     jsr apply
     jmp @done
 @late:
-    lda counting
-    beq @done
-    inc missed
-    bne @done
-    inc missed+1
+    KIT_LATE
 @done:
     lda #1
     sta $d019
@@ -1006,10 +927,6 @@ COL_LO:     .lobytes col_a_even, col_a_odd, col_b_even, col_b_odd
 COL_HI:     .hibytes col_a_even, col_a_odd, col_b_even, col_b_odd
 ; the phase by rn = (2n + 3) & 7
 PHASE:      .byte 3, 3, 0, 0, 1, 1, 2, 2
-.ifdef SCRIPT
-SCRIPT_DATA:
-.include "script.inc"
-.endif
 
 .segment "SPRITES"
     .incbin "sprites.bin"

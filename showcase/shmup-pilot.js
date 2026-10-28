@@ -3,6 +3,8 @@
 // and the C64 test.
 //
 // inputs(level, n) plays n ticks from the start and returns { inputs, game } after them.
+// sweep(n): n ticks of flying side to side with fire held, which gets the ship shot down now and then
+// (for testing explosions, coming back and blinking).
 const G = require('../core/shmup.js');
 
 const LOOK = 14, HOME_Y = 150;
@@ -57,4 +59,12 @@ function inputs(L, n) {
   return { inputs: list, game: g };
 }
 
-module.exports = { inputs, steer };
+const SWEEP = [[20, 90], [17, 40], [24, 170], [18, 60], [20, 90], [0, 30], [21, 50], [26, 80]];
+function sweep(n) {
+  const one = [], out = [];
+  for (const [bits, k] of SWEEP) for (let i = 0; i < k; i++) one.push(bits);
+  while (out.length < n) out.push(...one);
+  return out.slice(0, n);
+}
+
+module.exports = { inputs, steer, sweep };

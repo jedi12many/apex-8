@@ -113,10 +113,45 @@ function cyclesBetween(exe, prg, from, to, { ntsc = false } = {}) {
   });
 }
 
+// Runs prg in VICE until `at` first executes, then returns the `len` bytes of memory from `addr`.
+function readMemory(exe, prg, at, addr, len, { ntsc = false } = {}) {
+  const hex = a => a.toString(16).padStart(4, '0');
+  return new Promise((resolve, reject) => {
+    const vice = spawn(exe, ['-default', '-warp', '-sounddev', 'dummy', '+confirmonexit', '-autostartprgmode', '1',
+      ...(ntsc ? ['-ntsc'] : []), '-initbreak', '0x' + hex(at),
+      '-remotemonitor', '-remotemonitoraddress', 'ip4://127.0.0.1:6510', '-autostart', prg], { stdio: 'ignore' });
+    let out = '', sent = false;
+    const done = (err, v) => { clearTimeout(timer); vice.kill(); err ? reject(err) : resolve(v); };
+    const timer = setTimeout(() => done(new Error('VICE never reached the breakpoint')), 300000);
+    const connect = () => {
+      const s = net.connect(6510, '127.0.0.1');
+      s.on('error', () => setTimeout(connect, 300));
+      s.on('data', d => {
+        out += d;
+        if (!/\(C:\$[0-9a-f]{4}\) $/i.test(out)) return;
+        if (!sent) {
+          if (!out.toLowerCase().includes(`(c:$${hex(at)})`)) return;
+          sent = true; out = '';
+          s.write(`m ${hex(addr)} ${hex(addr + len - 1)}\n`);
+          return;
+        }
+        const bytes = [];
+        for (const line of out.split('\n')) {
+          const m = line.match(/^>C:([0-9a-f]{4})((?:\s+[0-9a-f]{2})+)/i);
+          if (m) bytes.push(...m[2].trim().split(/\s+/).map(h => parseInt(h, 16)));
+        }
+        s.write('quit\n');
+        setTimeout(() => done(null, bytes.slice(0, len)), 300);
+      });
+    };
+    setTimeout(connect, 500);
+  });
+}
+
 // A ld65 -Ln label file as { name: address }.
 function labels(file) {
   return Object.fromEntries(fs.readFileSync(file, 'utf8').split('\n').map(l => l.trim().split(/\s+/))
     .filter(p => p.length === 3).map(([, a, n]) => [n.replace(/^\./, ''), parseInt(a, 16)]));
 }
 
-module.exports = { findVice, screenshot, decodePng, compare, cyclesBetween, labels };
+module.exports = { findVice, screenshot, decodePng, compare, cyclesBetween, readMemory, labels };

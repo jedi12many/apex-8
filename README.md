@@ -208,6 +208,68 @@ node test/c64-bench.js "C:\path\to\GTK3VICE-3.10-win64"
 
 `test/c64-bench.js` builds a version that turns 4/1024 of a turn every frame for 64 frames: a quarter turn from the start, past the guards. Each frame turns the same amount however long it takes, so every build draws the same frames. `--walk` walks along the first corridor instead. It times them with the VICE monitor's stopwatch and prints cycles per frame and frames per second.
 
+## Platformer
+
+A side-scrolling platformer engine for the C64, with layers of parallax for depth, smooth scrolling at 50 frames a second and tight controls. A JavaScript reference defines every frame; the 6502 engine draws exactly the same frames, checked pixel for pixel in VICE.
+
+To play on a C64 or in VICE, load `c64/out/side.prg` with `LOAD"*",8,1`, then `RUN`. Use a joystick in port 2 (fire or up to jump), or A and D to run and W, Z or Space to jump; R starts again. `showcase/out/side-c64.mp4` is a recording of it running in VICE.
+
+| File | What it is |
+|------|------------|
+| `core/platform.js` | Levels, player physics and the camera, in integer maths |
+| `c64/side/view.js` | What the C64 screen shows each frame |
+| `levels/side/w1.txt` | Green Hills, the first level |
+| `web/side.html` | The reference, playable in a browser (`web/bundle.js` makes one-file versions in `web/out/`) |
+| `c64/side/side.s` | The 6502 engine (ca65) |
+| `c64/side/gen.js`, `build.js` | Turn the reference into the engine's tables, characters, sprites and drawing code, and assemble it |
+| `test/side-check.js` | Plays the level in VICE and checks every pixel of the C64's frames against the reference, and that no frame is late |
+| `showcase/side-pilot.js` | An autopilot that runs the level, used by the videos and the test |
+| `showcase/side.js` | The reference's autopilot run, as `showcase/out/side-run.mp4` |
+| `showcase/side-c64-video.js` | Records the C64 engine's autopilot run in VICE, as `showcase/out/side-c64.mp4` |
+
+**Screen.** Multicolor characters, 38 columns, three bands, each with its own hardware fine scroll and colours set by raster splits:
+
+| Rows | Layer | Speed |
+|------|-------|-------|
+| 0–4 | Mountains: lit rock, rock in shadow, snow | 1/4 |
+| 5–8 | Hills | 1/2 |
+| 9–24 | The level, in APEXSCII side-oblique blocks (forest theme): grass tops and earth sides receding up-right | 1 |
+| 9–24 | A forest behind the level, in its empty cells | 3/4 |
+
+The forest is four characters per row pattern, redrawn each frame with the pattern shifted; it moves in 2-pixel steps, as multicolor pixels are 2 wide. Colour RAM never changes, so it never has to scroll. The level band's background starts as the hills' green behind the treetops and turns to sky a few lines down, behind solid canopy. The whole look takes 85 of the 212 free characters.
+
+**Levels** are text, one character per 16×16 block: `#` solid, `.` empty, `P` the start. The engine draws each block as a 2×2-character front with its top and side one character up and right, choosing APEXSCII's glyphs for every cell from which faces cover its two halves.
+
+**Physics** runs once per 50 Hz frame, in 1/16 pixel:
+- running: speeds up and slows down rather than starting and stopping dead
+- jumping: up to 3.5 blocks, lower when the button is let go early
+- grace: a jump still works for 5 frames after running off a ledge, and a jump pressed up to 6 frames before landing happens on landing
+- collision: the player box is 12×20 pixels, checked against blocks one axis at a time
+- camera: it follows the player within a dead zone
+
+**The C64 engine.** Each frame it reads the controls, moves the player one tick and moves the camera, all in the reference's integer steps, then works out the next frame for the bottom-of-frame IRQ to show:
+- *two screens*: when a band's first column changes, the engine redraws that band from its source into the screen that isn't showing, then swaps. Each source row is a page, so a band redraws with one load and one store per character
+- *raster splits*: the bottom IRQ shows the new screen and sets the mountains' scroll and colours, the sprite and the forest's characters. Three more IRQs set the hills' scroll, the level's scroll, and the sky behind the treetops. The bands' colours change in their ground lines, which show only colour RAM, so only the scroll has to land in the narrow border window. Writes from 46 to 60 cycles after the raster line starts pass every test on PAL and NTSC, and the engine uses 53
+- *the forest*: 20 characters are rewritten from a table only when its shift changes (16 shifts)
+- *memory*: BASIC and the KERNAL are switched out, and the IRQs use the hardware vector
+
+The level must be 8 blocks high and at most 127 wide, so a row of characters, plus the forest past its end, fits in a page. Green Hills is 127 wide.
+
+| | PAL | NTSC |
+|---|---|---|
+| Frames late in the 26 s autopilot run | 0 | 0 |
+| Slowest frame, from the bottom of one frame to the next being ready | 64% of a frame | 76% |
+
+NTSC runs 60 ticks a second, so the game plays 20% faster there.
+
+```bash
+node showcase/side.js
+node web/bundle.js
+node c64/side/build.js
+node test/side-check.js "C:\path\to\GTK3VICE-3.10-win64"
+node showcase/side-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
+```
+
 ## Roadmap
 
 The raycaster is a renderer so far. These are what a game built on it would need, in a sensible order. None is planned yet.

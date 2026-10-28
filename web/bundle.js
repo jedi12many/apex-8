@@ -3,7 +3,8 @@
 //   web/out/<name>-play.html      a whole page, to open anywhere
 //   web/out/<name>-artifact.html  the same body for publishing as a claude.ai artifact (no html/head/body
 //                                 tags: the viewer adds its own, so the title, meta and styles go first)
-// for side.html (the platformer, Green Hills) and iso.html (the isometric dungeon, the Crypt).
+// for side.html (the platformer, Green Hills), iso.html (the isometric dungeon, the Crypt) and shmup.html
+// (the shoot-'em-up, the Dreadnought).
 //
 //   node web/bundle.js
 const fs = require('fs'), path = require('path');
@@ -36,3 +37,4 @@ function bundle(page, levelFile, name) {
 
 bundle('side.html', 'levels/side/w1.txt', 'side');
 bundle('iso.html', 'levels/iso/d1.txt', 'iso');
+bundle('shmup.html', 'levels/shmup/s1.txt', 'shmup');

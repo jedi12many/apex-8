@@ -324,6 +324,44 @@ node test/iso-check.js "C:\path\to\GTK3VICE-3.10-win64"
 node showcase/iso-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
+## Shoot-'em-up
+
+A vertical-scrolling shooter for the C64, over the hull of a space dreadnought. Everything that moves is a hardware sprite: the ship, its shots, the enemies, their bullets and the explosions. That is more than the VIC's eight, so a sprite multiplexer shares them out down the screen. So far this is the JavaScript reference, which defines every frame. The 6502 engine comes next, to be checked against it pixel for pixel.
+
+To play the reference, open `web/shmup.html` from a local server, or `web/out/shmup-play.html` directly. Use the arrow keys or W, A, S and D to fly, and Space, Ctrl or K to fire (hold it for autofire). R starts again.
+
+| File | What it is |
+|------|------------|
+| `core/shmup.js` | The level, the ship, its shots, the enemies and their bullets, in integer maths with fixed slots |
+| `c64/shmup/view.js` | What the C64 screen shows each frame, including the multiplexer's rule |
+| `levels/shmup/s1.txt` | The Dreadnought: 120 rows of 20 tiles, two hull sections with a trench, turrets, and waves of drones and swoopers |
+| `web/shmup.html` | The reference, playable in a browser |
+| `showcase/shmup-pilot.js` | An autopilot that lines up under enemies and sidesteps what's coming |
+| `showcase/shmup.js` | The autopilot's run, as `showcase/out/shmup-run.mp4` |
+
+**Screen.** Multicolor characters, 40 columns by 24 rows. The VIC's vertical fine scroll moves the screen down one line a frame. Tiles are 16×16 pixels (2×2 characters), each drawn from its own kind and its four neighbours:
+- hull plates with lit top and left rims, shaded rims and seams, and rivets
+- vents, lamps and turret bases
+- the hull's front face, hanging below its edge over space
+- stars
+
+The Dreadnought needs 90 characters. Colour RAM is one value for the whole screen, so scrolling never touches it.
+
+**Sprites and the multiplexer.** The objects to show are sorted by Y, and the n-th one shown gets hardware sprite n mod 8. An object is shown only if it starts at least 24 lines below the last object on its hardware sprite. That leaves time for the VIC to finish the previous object and for an interrupt to set up the next. Otherwise the object is left out for that frame. Where sprites overlap, the lower hardware sprite is in front, as on the VIC. The autopilot's run peaks at 14 sprites on screen at once, and none is dropped.
+
+**The game.** One tick per 50 Hz frame:
+- *the ship*: 2 pixels a frame in eight directions, with a twin shot every 8 frames while fire is held
+- *drones*: arrive in columns of four and snake down the screen
+- *swoopers*: dive, fire one aimed bullet, then turn back up and away
+- *turrets*: ride the hull and fire every 64 frames, taking three hits to destroy
+
+Bullets aim at one of 16 directions, chosen by integer comparisons. A hit costs a ship. You come back after a moment and are untouchable for 120 frames, blinking. The level wraps round.
+
+```bash
+node showcase/shmup.js
+node web/bundle.js
+```
+
 ## Roadmap
 
 The raycaster is a renderer so far. These are what a game built on it would need, in a sensible order. None is planned yet.

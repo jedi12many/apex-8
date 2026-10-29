@@ -342,61 +342,80 @@ irq_top:
 ;
 ; During the walk, Y is the map column and mptr the start of the map row, so a step in x is one
 ; INY or DEY (patched in per ray), and a step in y adds +-32 to mptr (also patched in).
-cast:
-    lda #$ff                ; set up the first ray's quadrant afresh
-    sta lastq
-    jsr reuse
-    ldx #0                  ; the even rays, then the last
-:   jsr ray_x
-    inx
-    inx
-    cpx #RAYS
-    bcc :-
-    ldx #RAYS - 1
-    jsr ray_x
-    ldx #1                  ; then each odd ray: the mean of its neighbours when they hit the same face
-@odd:
-    lda HITL-1,x
-    cmp HITL+1,x
-    bne @full
-    lda HITH-1,x
-    cmp HITH+1,x
-    bne @full
+; Ray X from rays X - d and X + d: their mean when they hit the same face, otherwise cast.
+.macro FILL d
+    .local full, next
+    lda HITL-d,x
+    cmp HITL+d,x
+    bne full
+    lda HITH-d,x
+    cmp HITH+d,x
+    bne full
     clc                     ; j + 41 * shadeB: (left + right) >> 1, as both have the same shade
-    lda RJ-1,x
-    adc RJ+1,x
+    lda RJ-d,x
+    adc RJ+d,x
     lsr
     sta RJ,x
     clc                     ; u: the mean
-    lda U-1,x
-    adc U+1,x
+    lda U-d,x
+    adc U+d,x
     ror
     sta U,x
-    lda HITL-1,x            ; the same face, for the joints
+    lda HITL-d,x            ; the same face, for the joints
     sta HITL,x
-    lda HITH-1,x
+    lda HITH-d,x
     sta HITH,x
     lda #0                  ; nothing to keep for turning
     sta CASTF,x
     clc                     ; and the distance, for the sprites
-    lda PERPLO-1,x
-    adc PERPLO+1,x
+    lda PERPLO-d,x
+    adc PERPLO+d,x
     sta t0
-    lda PERPHI-1,x
-    adc PERPHI+1,x
+    lda PERPHI-d,x
+    adc PERPHI+d,x
     ror
     sta PERPHI,x
     lda t0
     ror
     sta PERPLO,x
-    jmp @next
-@full:
+    jmp next
+full:
     jsr ray_x
-@next:
+next:
+.endmacro
+
+cast:
+    lda #$ff                ; set up the first ray's quadrant afresh
+    sta lastq
+    jsr reuse
+    ldx #0                  ; every fourth ray, then the last two
+:   jsr ray_x
+    inx
+    inx
+    inx
+    inx
+    cpx #RAYS
+    bcc :-
+    ldx #RAYS - 2
+    jsr ray_x
+    ldx #RAYS - 1
+    jsr ray_x
+    ldx #2                  ; then each ray 2 on from a multiple of 4, from the rays 2 either side
+cast_mid:
+    FILL 2
+    inx
+    inx
+    inx
+    inx
+    cpx #RAYS - 2
+    bcc cast_mid
+    ldx #1                  ; then each odd ray, from its neighbours
+cast_odd:
+    FILL 1
     inx
     inx
     cpx #RAYS - 1
-    bcc @odd
+    bcc cast_odd
     ; fall through
 
 ; The joints, as c64/view.js finds them: ray X has one when a multiple of 64 lies between its u and

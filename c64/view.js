@@ -57,7 +57,7 @@ const TEX_NEAR = 0;
 // Rays are 2 angle units apart (a 56.25 degree view), so a turn (4 units a tick) shifts them by 2 and
 // the engine keeps the ones it has. Scale 160 kept walls and objects in proportion at that width, but
 // was slower (further fog, more sprites) and looked no better than 120.
-const caster = APEXRAY.makeCaster({ rays: 80, angleStep: 2, scale: 120, maxH: HALF_ROWS * 8, even: true, interpolate: true, fog: DARK, uNear: TEX_NEAR - 4 });
+const caster = APEXRAY.makeCaster({ rays: 80, angleStep: 2, scale: 120, maxH: HALF_ROWS * 8, even: true, interpolate: 4, fog: DARK, uNear: TEX_NEAR - 4 });
 
 // Bricks (multicolor only). A wall of half height h = 2j is 4 courses of bricks, mirrored about the
 // horizon (80) so the bottom half is the top half upside down: mortar lines at 80 - j and 80 + j, and

@@ -14,6 +14,9 @@
  * With opts.interpolate, only the even rays (and the last) are cast. An odd ray whose neighbours hit
  * the same face of the same tile takes the mean of their heights and distances instead: on a flat wall
  * 1/distance, and so the wall height, changes linearly across the screen. Any other odd ray is cast.
+ * With opts.interpolate 4 (for a ray count that is a multiple of 4), only every fourth ray and the last
+ * two are cast at first; each ray 2 on from a multiple of 4 is filled the same way from the rays 2 either
+ * side, or cast, and then the odd rays as above.
  *
  * With opts.fog, a wall whose half height would be fog pixels or less is too far away to see: its ray
  * returns halfH 0, dist 0xFFFF and no tile. FOG_PERP is the nearest distance that happens at, and
@@ -46,7 +49,7 @@
 
   // opts: rays (columns), fov (degrees), scale (half-wall height in pixels at one tile), maxH (half the
   // view height in pixels), even (round half-heights down to even pixels), maxSteps (DDA limit),
-  // interpolate (cast every other ray where it can, see above), fog (see above; 0 for none), uNear (u
+  // interpolate (true: cast every other ray where it can; 4: every fourth; see above), fog (see above; 0 for none), uNear (u
 // is 0 for rays whose halfH / 2 is less).
   function makeCaster(opts = {}) {
     const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64, interpolate: false, fog: 0, uNear: 0 }, opts);
@@ -96,16 +99,25 @@
         for (let c = 0; c < o.rays; c++) ray(c);
         return out;
       }
-      for (let c = 0; c < o.rays; c += 2) ray(c);
-      if (!(o.rays & 1)) ray(o.rays - 1);
-      for (let c = 1; c < o.rays - 1; c += 2) {
-        const l = out[c - 1], r = out[c + 1];
-        if (l.mapX !== r.mapX || l.mapY !== r.mapY || l.side !== r.side) { ray(c); continue; }
+      // Ray c from rays c - d and c + d when they hit the same face, or cast.
+      const fill = (c, d) => {
+        const l = out[c - d], r = out[c + d];
+        if (l.mapX !== r.mapX || l.mapY !== r.mapY || l.side !== r.side) { ray(c); return; }
         let halfH = (l.halfH + r.halfH) >> 1;
         if (o.even) halfH &= ~1;
         const u = (l.u + r.u) >> 1;
         out[c] = { halfH, side: l.side, tile: l.tile, dist: (l.dist + r.dist) >> 1, mapX: l.mapX, mapY: l.mapY, u, interpolated: true };
+      };
+      if (o.interpolate === 4) {
+        for (let c = 0; c < o.rays; c += 4) ray(c);
+        ray(o.rays - 2);
+        ray(o.rays - 1);
+        for (let c = 2; c < o.rays - 2; c += 4) fill(c, 2);
+      } else {
+        for (let c = 0; c < o.rays; c += 2) ray(c);
+        if (!(o.rays & 1)) ray(o.rays - 1);
       }
+      for (let c = 1; c < o.rays - 1; c += 2) fill(c, 1);
       return out;
     }
 

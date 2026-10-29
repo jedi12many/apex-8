@@ -23,7 +23,8 @@
  *     the title. Fire (pressed, not held) on the title starts a game
  *
  * parse(text) reads a map; game(M) makes a game on its title; tick(M, g, input) plays one frame and
- * lists what happened in g.events (for the sound).
+ * lists what happened in g.events (for the sound); music(g) is whether the music plays: not while the
+ * boss is up.
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./iso.js'));
@@ -52,6 +53,7 @@
     hit: 208,                              // a bullet this close (each axis) hits it
     spitEvery: 72, openFor: 16, spit: { speed: 40, life: 90, hit: 80 },
     graspEvery: 96, warn: 32, strike: 24, grasp: 112,
+    moanEvery: 150, moanAt: 110,           // a moan (for the sound) every moanEvery ticks, at moanAt
   };
   // AIM[d]: a step of the spit's speed in each of 16 directions, d 0 = +x, counting toward +y.
   const AIM = Array.from({ length: 16 }, (_, d) => [Math.round(Math.cos(d * Math.PI / 8) * BOSS.spit.speed),
@@ -196,6 +198,7 @@
             g.events.push('spit');
           }
         }
+        if (B.t % BOSS.moanEvery === BOSS.moanAt) g.events.push('moan');
         if (B.t % BOSS.graspEvery === BOSS.graspEvery / 2 && !g.grasp.on) {
           Object.assign(g.grasp, { on: true, x: h.x, y: h.y, t: 0 });
           g.events.push('crack');
@@ -247,6 +250,8 @@
     return g;
   }
 
-  return { TITLE, PLAY, WIN, OVER, DROWNED, SPAWN, HEARTS, INVULN, END_FOR, SLOTS, COOL, BULLET, WAKE, HP, SCORE,
+  const music = g => g.boss.state === SLEEP || g.boss.state === GONE;
+
+  return { music, TITLE, PLAY, WIN, OVER, DROWNED, SPAWN, HEARTS, INVULN, END_FOR, SLOTS, COOL, BULLET, WAKE, HP, SCORE,
     RADIUS, DYING, HIT, TOUCH, SLEEP, RISE, FIGHT, SINK, GONE, BOSS, AIM, aim, parse, game, tick };
 });

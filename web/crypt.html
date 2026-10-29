@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>APEX Drowned Crypt</title>
+<title>The Drowned Crypt</title>
 <style>
   /* One look on purpose: a C64 screen in a dark room, whatever the viewer's theme. */
   :root { --bg: #15131c; --fg: #e4e1ee; --dim: #9893ad; --key: #2c2838; --key-on: #4a4460; color-scheme: dark; }
@@ -35,6 +35,8 @@
 (async function () {
   const text = window.LEVEL_TEXT || await (await fetch('../levels/iso/c1.txt')).text();
   const map = APEXCRYPT.parse(text);
+  const kla = await fetch('../art/title/title.kla').then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
+  if (kla) APEXCRYPTVIEW.setTitle(new Uint8Array(kla));
   let game = APEXCRYPT.game(map);
   const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');
   const image = ctx.createImageData(320, 200);

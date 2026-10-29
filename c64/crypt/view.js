@@ -127,10 +127,28 @@
   const PAL = IV.PAL;
   // A map with the crypt's drawn tiles (set once, before the iso view prepares its characters).
   const withTiles = M => Object.assign(M, { art: M.art || TILES });
+  // The title picture (art/title/title.kla, a multicolor bitmap as Koala Painter keeps it:
+  // the bitmap, the screen's colours, colour RAM, the background), once given: on the title the screen
+  // shows it instead of the dungeon.
+  let titlePixels = null;
+  function setTitle(kla) {
+    const k = kla[0] === 0x00 && kla[1] === 0x60 && kla.length === 10003 ? kla.subarray(2) : kla;
+    titlePixels = new Uint8ClampedArray(320 * 200 * 4);
+    for (let y = 0; y < 200; y++) for (let x = 0; x < 160; x++) {
+      const cell = (y >> 3) * 40 + (x >> 2), v = (k[cell * 8 + (y & 7)] >> (6 - 2 * (x & 3))) & 3;
+      const c = PAL[[k[10000], k[8000 + cell] >> 4, k[8000 + cell] & 15, k[9000 + cell] & 15][v]];
+      for (const dx of [0, 1]) titlePixels.set([...c, 255], (y * 320 + 2 * x + dx) * 4);
+    }
+  }
   function frame(M, g) {
     withTiles(M);
     const out = new Uint8ClampedArray(320 * 200 * 4);
     const put = (x, y, c) => { if (x < 0 || x >= 320 || y < 0 || y >= 200) return; const i = (y * 320 + x) * 4; out[i] = c[0]; out[i + 1] = c[1]; out[i + 2] = c[2]; out[i + 3] = 255; };
+    if (g.mode === G.TITLE && titlePixels) {
+      out.set(titlePixels);
+      for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++) if (x < 7 || x >= 311 || y < 4 || y >= 196) put(x, y, PAL[IV.COLORS.border]);
+      return { pixels: out, scroll: null, sprites: [] };
+    }
     const sc = IV.background(M, g.hero, put);
     const sprites = multiplex(objects(g));
     for (const s of [...sprites].reverse()) {
@@ -172,5 +190,5 @@
     return { pixels: out, scroll: sc, sprites };
   }
 
-  return { SPRITE, COLOR, GAP, BAR_LINE, withTiles, FRAMES, FRAME_NAMES, FONT, TEXT, lightStep, onScreen, objects, multiplex, frame };
+  return { SPRITE, COLOR, GAP, BAR_LINE, withTiles, setTitle, FRAMES, FRAME_NAMES, FONT, TEXT, lightStep, onScreen, objects, multiplex, frame };
 });

@@ -11,7 +11,6 @@ function sidgen(c, dir) {
   const table = (name, values) => out.push(`${name}: .byte ${values.length ? values.map(b).join(',') : '0'}`);
   if (c.ins.length > 32 || c.patterns.length > 64 || c.effects.length > 32) throw new Error('too many instruments, patterns or effects');
   out.push(`SND_SPEED = ${c.speed}`, `SND_ORDER_LEN = ${c.order[0].length}`, `SND_EFFECTS = ${c.effects.length}`,
-    `SFX_VOICE = ${c.effectsVoice}`, `SFX_BASE = ${7 * c.effectsVoice}`,
     `SND_RES = ${c.filter.res}`, `SND_FMODE = ${c.filter.mode}`, `SND_FPERIOD = ${c.filter.cut.length}`);
   c.effNames.forEach((n, i) => out.push(`SFX_${n.replace(/[A-Z]/g, m => '_' + m).toUpperCase()} = ${i}`));
   out.push('.segment "RODATA"');
@@ -52,12 +51,13 @@ function sidgen(c, dir) {
   out.push(`SND_PAT_HI: .hibytes ${c.patterns.map((_, k) => `SND_PAT_${k}`).join(',')}`);
   // the order: per position, the three voices' patterns
   table('SND_ORDER', c.order[0].flatMap((_, i) => [c.order[0][i], c.order[1][i], c.order[2][i]]));
-  // effects: their priority and steps (the first, and one past the last, in the step tables)
+  // effects: their priority, voice and steps (the first, and one past the last, in the step tables)
   const steps = c.effects.flatMap(e => e.steps);
   if (steps.length > 255) throw new Error('too many effect steps');
   let at = 0;
   const first = c.effects.map(e => { const f = at; at += e.steps.length; return f; });
   table('SFX_PRI', c.effects.map(e => e.priority));
+  table('SFX_V', c.effects.map(e => e.voice));
   table('SFX_FIRST', first);
   table('SFX_END', c.effects.map((e, i) => first[i] + e.steps.length));
   table('ST_CTRL', steps.map(s => s.ctrl));

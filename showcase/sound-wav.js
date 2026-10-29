@@ -1,26 +1,29 @@
-// Records the C64 sound player (c64/sound) in VICE: the Dreadnought's music, with each effect played
-// once near the end, as a WAV file. VICE runs at its real speed, so it takes as long as the music.
+// Records the C64 sound player (c64/sound) in VICE: a song's music, with each effect played once near
+// the end (the music off from the first that plays on a voice of its own, as in a boss fight), as a
+// WAV file. VICE runs at its real speed, so it takes as long as the music.
 //
-//   node showcase/sound-wav.js <path to VICE folder> [--seconds 34]
+//   node showcase/sound-wav.js <path to VICE folder> [--song shmup] [--seconds 34]
 //
-// Writes showcase/out/shmup-music.wav, and from it (from the music's first sound) shmup-music.mp3.
+// Writes showcase/out/<song>-music.wav, and from it (from the music's first sound) <song>-music.mp3.
 // Needs cc65, VICE and ffmpeg.
 const fs = require('fs'), os = require('os'), path = require('path'), { spawnSync } = require('child_process');
 const { findVice } = require('../test/vice-lib.js');
-const { song, build, runs } = require('../c64/sound/build.js');
+const { songOf, build, runs } = require('../c64/sound/build.js');
 
-const args = process.argv.slice(2), secArg = args.indexOf('--seconds');
-const viceDir = args.find((a, i) => !a.startsWith('--') && (secArg < 0 || i !== secArg + 1));
-const seconds = secArg >= 0 ? +args[secArg + 1] : 34;
-if (!viceDir) { console.error('usage: node showcase/sound-wav.js <VICE folder> [--seconds 34]'); process.exit(2); }
+const args = process.argv.slice(2), opt = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+const viceDir = args.find((a, i) => !a.startsWith('--') && !(i > 0 && args[i - 1].startsWith('--')));
+const name = opt('--song') || 'shmup', seconds = +(opt('--seconds') || 34), song = songOf(name);
+if (!viceDir) { console.error('usage: node showcase/sound-wav.js <VICE folder> [--song shmup] [--seconds 34]'); process.exit(2); }
 
 const { exe } = findVice(viceDir);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-wav-'));
-// the music, then each effect in turn over its last seconds
+// the music, then each effect in turn over its last seconds (an input: the effect + 1, bit 7 the music off)
 const ticks = seconds * 50, inputs = Array(ticks).fill(0);
-song.effects.forEach((_, e) => { inputs[ticks - 50 * (song.effects.length - e) - 40] = 1 << e; });
-build(dir, { script: runs(inputs) });
-const out = path.join(__dirname, 'out', 'shmup-music.wav');
+const quietFrom = song.effects.findIndex(e => e.voice !== song.effectsVoice);
+song.effects.forEach((_, e) => { inputs[ticks - 50 * (song.effects.length - e) - 40] = e + 1; });
+if (quietFrom >= 0) for (let t = ticks - 50 * (song.effects.length - quietFrom) - 40; t < ticks; t++) inputs[t] |= 128;
+build(dir, { song: name, script: runs(inputs) });
+const out = path.join(__dirname, 'out', `${name}-music.wav`);
 fs.mkdirSync(path.dirname(out), { recursive: true });
 try { fs.unlinkSync(out); } catch (e) { /* not there yet */ }
 spawnSync(exe, ['-default', '-sound', '-sounddev', 'dump', '-soundarg', path.join(dir, 'sid.dump'), '-soundrecdev', 'wav', '-soundrecarg', out, '+confirmonexit',

@@ -145,10 +145,12 @@ function readMemory(exe, prg, at, addr, len, { ntsc = false, model } = {}) {
           s.write(`m ${hex(addr)} ${hex(addr + len - 1)}\n`);
           return;
         }
+        // each line: its address, up to 16 bytes, then the same as text (which can look like more
+        // bytes, so a line gives only the bytes up to the end of the range)
         const bytes = [];
         for (const line of out.split('\n')) {
           const m = line.match(/^>C:([0-9a-f]{4})((?:\s+[0-9a-f]{2})+)/i);
-          if (m) bytes.push(...m[2].trim().split(/\s+/).map(h => parseInt(h, 16)));
+          if (m) bytes.push(...m[2].trim().split(/\s+/).slice(0, Math.min(16, addr + len - parseInt(m[1], 16))).map(h => parseInt(h, 16)));
         }
         s.write('quit\n');
         setTimeout(() => done(null, bytes.slice(0, len)), 300);

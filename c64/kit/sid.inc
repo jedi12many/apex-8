@@ -1,13 +1,15 @@
-; APEX C64 kit: the SID driver. Music on three voices and sound effects on the third, following the
-; reference (core/sound.js) step for step, so it sets exactly the same SID registers every tick.
+; APEX C64 kit: the SID driver. Music on three voices and sound effects over it, each on its own
+; voice, following the reference (core/sound.js) step for step, so it sets exactly the same SID
+; registers every tick.
 ; Include it after kit.inc, with the song's tables (sound.inc, from c64/kit/sidgen.js) on the
 ; include path.
 ;
-;   snd_init        silence, and the song from its start
+;   snd_init        silence, and the song from its start, the music on
+;   snd_music       0 turns the music off (the song stands still, every voice released), else on
 ;
-; Effects play on voice SFX_VOICE (the song's effectsVoice); the filter's cutoff sweeps by a table.
-;   snd_fx          starts effect A (SFX_<NAME> in sound.inc), if nothing is playing or nothing with a
-;                   higher priority. Keeps X and Y
+; An effect plays on its voice (SFX_V); the filter's cutoff sweeps by a table.
+;   snd_fx          starts effect A (SFX_<NAME> in sound.inc), if nothing is playing on its voice or
+;                   nothing with a higher priority. Keeps X and Y
 ;   snd_tick        one tick: the next row, each voice, the effect, into the register image snd_img.
 ;                   SCRIPT builds also fold the image into the checksum snd_sum, as the tests do
 ;                   (unless SND_NOSUM: timing builds leave it out, as the game itself does)
@@ -30,11 +32,12 @@ v_pwh:     .res 3
 v_tpos:    .res 3           ; per voice: the step in its instrument's table
 snd_ft:    .res 1           ; the filter sweep's tick
 snd_route: .res 1           ; this tick's voices through the filter
-sfx:       .res 1           ; the effect playing ($ff: none), its step, its ticks left in the step
-sfx_step:  .res 1           ; and its frequency
-sfx_left:  .res 1
-sfx_fl:    .res 1
-sfx_fh:    .res 1
+snd_music: .res 1           ; 0: the music off
+sfx:       .res 3           ; per voice: the effect playing ($ff: none), its step, its ticks left in
+sfx_step:  .res 3           ; the step and its frequency
+sfx_left:  .res 3
+sfx_fl:    .res 3
+sfx_fh:    .res 3
 snd_sum:   .res 2           ; SCRIPT builds: the checksum of every tick's image
 snd_t:     .res 1
 snd_b:     .res 1           ; snd_voice: the voice's registers in the image, and its values
@@ -42,6 +45,10 @@ snd_w:     .res 1
 snd_ad:    .res 1
 snd_sr:    .res 1
 snd_fl:    .res 1
+snd_pl:    .res 1           ; an effect's pulse width, while its voice's registers are set
+snd_ph:    .res 1
+snd_e:     .res 1
+snd_ty:    .res 1
 
 .segment "ZEROPAGE"
 snd_pp:    .res 2           ; a pattern
@@ -71,40 +78,55 @@ snd_init:
     sta v_arp,x
     sta v_pwl,x
     sta v_pwh,x
+    lda #$ff
+    sta sfx,x
     dex
     bpl :-
-    lda #$ff
-    sta sfx
+    lda #1
+    sta snd_music
     rts
 
 snd_fx:
     stx snd_t
-    ldx sfx
+    sty snd_ty
+    tay                     ; Y: the effect, X: its voice
+    ldx SFX_V,y
+    lda sfx,x
     bmi @start
-    pha
-    tax
-    lda SFX_PRI,x           ; (A's priority)
-    ldx sfx
-    cmp SFX_PRI,x
-    pla
-    bcc @done               ; lower than the one playing
+    sty snd_e
+    tay
+    lda SFX_PRI,y           ; the playing one's priority, against the new one's
+    ldy snd_e
+    cmp SFX_PRI,y
+    beq @start
+    bcs @done               ; higher than the new one
 @start:
-    sta sfx
-    tax
-    lda SFX_FIRST,x
-    sta sfx_step
-    tax
-    lda ST_TICKS,x
-    sta sfx_left
-    lda ST_FL,x
-    sta sfx_fl
-    lda ST_FH,x
-    sta sfx_fh
+    tya
+    sta sfx,x
+    lda SFX_FIRST,y
+    sta sfx_step,x
+    tay
+    lda ST_TICKS,y
+    sta sfx_left,x
+    lda ST_FL,y
+    sta sfx_fl,x
+    lda ST_FH,y
+    sta sfx_fh,x
 @done:
     ldx snd_t
+    ldy snd_ty
     rts
 
 snd_tick:
+    lda snd_music
+    bne @on
+    lda #2                  ; the music off: every voice released, the song standing still
+    ldx #2
+:   sta v_phase,x
+    dex
+    bpl :-
+    jmp @still
+@on:
     ; a new row on every voice
     lda snd_timer
     beq :+
@@ -174,54 +196,79 @@ snd_tick:
     sta snd_timer
 @voices:
     dec snd_timer
+@still:
     lda #0
     sta snd_route
     ldx #2                  ; each voice's registers, then its state moves on
 :   jsr snd_voice
     dex
     bpl :-
-    ; an effect on voice 3
-    ldx sfx
-    bmi @fixed
-    ldx sfx_step
-    lda sfx_fl
-    sta snd_img+SFX_BASE
-    lda sfx_fh
-    sta snd_img+SFX_BASE+1
-    lda ST_PWL,x
-    sta snd_img+SFX_BASE+2
-    lda ST_PWH,x
-    sta snd_img+SFX_BASE+3
-    lda ST_CTRL,x
-    sta snd_img+SFX_BASE+4
-    lda ST_AD,x
-    sta snd_img+SFX_BASE+5
-    lda ST_SR,x
-    sta snd_img+SFX_BASE+6
-    lda sfx_fl              ; it slides
+    ; the effects, each on its voice
+    ldx #2
+@fxv:
+    lda sfx,x
+    bpl :+
+    jmp @fxnext
+:   ldy V_BASE,x
+    sty snd_b
+    lda sfx_fl,x
+    sta snd_img,y
+    lda sfx_fh,x
+    sta snd_img+1,y
+    ldy sfx_step,x
+    lda ST_PWL,y
+    sta snd_pl
+    lda ST_PWH,y
+    sta snd_ph
+    lda ST_CTRL,y
+    sta snd_w
+    lda ST_AD,y
+    sta snd_ad
+    lda ST_SR,y
+    sta snd_sr
+    ldy snd_b
+    lda snd_pl
+    sta snd_img+2,y
+    lda snd_ph
+    sta snd_img+3,y
+    lda snd_w
+    sta snd_img+4,y
+    lda snd_ad
+    sta snd_img+5,y
+    lda snd_sr
+    sta snd_img+6,y
+    ldy sfx_step,x          ; it slides
+    lda sfx_fl,x
     clc
-    adc ST_SL,x
-    sta sfx_fl
-    lda sfx_fh
-    adc ST_SH,x
-    sta sfx_fh
-    dec sfx_left
-    bne @fixed
-    inx                     ; the next step, or the end
-    stx sfx_step
-    ldy sfx
-    txa
-    cmp SFX_END,y
+    adc ST_SL,y
+    sta sfx_fl,x
+    lda sfx_fh,x
+    adc ST_SH,y
+    sta sfx_fh,x
+    dec sfx_left,x
+    bne @fxnext
+    iny                     ; the next step, or the end
+    tya
+    sta sfx_step,x
+    sty snd_e
+    ldy sfx,x
+    lda SFX_END,y
+    cmp snd_e
     bne :+
     lda #$ff
-    sta sfx
-    bne @fixed
-:   lda ST_TICKS,x
-    sta sfx_left
-    lda ST_FL,x
-    sta sfx_fl
-    lda ST_FH,x
-    sta sfx_fh
+    sta sfx,x
+    bne @fxnext
+:   ldy snd_e
+    lda ST_TICKS,y
+    sta sfx_left,x
+    lda ST_FL,y
+    sta sfx_fl,x
+    lda ST_FH,y
+    sta sfx_fh,x
+@fxnext:
+    dex
+    bmi @fixed
+    jmp @fxv
 @fixed:
     ldx snd_ft              ; the filter: its cutoff this tick, its voices, its mode; full volume
     lda SND_CUT_LO,x
@@ -256,16 +303,14 @@ snd_tick:
 .endif
     rts
 
-; Voice X's registers into the image (none with no instrument yet; none for voice 3 under an
-; effect, which sets them), then its state moves on.
+; Voice X's registers into the image (none with no instrument yet; none under an effect, which sets
+; them), then its state moves on.
 snd_voice:
     ldy V_BASE,x
     sty snd_b
     lda v_ins,x
     bmi @silent
-    cpx #SFX_VOICE
-    bne @emit
-    lda sfx                 ; (under an effect, which sets them)
+    lda sfx,x               ; (under an effect, which sets them)
     bmi @emit
     ldy v_ins,x
     jmp @state

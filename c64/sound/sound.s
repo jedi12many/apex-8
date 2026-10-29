@@ -1,6 +1,7 @@
 ; APEX sound player for the Commodore 64: plays a song and its effects with the kit's SID driver
-; (c64/kit/sid.inc), a tick a frame. In SCRIPT builds, bit k of each tick's input starts effect k;
-; otherwise the joystick in port 2 does (up, down, left, right, fire: effects 0-4).
+; (c64/kit/sid.inc), a tick a frame. In SCRIPT builds each tick's input is an effect to start (its
+; number + 1 in bits 0-4; 0 none) and bit 7 turns the music off; otherwise the joystick in port 2
+; starts effects (up, down, left, right, fire: effects 0-4).
 ; Assemble with c64/sound/build.js. The test (test/sound-check.js) compares the SID registers it
 ; writes with the reference (core/sound.js).
 
@@ -10,7 +11,6 @@
 
 .segment "ZEROPAGE"
 inp:     .res 1
-bits:    .res 1
 
 .segment "CODE"
 start:
@@ -45,18 +45,17 @@ main:
     jsr input
     bcc :+
     jmp kit_park
-:   lda inp                 ; effects 0, 1, ... for bits 0, 1, ...
-    sta bits
-    ldx #0
-@fx:
-    lsr bits
-    bcc :+
-    txa
+:   lda inp                 ; bit 7: the music off
+    and #$80
+    eor #$80
+    sta snd_music
+    lda inp                 ; the effect to start, + 1
+    and #$1f
+    beq :+
+    sec
+    sbc #1
     jsr snd_fx
-:   inx
-    cpx #SND_EFFECTS
-    bne @fx
-    jsr snd_tick
+:   jsr snd_tick
     jmp main
 
 ; inp from the script, or the joystick in port 2; C set when a SCRIPT build's script has ended.
@@ -68,8 +67,15 @@ input:
     sta $dc00
     lda $dc00
     eor #$ff
-    and #31
-    sta inp
+    ldy #0                  ; the first direction or fire held: effect 0-4, as 1-5
+:   lsr
+    bcs :+
+    iny
+    cpy #5
+    bne :-
+    ldy #$ff
+:   iny
+    sty inp
     clc
     rts
 .endif

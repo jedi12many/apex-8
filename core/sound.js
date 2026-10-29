@@ -13,14 +13,17 @@
  *   - a new note restarts hard: one tick with the gate off, then on (a table starts once it's on)
  *   - the filter: one for the song, a resonant low-pass (or band or high) whose cutoff sweeps up and
  *     down, over the voices playing instruments that use it
- *   - sound effects play on one voice (the song's effectsVoice, voice 3 unless it says) instead of
- *     the music, which goes on underneath. An effect is steps, each a waveform (with its gate bit), a
- *     frequency that slides, ADSR, a pulse width and a length in ticks. A new effect starts if none
- *     is playing or its priority is at least the one's playing
+ *   - a sound effect plays on its voice (its own `voice`, else the song's effectsVoice, voice 3 unless
+ *     it says) instead of the music, which goes on underneath; effects on different voices play at
+ *     once. An effect is steps, each a waveform (with its gate bit), a frequency that slides, ADSR, a
+ *     pulse width and a length in ticks. A new effect starts if none is playing on its voice or its
+ *     priority is at least the one's playing there
+ *   - the music can be turned off: while it is, the song stands still where it is and every voice is
+ *     released (it fades on its release); turned on, it goes on from there
  *
  * compile(def) turns a song and its effects (see sound/shmup.js) into tables; player(c) makes a
- * player; tick(c, p, effects) plays one tick, starting the effects listed (in order), and returns
- * the register image. checksum(sum, image) folds an image into a running 16-bit checksum, which
+ * player; tick(c, p, effects, music) plays one tick, starting the effects listed (in order), with
+ * the music on unless music is false, and returns the register image. checksum(sum, image) folds an image into a running 16-bit checksum, which
  * the C64 tests compare.
  */
 (function (root, factory) {
@@ -73,16 +76,16 @@
       return k;
     }));
     if (order.length !== 3 || order.some(l => l.length !== order[0].length)) throw new Error('3 order lists of one length');
+    const effectsVoice = def.effectsVoice === undefined ? 2 : def.effectsVoice;
     const effNames = Object.keys(def.effects || {}), effects = effNames.map(n => {
       const e = def.effects[n];
-      return { priority: e.priority, steps: e.steps.map(s => ({ ctrl: WAVE[s.wave] | (s.gate === false ? 0 : 1), freq: s.freq & 0xffff, slide: s.slide || 0, ad: s.ad, sr: s.sr, pw: s.pw || 0, ticks: s.ticks })) };
+      return { priority: e.priority, voice: e.voice === undefined ? effectsVoice : e.voice, steps: e.steps.map(s => ({ ctrl: WAVE[s.wave] | (s.gate === false ? 0 : 1), freq: s.freq & 0xffff, slide: s.slide || 0, ad: s.ad, sr: s.sr, pw: s.pw || 0, ticks: s.ticks })) };
     });
     // the filter's cutoff (11 bits) tick by tick: a triangle from min to max and back over period ticks
     const f = def.filter || { res: 0, min: 0, max: 0, period: 2 };
     if (f.period < 2 || f.period > 256 || f.period & 1) throw new Error('filter period: an even number of ticks up to 256');
     const half = f.period / 2, cut = Array.from({ length: f.period }, (_, k) => f.min + Math.floor(((f.max - f.min) * (k < half ? k : f.period - k)) / half));
     const filter = { res: f.res, mode: FILTER_MODE[f.mode] || 0, cut };
-    const effectsVoice = def.effectsVoice === undefined ? 2 : def.effectsVoice;
     return { speed: def.speed, ins, insNames, patterns, patNames, order, effects, effNames, filter, effectsVoice };
   }
 
@@ -90,21 +93,24 @@
     return {
       timer: 0, row: 0, pos: 0,
       voices: [0, 1, 2].map(() => ({ ins: -1, note: 0, phase: 2, age: 0, arp: 0, pw: 0, tpos: 0 })),
-      sfx: -1, step: 0, left: 0, freq: 0, ft: 0,
+      fx: [0, 1, 2].map(() => ({ sfx: -1, step: 0, left: 0, freq: 0 })), ft: 0,
     };
   }
 
   function startEffect(c, p, id) {
-    if (p.sfx >= 0 && c.effects[id].priority < c.effects[p.sfx].priority) return;
-    p.sfx = id; p.step = 0;
+    const f = p.fx[c.effects[id].voice];
+    if (f.sfx >= 0 && c.effects[id].priority < c.effects[f.sfx].priority) return;
+    f.sfx = id; f.step = 0;
     const s = c.effects[id].steps[0];
-    p.left = s.ticks; p.freq = s.freq;
+    f.left = s.ticks; f.freq = s.freq;
   }
 
-  function tick(c, p, effects = []) {
+  function tick(c, p, effects = [], music = true) {
     for (const id of effects) startEffect(c, p, id);
+    // the music off: the song stands still, every voice released
+    if (!music) for (const vs of p.voices) vs.phase = 2;
     // a new row on every voice
-    if (p.timer === 0) {
+    else if (p.timer === 0) {
       for (let v = 0; v < 3; v++) {
         const r = c.patterns[c.order[v][p.pos]][p.row], vs = p.voices[v];
         if (r.op === RELEASE) vs.phase = 2;
@@ -116,9 +122,9 @@
       if (++p.row === ROWS) { p.row = 0; if (++p.pos === c.order[0].length) p.pos = 0; }
       p.timer = c.speed;
     }
-    p.timer--;
+    if (music) p.timer--;
     // each voice's registers, then its state moves on
-    const R = new Uint8Array(25), ev = c.effectsVoice;
+    const R = new Uint8Array(25);
     let route = 0;
     for (let v = 0; v < 3; v++) {
       const vs = p.voices[v], b = 7 * v;
@@ -131,7 +137,7 @@
         note = tn & 0x80 ? tn & 0x7f : vs.note + ((tn ^ 0x40) - 0x40); // (a fixed note, or + n)
       }
       const f = FREQ[Math.max(0, Math.min(95, note))];
-      if (!(v === ev && p.sfx >= 0)) {
+      if (p.fx[v].sfx < 0) {
         R[b] = f & 255; R[b + 1] = f >> 8;
         R[b + 2] = vs.pw & 255; R[b + 3] = vs.pw >> 8;
         R[b + 4] = wave | (vs.phase === 1 ? 1 : 0);
@@ -145,16 +151,18 @@
       if (++vs.arp === ins.arp.length) vs.arp = 0;
       vs.pw = (vs.pw + ins.pwSpeed) & 0x0fff;
     }
-    // an effect on its voice
-    if (p.sfx >= 0) {
-      const e = c.effects[p.sfx], s = e.steps[p.step], b = 7 * ev;
-      R[b] = p.freq & 255; R[b + 1] = p.freq >> 8;
+    // the effects, each on its voice
+    for (let v = 0; v < 3; v++) {
+      const f = p.fx[v];
+      if (f.sfx < 0) continue;
+      const e = c.effects[f.sfx], s = e.steps[f.step], b = 7 * v;
+      R[b] = f.freq & 255; R[b + 1] = f.freq >> 8;
       R[b + 2] = s.pw & 255; R[b + 3] = s.pw >> 8;
       R[b + 4] = s.ctrl; R[b + 5] = s.ad; R[b + 6] = s.sr;
-      p.freq = (p.freq + s.slide) & 0xffff;
-      if (--p.left === 0) {
-        if (++p.step === e.steps.length) p.sfx = -1;
-        else { const n = e.steps[p.step]; p.left = n.ticks; p.freq = n.freq; }
+      f.freq = (f.freq + s.slide) & 0xffff;
+      if (--f.left === 0) {
+        if (++f.step === e.steps.length) f.sfx = -1;
+        else { const n = e.steps[f.step]; f.left = n.ticks; f.freq = n.freq; }
       }
     }
     // the filter, and the volume

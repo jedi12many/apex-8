@@ -25,26 +25,35 @@
   <div><button data-bit="1" aria-label="left">◀</button><button data-bit="2" aria-label="right">▶</button></div>
   <div><button data-bit="4" aria-label="jump">▲</button></div>
 </div>
-<p class="help" id="help">Arrow keys or A / D to run · Space, Up, W or Z to jump (hold for higher) · R to restart · gamepad works too</p>
+<p class="help" id="help">Arrow keys or A / D to run · Space, Up, W or Z to jump (hold for higher) · land on beetles, collect coins, reach the flag · R to restart · M mutes the sound · gamepad works too</p>
 <script src="../apexscii/apexscii.js"></script>
 <script src="../core/platform.js"></script>
 <script src="../c64/side/view.js"></script>
+<script src="../core/sound.js"></script>
+<script src="../core/sid.js"></script>
+<script src="../sound/hills.js"></script>
+<script src="../web/audio.js"></script>
 <script>
-// The APEX platformer reference, playable: the same physics and the same frames the C64 engine draws,
-// at a fixed 50 ticks a second, inside a C64-sized border.
+// The APEX platformer reference, playable: the same game and the same frames the C64 engine draws, at a
+// fixed 50 ticks a second, inside a C64-sized border, with its sound.
 (async function () {
   const text = window.LEVEL_TEXT || await (await fetch('../levels/side/w1.txt')).text();
   const level = APEXPLAT.parse(text), map = APEXSIDE.compose(level);
-  let player = APEXPLAT.player(level), cam = APEXPLAT.follow(level, player, 0);
+  let game = APEXPLAT.game(level), cam = APEXPLAT.follow(level, game.p, 0);
   const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');
   const image = ctx.createImageData(320, 200);
   const border = APEXSCII.PALETTE[APEXSIDE.BORDER];
+
+  // The sound (web/audio.js), from the first key press, click or touch; M mutes.
+  const audio = APEXAUDIO.create(APEXSONGS.hills);
+  for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, () => audio.start());
+  addEventListener('keydown', e => { if (e.code === 'KeyM') audio.toggleMute(); });
 
   // Input: keyboard, touch buttons and the first gamepad, combined into the engine's input bits.
   const KEYS = { ArrowLeft: 1, KeyA: 1, ArrowRight: 2, KeyD: 2, Space: 4, ArrowUp: 4, KeyW: 4, KeyZ: 4 };
   let keys = 0, touch = 0;
   addEventListener('keydown', e => {
-    if (e.code === 'KeyR') { player = APEXPLAT.player(level); cam = APEXPLAT.follow(level, player, 0); }
+    if (e.code === 'KeyR') { game = APEXPLAT.game(level); cam = APEXPLAT.follow(level, game.p, 0); }
     if (KEYS[e.code]) { keys |= KEYS[e.code]; e.preventDefault(); }
   });
   addEventListener('keyup', e => { if (KEYS[e.code]) keys &= ~KEYS[e.code]; });
@@ -64,7 +73,8 @@
   }
 
   function draw() {
-    image.data.set(APEXSIDE.frame(level, map, player, cam).pixels);
+    const p = Object.assign({}, game.p, { hidden: !!(game.invuln & 4) });
+    image.data.set(APEXSIDE.frame(level, map, p, cam, APEXSIDE.objectSprites(game, cam)).pixels);
     ctx.fillStyle = border;
     ctx.fillRect(0, 0, 384, 272);
     ctx.putImageData(image, 32, 36);
@@ -78,8 +88,9 @@
     last = now;
     let stepped = false;
     while (acc >= TICK) {
-      APEXPLAT.tick(level, player, keys | touch | pad());
-      cam = APEXPLAT.follow(level, player, cam);
+      APEXPLAT.play(level, game, keys | touch | pad());
+      audio.tick(game.events.flatMap(e => APEXSONGS.hills.EVENTS[e] || []), true);
+      cam = APEXPLAT.follow(level, game.p, cam);
       acc -= TICK;
       stepped = true;
     }

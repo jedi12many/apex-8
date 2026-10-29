@@ -10,8 +10,10 @@
 ; screens swap at the bottom of the frame together with the scroll registers, the sprite and the
 ; forest's characters, so nothing tears.
 ;
-; Each frame: read the controls, move the player one tick, move the camera, then work out the next
-; frame and leave it for the bottom-of-frame IRQ to show.
+; Each frame: read the controls, play a tick of the game (the player, the beetles, the coins and the
+; flag: game.s), the sound's tick, move the camera, then work out the next frame and leave it for the
+; bottom-of-frame IRQ to show. Up to 7 of the objects are hardware sprites 1-7, the player sprite 0.
+; The sound (sound/hills.js) plays on the kit's SID driver, on a second SID if there is one.
 ;
 ; Controls: joystick in port 2 (fire or up to jump), or A / D to run and W, Z or Space to jump;
 ; R restarts. Assemble with c64/side/build.js. The machine set-up, scripts and timing come from the kit
@@ -19,6 +21,7 @@
 
 .include "gen.inc"
 .include "kit.inc"
+.include "sid.inc"
 
 SCREEN_A = $0400
 SCREEN_B = $3000
@@ -71,6 +74,9 @@ sp:      .res 2             ; hits: the solid row
 t0:      .res 1
 t1:      .res 1
 t2:      .res 1
+t3:      .res 1
+t4:      .res 1
+t5:      .res 1
 sa:      .res 1             ; registers saved by the IRQs
 sx:      .res 1
 sy:      .res 1
@@ -99,6 +105,13 @@ c_level: .res 1
 crs_far:   .res 2           ; per screen: the first column each band is drawn from ($FF: not drawn)
 crs_hills: .res 2
 crs_level: .res 2
+pcam:      .res 2           ; predrawing: the camera last frame, the way it last moved (1, -1: $FF), whether
+cdir:      .res 1           ; this frame swapped screens, the camera tried, and its bands' first columns
+swapped:   .res 1
+q:         .res 2
+n_far:     .res 1
+n_hills:   .res 1
+n_level:   .res 1
 
 .segment "CODE"
 start:
@@ -131,8 +144,8 @@ start:
 :   sta $d800+200-1,x
     dex
     bne :-
-    ; the player's sprite
-    lda #1
+    ; the sprites: the player and the objects, all multicolor
+    lda #$ff
     sta $d01c
     lda #0
     sta $d017
@@ -148,6 +161,8 @@ start:
     lda #0
     sta cam
     sta cam+1
+    lda #1                  ; (predrawing: the camera starts off going right)
+    sta cdir
     lda #$ff
     sta shift
     ldx #1
@@ -158,8 +173,9 @@ start:
     bpl :-
     lda #1                  ; the first frame goes to screen A
     sta cur
+    jsr snd_init
     KIT_SCRIPT_START
-    jsr reset_player
+    jsr reset_game
     jsr follow
     jsr view
     jsr apply
@@ -184,13 +200,19 @@ start:
 main:
     lda applied             ; wait for the last frame to show
     beq main
+    KIT_PROFILE_FRAME
     lda #0
     sta applied
     jsr input
     bcc :+
     jmp kit_park
-:   jsr tick
+:   MARK 0
+    jsr play
+    MARK 1
+    jsr snd_tick
+    MARK 2
     jsr follow
+    MARK 3
     jsr view
     jmp main
 
@@ -264,7 +286,7 @@ input:
 :   lda t0
     and #2
     beq :+
-    jsr reset_player        ; R: start again
+    jsr reset_game          ; R: start again
     lda #0
     sta cam
     sta cam+1
@@ -515,6 +537,7 @@ tick:
     eor #$80
 :   bpl :+
     jsr reset_player
+    inc fell
 :   lda inp
     sta held
     lda ground              ; the run cycle advances while running on the ground
@@ -677,9 +700,12 @@ offs:
 ; Works out the next frame: draws any band whose first column changed into the other screen, and
 ; leaves the registers for the bottom IRQ.
 view:
-    lda cam                 ; mountains: cam / 4
+    lda cam                 ; mountains: cam / 4, rounded up
+    clc
+    adc #3
     sta t0
     lda cam+1
+    adc #0
     sta t1
     lsr t1
     ror t0
@@ -690,9 +716,12 @@ view:
     lda t0
     and #FAR_W - 1
     sta c_far
-    lda cam                 ; hills: cam / 2, columns mod HILLS_W
+    lda cam                 ; hills: cam / 2, rounded up; columns mod HILLS_W
+    clc
+    adc #1
     sta t0
     lda cam+1
+    adc #0
     sta t1
     lsr t1
     ror t0
@@ -714,6 +743,8 @@ view:
     sta c_level
 
     ldx cur                 ; the screen showing has every band right: keep it
+    lda #0
+    sta swapped
     lda c_far
     cmp crs_far,x
     bne @swap
@@ -724,6 +755,7 @@ view:
     cmp crs_level,x
     beq @screen
 @swap:
+    inc swapped
     txa                     ; otherwise bring the other screen up to date and show it
     eor #1
     sta cur
@@ -817,6 +849,9 @@ view:
     clc
     adc #SPR_Y
     sta p_sy
+    lda invuln              ; (blinking while safe after a hurt)
+    and #4
+    bne @hide
     lda #1
     bne :+
 @hide:
@@ -858,27 +893,153 @@ view:
     lda t0
     and #15
     sta p_shift
+    MARK 4
+    jsr objsprites          ; the objects' sprites
 
     lda #1
     sta ready
-:   ldx $dc05               ; how long it took since the bottom of the frame
-    lda $dc04
-    cpx $dc05
-    bne :-
-    eor #$ff
-    sta t0
+    KIT_TIMER_MAX           ; how long it took since the bottom of the frame
+    ; (fall through: the frame is ready, and the time left goes on the hidden screen)
+
+; Predrawing: in a frame that didn't swap screens, one band of the hidden screen is drawn as the next
+; swap will want it: the bands' columns where the camera, going on the way it last moved, first
+; changes one (within 8 pixels), or, while the win shows, the new game's. A swap then usually finds
+; its screen ready. Nothing shown changes.
+predraw:
+    lda cam
+    cmp pcam
+    bne :+
+    lda cam+1
+    cmp pcam+1
+    beq @same
+:   lda cam
+    cmp pcam
+    lda cam+1
+    sbc pcam+1
+    lda #1
+    bcs :+
+    lda #$ff
+:   sta cdir
+    lda cam
+    sta pcam
+    lda cam+1
+    sta pcam+1
+@same:
+    lda won                 ; showing the win: the next swap is the new game's first frame
+    beq :+
+    lda #<RESTART_CAM
+    sta q
+    lda #>RESTART_CAM
+    sta q+1
+    jsr columns
+    jmp @found
+:   lda swapped
+    bne @done
+    lda cdir
+    beq @done
+    lda cam
+    sta q
+    lda cam+1
+    sta q+1
+    ldy #8
+@step:
+    ldx #0                  ; q += cdir
+    lda cdir
+    bpl :+
+    dex
+:   clc
+    adc q
+    sta q
     txa
-    eor #$ff
+    adc q+1
+    sta q+1
+    jsr columns
+    lda n_level
+    cmp c_level
+    bne @found
+    lda n_hills
+    cmp c_hills
+    bne @found
+    lda n_far
+    cmp c_far
+    bne @found
+    dey
+    bne @step
+@done:
+    rts
+@found:
+    lda cur
+    eor #1
     tax
+    lda n_level
+    cmp crs_level,x
+    beq @hills
+    sta crs_level,x
+    cpx #0
+    bne :+
+    jmp draw_level_a
+:   jmp draw_level_b
+@hills:
+    lda n_hills
+    cmp crs_hills,x
+    beq @far
+    sta crs_hills,x
+    cpx #0
+    bne :+
+    jmp draw_hills_a
+:   jmp draw_hills_b
+@far:
+    lda n_far
+    cmp crs_far,x
+    beq @done
+    sta crs_far,x
+    cpx #0
+    bne :+
+    jmp draw_far_a
+:   jmp draw_far_b
+
+; The bands' first columns (as view works them out) for the camera at q: n_far, n_hills, n_level.
+; Keeps Y.
+columns:
+    lda q
+    clc
+    adc #3
+    sta t0
+    lda q+1
+    adc #0
+    sta t1
+    lsr t1
+    ror t0
+    lsr t1
+    ror t0
+    jsr offs
     lda t0
-    cmp maxcyc
-    txa
-    sbc maxcyc+1
+    and #FAR_W - 1
+    sta n_far
+    lda q
+    clc
+    adc #1
+    sta t0
+    lda q+1
+    adc #0
+    sta t1
+    lsr t1
+    ror t0
+    jsr offs
+    lda t0
+:   cmp #HILLS_W
     bcc :+
+    sbc #HILLS_W
+    bcs :-
+:   sta n_hills
+    lda q
+    sta t0
+    lda q+1
+    sta t1
+    jsr offs
     lda t0
-    sta maxcyc
-    stx maxcyc+1
-:   rts
+    sta n_level
+    rts
 
 ; Shows the frame view worked out. Called at the bottom of the frame.
 apply:
@@ -893,14 +1054,27 @@ apply:
     lda p_sx
     sta $d000
     lda p_msb
+    ora p_omsb
     sta $d010
     lda p_sy
     sta $d001
     lda p_en
+    ora p_oen
     sta $d015
     lda p_ptr
     sta SCREEN_A + $3f8
     sta SCREEN_B + $3f8
+.repeat 7, K                ; the objects on sprites 1-7
+    lda p_ox+K
+    sta $d002 + 2 * K
+    lda p_oy+K
+    sta $d003 + 2 * K
+    lda p_optr+K
+    sta SCREEN_A + $3f9 + K
+    sta SCREEN_B + $3f9 + K
+    lda p_ocol+K
+    sta $d028 + K
+.endrepeat
     ldx p_shift
     cpx shift
     bne :+
@@ -920,6 +1094,7 @@ irq_bottom:
     sta sa
     stx sx
     sty sy
+    jsr snd_out             ; the sound, at the same moment every frame
     lda #FAR_BG
     sta $d021
     lda #FAR_MC1
@@ -1031,6 +1206,9 @@ irq_sky:
     ldx sx
     ldy sy
     rti
+
+; ------------------------------------------------------------------ the game (game.s)
+.include "game.s"
 
 ; ------------------------------------------------------------------ drawing the bands (draw.inc)
 .include "draw.inc"

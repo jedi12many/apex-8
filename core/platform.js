@@ -8,6 +8,14 @@
  *
  * parse(text) reads a level; player(level) makes a player at its start; tick(level, p, input) moves it
  * one frame; follow(level, p, cam) moves the camera.
+ *
+ * The game on top (game, play): coins to collect, beetles that walk the ground they stand on (turning at
+ * a wall or a ledge's edge) and die when landed on (the player bouncing off them) but send the player
+ * back to the start when touched any other way, and a flag at the end. Reaching it wins; the level
+ * starts again WIN_FOR ticks later. play(level, g, input) moves the player as tick does, then each
+ * beetle (moving, then meeting the player), then the coins and the flag (left to right), and lists
+ * what happened in g.events (for the sound): jump, coin, stomp, hurt, fall, win. g.t counts the ticks
+ * of a game, which the objects' animations follow.
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -28,9 +36,19 @@
   };
   // The camera keeps the player between these screen x positions (pixels) of a VIEW-wide view.
   const VIEW = 304, DEAD = [112, 176];
+  // The objects: kinds, and their boxes (12.4: width, height; a coin floats in the middle of its block,
+  // a beetle and the flag stand on the block below theirs).
+  const COIN = 1, BEETLE = 2, FLAG = 3;
+  const OBJECT_KINDS = { o: COIN, b: BEETLE, F: FLAG };
+  const BOX = { [COIN]: [8 * SUB, 10 * SUB], [BEETLE]: [16 * SUB, 10 * SUB], [FLAG]: [8 * SUB, 21 * SUB] };
+  const BEETLE_SPEED = 12;           // 3/4 pixel a frame
+  const STOMP = 8 * SUB;             // a landing this far into a beetle's top is a stomp
+  const BOUNCE = 64;                 // and bounces the player up this fast
+  const DYING = 16, INVULN = 100, WIN_FOR = 200;
 
   // Level text: one character per 16x16 block, '#' solid, '.' or space empty, 'P' the player's start
-  // (standing on the block below). Lines starting with ';' are comments; the first names the level.
+  // (standing on the block below), 'o' a coin, 'b' a beetle (standing on the block below), 'F' the
+  // flag (on the block below). Lines starting with ';' are comments; the first names the level.
   function parse(text) {
     const lines = text.replace(/\r/g, '').split('\n');
     const name = (lines.find(l => l.startsWith(';')) || '; level').slice(1).trim();
@@ -38,16 +56,19 @@
     const h = rows.length, w = Math.max(...rows.map(r => r.length));
     const solid = new Uint8Array(w * h);
     let start = null;
+    const objects = [];
     rows.forEach((r, y) => {
       for (let x = 0; x < w; x++) {
         const ch = r[x] || '.';
         if (ch === '#') solid[y * w + x] = 1;
         else if (ch === 'P') start = { x, y };
+        else if (OBJECT_KINDS[ch]) objects.push({ kind: OBJECT_KINDS[ch], bx: x, by: y });
       }
     });
     if (!start) throw new Error('level has no P');
+    objects.sort((a, b) => a.bx - b.bx || a.by - b.by); // left to right, then top to bottom
     if (solid.subarray(0, w).some(v => v)) throw new Error('the top row must be empty (block tops are drawn above it)');
-    return { name, w, h, solid, start };
+    return { name, w, h, solid, start, objects };
   }
 
   const solidAt = (L, bx, by) => (bx < 0 || bx >= L.w ? 1 : by < 0 || by >= L.h ? 0 : L.solid[by * L.w + bx]);
@@ -106,5 +127,56 @@
     return Math.max(0, Math.min(max, cam));
   }
 
-  return { SUB, BLOCK, PHYS, VIEW, DEAD, parse, solidAt, hits, player, tick, follow };
+  // ------------------------------------------------------------------ the game
+  // Each object's box at its start: x, y its top left (12.4).
+  function objects(L) {
+    return L.objects.map(o => {
+      const [w, h] = BOX[o.kind];
+      const x = o.bx * BLOCK + (BLOCK - w) / 2, y = o.kind === COIN ? o.by * BLOCK + (BLOCK - h) / 2 : (o.by + 1) * BLOCK - h;
+      return { kind: o.kind, x, y, w, h, on: true, vx: o.kind === BEETLE ? -BEETLE_SPEED : 0, dying: 0 };
+    });
+  }
+  // A game: the beetles, and the coins and the flag (left to right), apart.
+  function game(L) {
+    const all = objects(L);
+    return { p: player(L), beetles: all.filter(o => o.kind === BEETLE), items: all.filter(o => o.kind !== BEETLE),
+      coins: 0, stomps: 0, falls: 0, invuln: 0, won: 0, t: 0, events: [] };
+  }
+  const overlap = (a, bx, by, bw, bh) => a.x < bx + bw && bx < a.x + PHYS.width && a.y < by + bh && by < a.y + PHYS.height;
+
+  function play(L, g, input) {
+    const p = g.p, events = [];
+    g.t = (g.t + 1) & 0xffff;
+    if (g.won) {
+      if (--g.won === 0) Object.assign(g, game(L));
+      g.events = events;
+      return g;
+    }
+    const vy0 = p.vy, y0 = p.y;
+    tick(L, p, input);
+    if (p.vy === PHYS.gravity - PHYS.jump && vy0 !== p.vy) events.push('jump'); // (a jump: its speed, gravity already on it)
+    if (p.y < y0 - 32 * SUB) { events.push('fall'); g.falls++; } // (fell into a pit, and starts again)
+    if (g.invuln) g.invuln--;
+    for (const o of g.beetles) {
+      if (!o.on) continue;
+      if (o.dying) { if (--o.dying === 0) o.on = false; continue; }
+      // a step, unless a wall is in the way or the ground ends: then it turns
+      const nx = o.x + o.vx, front = o.vx < 0 ? nx : nx + o.w - 1, below = Math.floor((o.y + o.h) / BLOCK);
+      if (solidAt(L, Math.floor(front / BLOCK), Math.floor(o.y / BLOCK)) || !solidAt(L, Math.floor(front / BLOCK), below)) o.vx = -o.vx;
+      else o.x = nx;
+      if (!overlap(p, o.x, o.y, o.w, o.h)) continue;
+      if (p.vy > 0 && p.y + PHYS.height - o.y < STOMP) { o.dying = DYING; p.vy = -BOUNCE; g.stomps++; events.push('stomp'); }
+      else if (!g.invuln) { Object.assign(p, player(L)); g.invuln = INVULN; events.push('hurt'); }
+    }
+    for (const o of g.items) {
+      if (!o.on || !overlap(p, o.x, o.y, o.w, o.h)) continue;
+      if (o.kind === COIN) { o.on = false; g.coins++; events.push('coin'); }
+      else { g.won = WIN_FOR; events.push('win'); }
+    }
+    g.events = events;
+    return g;
+  }
+
+  return { SUB, BLOCK, PHYS, VIEW, DEAD, COIN, BEETLE, FLAG, BOX, BEETLE_SPEED, STOMP, BOUNCE, DYING, INVULN, WIN_FOR,
+    parse, solidAt, hits, player, tick, follow, objects, game, play };
 });

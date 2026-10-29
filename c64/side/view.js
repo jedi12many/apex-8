@@ -8,7 +8,8 @@
  *   rows 9-24   the level, full speed: APEXSCII side-oblique blocks (forest theme) whose tops and sides
  *               recede up-right; its empty cells show a forest backdrop that moves at 3/4, made by
  *               redrawing a few characters each frame (in 2-pixel steps, as multicolor pixels are 2 wide)
- * The player is a multicolor hardware sprite. Colour RAM never changes: each band has one value.
+ * The player is a multicolor hardware sprite, and up to 7 of the level's objects (coins, beetles, the
+ * flag) on sprites 1-7 (objectSprites). Colour RAM never changes: each band has one value.
  *
  * Works in Node and in the browser (global APEXSIDE, needing APEXSCII and APEXPLAT).
  */
@@ -169,6 +170,51 @@
     while (rows.length < 21) rows.unshift(new Array(12).fill(0));
     FRAMES[name] = rows.slice(-21);
   }
+  // The objects' sprites: the same shared colours; their own colour as SPRITE_COLOR says. Images sit
+  // at the bottom of the sprite.
+  const OBJ_ART = {
+    coin0: ['....kkkk....', '...kooook...', '...koxook...', '...koxook...', '...koxook...', '...koxook...', '...koxook...', '...koxook...', '...kooook...', '....kkkk....'],
+    coin1: ['....kkkk....', '....koxk....', '....koxk....', '....koxk....', '....koxk....', '....koxk....', '....koxk....', '....koxk....', '....kook....', '....kkkk....'],
+    coin2: ['.....kk.....', '.....kk.....', '.....kk.....', '.....kk.....', '.....kk.....', '.....kk.....', '.....kk.....', '.....kk.....', '.....kk.....', '.....kk.....'],
+    beetle0: ['...kkkkkk...', '..kooooook..', '.kooxoooook.', '.kooooooook.', 'kxxkoooooxxk', 'kkkkkkkkkkkk', '.k.k....k.k.', 'k...k..k...k'],
+    beetle1: ['...kkkkkk...', '..kooooook..', '.kooxoooook.', '.kooooooook.', 'kxxkoooooxxk', 'kkkkkkkkkkkk', '..k.k..k.k..', '..k.k..k.k..'],
+    squashed: ['.kkkkkkkkkk.', 'kooooooooook', 'kkkkkkkkkkkk'],
+    flag0: ['..koooooo...', '..koooooooo.', '..kooxxoooo.', '..koooooooo.', '..koooooo...', '..k.........', '..k.........', '..k.........',
+      '..k.........', '..k.........', '..k.........', '..k.........', '..k.........', '..k.........', '..k.........', '..k.........',
+      '..k.........', '..k.........', '..k.........', '..k.........', '.kkk........'],
+    flag1: ['..kooooo....', '..koooooooo.', '..kooxxooooo', '..koooooooo.', '..kooooo....', '..k.........', '..k.........', '..k.........',
+      '..k.........', '..k.........', '..k.........', '..k.........', '..k.........', '..k.........', '..k.........', '..k.........',
+      '..k.........', '..k.........', '..k.........', '..k.........', '.kkk........'],
+  };
+  OBJ_ART.coin3 = OBJ_ART.coin1;
+  // (a coin's image is at the top of its sprite, so its sprite starts at the coin; the others stand at
+  // its bottom)
+  for (const [name, rows] of Object.entries(OBJ_ART)) {
+    const out = rows.map(r => Array.from(r.padEnd(12, '.'), c => ({ k: 1, o: 2, x: 3 }[c] || 0)));
+    while (out.length < 21) name.startsWith('coin') ? out.push(new Array(12).fill(0)) : out.unshift(new Array(12).fill(0));
+    FRAMES[name] = out;
+  }
+  const OBJ_COLOR = { [PLAT.COIN]: 7, [PLAT.BEETLE]: 4, [PLAT.FLAG]: 1 };
+  // An object's sprite's top line: a coin's at the coin; the others' 21 lines up from their feet. No
+  // object's sprite may cross a raster split (the level's top, or where its sky starts): sprites on a
+  // split's line would take the cycles that place it. The C64 generator checks.
+  const objectY = o => (o.kind === PLAT.COIN ? TOP + (o.y >> 4) : TOP + ((o.y + o.h) >> 4) - 21);
+  // An object's image this frame (t: the game's tick).
+  function objectFrame(o, t) {
+    if (o.kind === PLAT.COIN) return 'coin' + ((t >> 3) & 3);
+    if (o.kind === PLAT.FLAG) return 'flag' + ((t >> 4) & 1);
+    return o.dying ? 'squashed' : 'beetle' + ((t >> 3) & 1);
+  }
+  // The objects shown as sprites, at most 7 (hardware sprites 1-7; the player is 0): of those on and on
+  // the screen, the nearest the player across (by their middles); at the same distance the beetles
+  // first, then the coins and the flag, each in order. The nearest gets sprite 1, and lower sprites are
+  // in front. [{ x, y (the sprite's top left), frame, color }]
+  function objectSprites(g, cam) {
+    const px = (g.p.x + PLAT.PHYS.width / 2) >> 4;
+    return [...g.beetles, ...g.items].map((o, i) => [o, i]).filter(([o]) => o.on && (o.x >> 4) - cam + 24 > 0 && (o.x >> 4) - cam - 24 < 320)
+      .map(([o, i]) => [o, i, Math.abs(((o.x + o.w / 2) >> 4) - px)]).sort((a, b) => a[2] - b[2] || a[1] - b[1]).slice(0, 7)
+      .map(([o]) => ({ x: ((o.x + o.w / 2) >> 4) - cam - 12, y: objectY(o), frame: objectFrame(o, g.t), color: OBJ_COLOR[o.kind] }));
+  }
   function spriteFrame(p) {
     if (!p.ground) return 'jump';
     if (!p.vx) return 'stand';
@@ -183,7 +229,7 @@
 
   // What the screen shows: { pixels (320x200 RGBA, the 38-column border drawn), and the state the
   // engine has: band offsets, backdrop shift }.
-  function frame(level, map, p, cam) {
+  function frame(level, map, p, cam, objs = []) {
     const out = new Uint8ClampedArray(320 * 200 * 4);
     const put = (x, y, c) => { const i = (y * 320 + x) * 4; out[i] = c[0]; out[i + 1] = c[1]; out[i + 2] = c[2]; out[i + 3] = 255; };
     const decode = (g, x, y) => (g[y] >> (6 - 2 * (x >> 1))) & 3;
@@ -194,8 +240,10 @@
         put(X, y, PAL[cols[decode(chars[src.map[cy * src.w + cx]], bx & 7, y & 7)]]);
       }
     };
-    drawBand(ROWS.far, FAR, Math.floor((cam * SPEED.far[0]) / SPEED.far[1]), PALETTE.far);
-    drawBand(ROWS.hills, HILLS, Math.floor((cam * SPEED.hills[0]) / SPEED.hills[1]), PALETTE.hills);
+    // (rounded up, so every band's first column changes as the level's does: at a camera of 8k + 1,
+    // which lets the C64 engine draw a band before it's needed)
+    drawBand(ROWS.far, FAR, Math.ceil((cam * SPEED.far[0]) / SPEED.far[1]), PALETTE.far);
+    drawBand(ROWS.hills, HILLS, Math.ceil((cam * SPEED.hills[0]) / SPEED.hills[1]), PALETTE.hills);
     // the level: its empty cells take the backdrop characters as shifted this frame
     const s = backShift(cam), back = backKinds.map((_, k) => backGlyphs(k, s));
     const pal = PALETTE.level;
@@ -206,9 +254,18 @@
       const g = code === EMPTY ? back[backRows[cy]][cx & 3] : chars[code];
       put(X, y, PAL[cols[decode(g, lx & 7, (y - TOP) & 7)]]);
     }
-    // the player: feet on the bottom of the box, centred across it
-    const f = FRAMES[spriteFrame(p)], sx = (p.x >> 4) - cam - 6, sy = TOP + (p.y >> 4) + 20 - 21;
+    // the objects (sprite 7 drawn first: lower sprites are in front), then the player: feet on the
+    // bottom of the box, centred across it
     const scols = [null, SPRITE.mc1, SPRITE.color, SPRITE.mc2];
+    for (const o of [...objs].reverse()) {
+      const g = FRAMES[o.frame], cols = [null, SPRITE.mc1, o.color, SPRITE.mc2];
+      for (let r = 0; r < 21; r++) for (let c = 0; c < 12; c++) {
+        const v = g[r][c];
+        if (v) for (const dx of [0, 1]) { const X = o.x + 2 * c + dx, Y = o.y + r; if (X >= 0 && X < 320 && Y >= 0 && Y < 200) put(X, Y, PAL[cols[v]]); }
+      }
+    }
+    if (p.hidden) { for (let y = 0; y < 200; y++) for (let X = 0; X < 320; X++) if (X < 7 || X >= 311) put(X, y, PAL[BORDER]); return { pixels: out, shift: s }; }
+    const f = FRAMES[spriteFrame(p)], sx = (p.x >> 4) - cam - 6, sy = TOP + (p.y >> 4) + 20 - 21;
     for (let r = 0; r < 21; r++) for (let c = 0; c < 12; c++) {
       const v = f[r][p.facing < 0 ? 11 - c : c];
       if (!v) continue;
@@ -221,5 +278,5 @@
     return { pixels: out, shift: s };
   }
 
-  return { ROWS, SPEED, PALETTE, LEVEL_TOP_BG, LEVEL_SKY, SPRITE, BORDER, TOP, BACK_W, chars, FREE, glyphsUsed: () => nextFree, compose, frame, FRAMES, FAR, HILLS, backRows, backKinds, backGlyphs, backShift, EMPTY, spriteFrame };
+  return { ROWS, SPEED, PALETTE, LEVEL_TOP_BG, LEVEL_SKY, SPRITE, BORDER, TOP, BACK_W, chars, FREE, glyphsUsed: () => nextFree, compose, frame, FRAMES, FAR, HILLS, backRows, backKinds, backGlyphs, backShift, EMPTY, spriteFrame, OBJ_COLOR, objectY, objectFrame, objectSprites };
 });

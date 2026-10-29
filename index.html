@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APEX-8 Demos</title>
+<style>
+  :root { --bg: #15131c; --fg: #e4e1ee; --dim: #9893ad; --card: #211e2b; --card-on: #2c2838; --accent: #8fd3ff; color-scheme: dark; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 28px; letter-spacing: 0.04em; }
+  h2 { margin: 36px 0 12px; font-size: 17px; }
+  p { margin: 0 0 12px; color: var(--dim); }
+  a { color: var(--accent); }
+  .games { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .game { display: block; padding: 16px; border-radius: 10px; background: var(--card); color: var(--fg); text-decoration: none; }
+  .game:hover, .game:focus-visible { background: var(--card-on); }
+  .game strong { display: block; font-size: 16px; margin-bottom: 4px; }
+  .game span { display: block; color: var(--dim); font-size: 13px; }
+  .game .keys { margin-top: 8px; }
+  code { font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>APEX-8</h1>
+  <p>Game engines for the Commodore 64. Each browser version runs the same JavaScript reference that the C64 engine is checked against, frame for frame. They work with a keyboard, a gamepad or touch.</p>
+
+  <h2>Play in the browser</h2>
+  <div class="games">
+    <a class="game" href="web/out/crypt-play.html">
+      <strong>The Drowned Crypt</strong>
+      <span>A small action game: clear the crypt with a pistol and sink the Mother of the Deep. With sound.</span>
+      <span class="keys">Arrows or WASD to walk · hold Space to aim and fire · M mutes</span>
+    </a>
+    <a class="game" href="web/out/side-play.html">
+      <strong>Green Hills</strong>
+      <span>The parallax platformer. Land on beetles, collect coins, reach the flag. With sound.</span>
+      <span class="keys">Arrows or A/D to run · Space, Up, W or Z to jump · M mutes</span>
+    </a>
+    <a class="game" href="web/out/iso-play.html">
+      <strong>The Crypt</strong>
+      <span>The isometric dungeon engine, with a torchlight that follows the hero.</span>
+      <span class="keys">Arrows or WASD to walk, two at once for diagonals</span>
+    </a>
+    <a class="game" href="web/out/shmup-play.html">
+      <strong>The Dreadnought</strong>
+      <span>The vertical shoot-'em-up, with its sprite multiplexer and status bar. No sound in this version.</span>
+      <span class="keys">Arrows or WASD to fly · Space, Ctrl or K to fire</span>
+    </a>
+  </div>
+  <p style="margin-top:12px">R restarts or goes back to the title in every game.</p>
+
+  <h2>Play on a C64, a C64 Ultimate or VICE</h2>
+  <p><a href="c64/out/apex-8.d81" download>apex-8.d81</a> is a 1581 disk image with every C64 program behind a menu: the raycaster, the platformer, the dungeon, the shooter, its brick look, the sound players and the splash. Load it with <code>LOAD"*",8</code> then <code>RUN</code>, and press a number to start a program. On a C64 Ultimate, mount and run it from a USB stick.</p>
+  <p>Set the machine to PAL, no turbo, with a 6581 SID. The single programs are also in <a href="https://github.com/jedi12many/apex-8/tree/main/c64/out">c64/out</a>.</p>
+
+  <h2>Report a problem</h2>
+  <p>Open an issue on <a href="https://github.com/jedi12many/apex-8/issues">GitHub</a>. Say which game, which browser or machine, and what happened.</p>
+</main>
+</body>
+</html>

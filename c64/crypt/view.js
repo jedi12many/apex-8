@@ -6,7 +6,7 @@
  * Sprites (sprites.js) are multicolor, 12 fat pixels by 21 rows, sharing black ($D025) for outlines and
  * light red ($D026) for skin and eyes; each has its own colour. The hero is an investigator in a hat and coat with a pistol, seen from the side,
  * the front or the back as it aims; the drowned are hunched
- * fish-men, the spawn tentacled eyes. A creature out of the torchlight shows dimmed, and in the dark
+ * fish-men, the spawn tentacled eyes; the boss is six sprites (sprites.js). A creature out of the torchlight shows dimmed, and in the dark
  * only its eyes, glowing.
  *
  * More sprites than the VIC's eight: as in the shooter, the objects are sorted by Y and the n-th one
@@ -14,7 +14,8 @@
  * is, the more it is in front. An object starting less than GAP lines below the last one on its hardware
  * sprite is left out that frame. multiplex() is the rule.
  *
- * The status bar is the last 8 lines: hearts at the left, the score at the right.
+ * The status bar is the last 8 lines: hearts at the left, the score at the right, and while the boss is
+ * up its strength in the middle.
  *
  * Works in Node and in the browser (global APEXCRYPTVIEW, needing APEXSCII, APEXISO, APEXISOVIEW,
  * APEXCRYPT, APEXCRYPTTILES and APEXCRYPTSPRITES).
@@ -27,7 +28,7 @@
 
   const SPRITE = SP.COLORS;
   // Own colours. A creature out of the light is dim; hit, it flashes white.
-  const COLOR = { hero: 15, drowned: 5, spawn: 4, dim: 11, flash: 1, bullet: 7 };
+  const COLOR = { hero: 15, drowned: 5, spawn: 4, boss: 3, spit: 13, dim: 11, flash: 1, bullet: 7 };
   const GAP = 24;
   const BAR_LINE = 188;
 
@@ -64,7 +65,27 @@
       const frame = name + (c.awake ? (c.t >> 3) & 1 : 0);
       feet(c, frame, c.flash ? COLOR.flash : step >= 2 ? COLOR.dim : COLOR[name], c.facing < 0);
     }
+    // the boss, six sprites with its feet (the middle of its pit) at its place
+    const B = g.boss;
+    if (B.state === G.RISE || B.state === G.FIGHT || B.state === G.SINK) {
+      const s = onScreen(h, B), step = lightStep(s.x, s.y - 20);
+      const pose = bossPose(B), color = B.flash ? COLOR.flash : step >= 2 ? COLOR.dim : COLOR.boss;
+      for (let k = 0; k < 6; k++) out.push({ x: s.x - 36 + 24 * (k % 3), y: s.y - 39 + 21 * Math.floor(k / 3), frame: `boss_${pose}_${k}`, color, flip: false });
+    }
+    for (const sp of g.spits) if (sp.on) feet(sp, 'spit', COLOR.spit, false, 8);
+    // its tentacle: the floor cracking (blinking), then bursting up and lashing
+    const gr = g.grasp;
+    if (gr.on && (gr.t >= G.BOSS.warn || gr.t & 4)) feet(gr, gr.t < G.BOSS.warn ? 'grasp0' : gr.t < G.BOSS.warn + 8 ? 'grasp1' : 'grasp2', COLOR.boss);
     return out;
+  }
+  // The boss's pose: rising out of its pit (rise0-3), sinking back, its maw gaping round each spit,
+  // else its tentacles swaying.
+  function bossPose(B) {
+    const R = G.BOSS;
+    if (B.state === G.RISE) return 'rise' + (B.t >> 4);
+    if (B.state === G.SINK) return 'rise' + (3 - (B.t >> 4));
+    if ((B.t + R.openFor) % R.spitEvery < R.openFor + 4 && B.t >= R.spitEvery - R.openFor) return 'spit';
+    return 'idle' + ((B.t >> 4) & 1);
   }
 
   // The multiplexer's rule (see the top): which hardware sprite shows each object, in front first.
@@ -92,7 +113,7 @@
     I: '111 010 010 010 111', L: '100 100 100 100 111', N: '110 101 101 101 101', O: '010 101 101 101 010',
     P: '110 101 110 100 100', R: '110 101 110 101 101', S: '011 100 010 001 110', T: '111 010 010 010 010',
     U: '101 101 101 101 111', V: '101 101 101 101 010', W: '101 101 111 111 101', Y: '101 101 010 010 010',
-    ' ': '000 000 000 000 000', '*': '000 101 111 111 010',
+    ' ': '000 000 000 000 000', '*': '000 101 111 111 010', '|': '010 010 010 010 010',
   };
   // The messages: [text, top line, colour, scale]. PRESS FIRE blinks.
   const TEXT = {
@@ -143,6 +164,9 @@
     else {
       barText(1, '***'.slice(0, g.hero.hearts).padEnd(3, ' '), 10);
       barText(33, digits(g.score, 6), 1);
+      // the boss's strength, a bar per 2 hits left, once it is up
+      const B = g.boss;
+      if (B.state === G.RISE || B.state === G.FIGHT) barText(14, '|'.repeat((B.hp + 1) >> 1), COLOR.boss);
     }
     for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++) if (x < 7 || x >= 311 || y < 4 || y >= 196) put(x, y, PAL[IV.COLORS.border]);
     return { pixels: out, scroll: sc, sprites };

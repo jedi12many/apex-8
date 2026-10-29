@@ -35,7 +35,9 @@
 (async function () {
   const text = window.LEVEL_TEXT || await (await fetch('../levels/iso/c1.txt')).text();
   const map = APEXCRYPT.parse(text);
-  const kla = await fetch('../art/title/title.kla').then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
+  // the title picture: inlined by web/bundle.js (base64), or fetched
+  const kla = window.TITLE_KLA ? Uint8Array.from(atob(window.TITLE_KLA), c => c.charCodeAt(0)).buffer
+    : await fetch('../art/title/title.kla').then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
   if (kla) APEXCRYPTVIEW.setTitle(new Uint8Array(kla));
   let game = APEXCRYPT.game(map);
   const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');

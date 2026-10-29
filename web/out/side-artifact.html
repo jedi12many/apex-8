@@ -246,6 +246,26 @@
     L: MC_SETS.brick.L, R: MC_SETS.brick.R, C: BEAMS_MC, D: PLANK_DOOR_MC,
   });
 
+  // Toy bricks: studded plates on top (a stud a cell, lit on its upper left, shaded on its lower
+  // right), smooth 1x1 brick sides with a glint, and flat tiles with a groove for the second set.
+  const brickL = tex(['#######.', '#.#####.', '#######.', '#######.', '#######.', '#######.', '#######.', '........']);
+  const BRICK_L_MC = texMC(['3332', '3132', '3332', '3332', '3332', '3332', '3332', '0000']);
+  const BRICK_R_MC = texMC(['3230', '2320', '3230', '2320', '3230', '2320', '3230', '0000']);
+  defineSet('brick-stud', {
+    T: tex(['########', '##....##', '#.####.#', '#.####.#', '#.####.#', '#.####.#', '##....##', '########']),
+    L: brickL, R: shaded(brickL), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '1133', '1323', '1323', '1323', '3223', '3333', '3333']),
+    L: BRICK_L_MC, R: BRICK_R_MC, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+  defineSet('brick-tile', {
+    T: tex(['#######.', '#######.', '#######.', '#######.', '#######.', '#######.', '#######.', '........']),
+    L: brickL, R: shaded(brickL), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '3333', '3333', '3333', '3333', '3333', '3333', '2222']),
+    L: BRICK_L_MC, R: BRICK_R_MC, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+
   // Animated textures: frames of a top-face texture, for a renderer to cycle through. They aren't in
   // any theme's layout; on the C64 the few glyphs they produce are rewritten each frame. Water ripples
   // drift right by one fat pixel per frame (four frames loop); its sides are the smooth ones.
@@ -264,6 +284,7 @@
     crypt: { name: 'Crypt', sets: ['crypt-stone', 'crypt-moss'] },
     forest: { name: 'Forest', sets: ['forest-grass', 'forest-wood'] },
     town: { name: 'Town', sets: ['town-cobble', 'town-roof'] },
+    brick: { name: 'Brick', sets: ['brick-stud', 'brick-tile'] },
   };
   const FACE_NAMES = { E: 'empty', T: 'top', L: 'left', R: 'right' };
 

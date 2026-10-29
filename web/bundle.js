@@ -3,8 +3,8 @@
 //   web/out/<name>-play.html      a whole page, to open anywhere
 //   web/out/<name>-artifact.html  the same body for publishing as a claude.ai artifact (no html/head/body
 //                                 tags: the viewer adds its own, so the title, meta and styles go first)
-// for side.html (the platformer, Green Hills), iso.html (the isometric dungeon, the Crypt) and shmup.html
-// (the shoot-'em-up, the Dreadnought).
+// for side.html (the platformer, Green Hills), iso.html (the isometric dungeon, the Crypt), shmup.html
+// (the shoot-'em-up, the Dreadnought) and crypt.html (The Drowned Crypt, its title picture inlined).
 //
 //   node web/bundle.js
 const fs = require('fs'), path = require('path');
@@ -12,14 +12,15 @@ const root = path.join(__dirname, '..');
 const out = path.join(__dirname, 'out');
 fs.mkdirSync(out, { recursive: true });
 
-function bundle(page, levelFile, name) {
+function bundle(page, levelFile, name, extra = {}) {
   let html = fs.readFileSync(path.join(__dirname, page), 'utf8');
   html = html.replace(/<script src="\.\.\/([^"]+)"><\/script>/g, (_, file) =>
     `<script>\n${fs.readFileSync(path.join(root, file), 'utf8').replace(/<\/script/g, '<\\/script')}\n</script>`);
   const level = fs.readFileSync(path.join(root, levelFile), 'utf8');
-  const anchor = /<script>\r?\n\/\/ The APEX [^\n]* reference, playable/;
+  const anchor = /<script>\r?\n\/\/ [^\n]*reference, playable/;
   if (!anchor.test(html)) throw new Error(`web/${page}: the main script has moved; update web/bundle.js`);
-  html = html.replace(anchor, m => `<script>window.LEVEL_TEXT = ${JSON.stringify(level)};</script>\n${m}`);
+  const globals = Object.entries({ LEVEL_TEXT: level, ...extra }).map(([k, v]) => `window.${k} = ${JSON.stringify(v)};`).join(' ');
+  html = html.replace(anchor, m => `<script>${globals}</script>\n${m}`);
   fs.writeFileSync(path.join(out, `${name}-play.html`), html);
 
   const title = html.match(/<title>.*?<\/title>/)[0], style = html.match(/<style>[\s\S]*?<\/style>/)[0];
@@ -38,3 +39,4 @@ function bundle(page, levelFile, name) {
 bundle('side.html', 'levels/side/w1.txt', 'side');
 bundle('iso.html', 'levels/iso/d1.txt', 'iso');
 bundle('shmup.html', 'levels/shmup/s1.txt', 'shmup');
+bundle('crypt.html', 'levels/iso/c1.txt', 'crypt', { TITLE_KLA: fs.readFileSync(path.join(root, 'art', 'title', 'title.kla')).toString('base64') });

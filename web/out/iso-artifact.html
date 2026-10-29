@@ -240,6 +240,26 @@
     L: MC_SETS.brick.L, R: MC_SETS.brick.R, C: BEAMS_MC, D: PLANK_DOOR_MC,
   });
 
+  // Toy bricks: studded plates on top (a stud a cell, lit on its upper left, shaded on its lower
+  // right), smooth 1x1 brick sides with a glint, and flat tiles with a groove for the second set.
+  const brickL = tex(['#######.', '#.#####.', '#######.', '#######.', '#######.', '#######.', '#######.', '........']);
+  const BRICK_L_MC = texMC(['3332', '3132', '3332', '3332', '3332', '3332', '3332', '0000']);
+  const BRICK_R_MC = texMC(['3230', '2320', '3230', '2320', '3230', '2320', '3230', '0000']);
+  defineSet('brick-stud', {
+    T: tex(['########', '##....##', '#.####.#', '#.####.#', '#.####.#', '#.####.#', '##....##', '########']),
+    L: brickL, R: shaded(brickL), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '1133', '1323', '1323', '1323', '3223', '3333', '3333']),
+    L: BRICK_L_MC, R: BRICK_R_MC, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+  defineSet('brick-tile', {
+    T: tex(['#######.', '#######.', '#######.', '#######.', '#######.', '#######.', '#######.', '........']),
+    L: brickL, R: shaded(brickL), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '3333', '3333', '3333', '3333', '3333', '3333', '2222']),
+    L: BRICK_L_MC, R: BRICK_R_MC, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+
   // Animated textures: frames of a top-face texture, for a renderer to cycle through. They aren't in
   // any theme's layout; on the C64 the few glyphs they produce are rewritten each frame. Water ripples
   // drift right by one fat pixel per frame (four frames loop); its sides are the smooth ones.
@@ -258,6 +278,7 @@
     crypt: { name: 'Crypt', sets: ['crypt-stone', 'crypt-moss'] },
     forest: { name: 'Forest', sets: ['forest-grass', 'forest-wood'] },
     town: { name: 'Town', sets: ['town-cobble', 'town-roof'] },
+    brick: { name: 'Brick', sets: ['brick-stud', 'brick-tile'] },
   };
   const FACE_NAMES = { E: 'empty', T: 'top', L: 'left', R: 'right' };
 
@@ -926,11 +947,34 @@
     if ([left, up].some(n => n && n.f === s.f && n.t === s.t && meets(n))) return 2;
     return s.f === 'R' && y & 1 ? 0 : 3;
   }
+  // Drawn tiles instead: a map can bring art (M.art), fat pixel grids for each look of tile, placed
+  // on the screen plane with each tile, so every character is cut from the drawn tiles under it.
+  //   floor, cracked: 16 x 16, the floor diamond, its top corner at the middle of the first row
+  //   wall, torch: { top: 16 x 16 (the same diamond, a wall's height up), left, right: 8 x 16 (the
+  //   faces, column across from the left as seen, row down from the top edge) }
+  // Rows are strings of '0'-'3' (other characters: 0). A floor pixel just below a wall's side is in
+  // its shadow (0), as with the textures.
+  function artShade(art, s, sx, sy, up) {
+    if (s.f === 'E') return 0;
+    if (s.f === 'G' && up && (up.f === 'L' || up.f === 'R')) return 0;
+    const [tx, ty] = s.t.split(',').map(Number);
+    const px = v => (v >= '0' && v <= '3' ? +v : 0);
+    const diamond = (rows, lift) => {
+      const c = Math.floor((sx - 16 * (tx - ty) + 16) / 2), r = Math.floor(sy - 8 * (tx + ty) + lift);
+      return px((rows[r] || '')[c]);
+    };
+    if (s.f === 'G') return diamond(art[s.look === 2 ? 'cracked' : 'floor'], 0);
+    const w = art[s.look === 4 ? 'torch' : 'wall'];
+    if (s.f === 'T') return diamond(w.top, WALL_H);
+    const c = Math.min(7, Math.floor(s.along * 8)), r = Math.min(15, Math.floor(WALL_H - s.h));
+    return px((s.f === 'L' ? w.left : w.right)[r][c]);
+  }
+
   // Half-lit: lit stone thinned to a checkerboard of fat pixels.
   const halfLit = (v, f, y) => (v === 3 && (f + y) & 1 ? 0 : v);
 
   // The character for a phase and pattern: 8 bytes, as itself and half-lit.
-  function draw(p, n) {
+  function draw(p, n, art) {
     const [ax, ay] = anchorOf(p, 0), lk = [n % 5, Math.floor(n / 5) % 5];
     const w = [Math.floor(n / 25) % 3, Math.floor(n / 75)].map(v => (v ? v + 2 : 1));
     const looks = [...lk, ...w];
@@ -938,7 +982,10 @@
     const s = [];
     for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) s.push(surface(look, ...sample(p, 0, f, y)));
     const v = [];
-    for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) v.push(shade(s[y * 4 + f], f, y, f ? s[y * 4 + f - 1] : null, y ? s[(y - 1) * 4 + f] : null));
+    for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) {
+      const here = s[y * 4 + f], left = f ? s[y * 4 + f - 1] : null, up = y ? s[(y - 1) * 4 + f] : null;
+      v.push(art ? artShade(art, here, ...sample(p, 0, f, y), up) : shade(here, f, y, left, up));
+    }
     const bytes = half => Array.from({ length: 8 }, (_, y) => {
       let b = 0;
       for (let f = 0; f < 4; f++) b |= (half ? halfLit(v[y * 4 + f], f, y) : v[y * 4 + f]) << (6 - 2 * f);
@@ -962,7 +1009,7 @@
     const chars = Array.from({ length: 256 }, () => new Uint8Array(8)), codes = new Int16Array(4 * PATTERNS).fill(-1);
     const byLook = new Map();
     for (const i of [...used].sort((a, b) => a - b)) {
-      const g = draw(Math.floor(i / PATTERNS), i % PATTERNS), key = g.full.join(',');
+      const g = draw(Math.floor(i / PATTERNS), i % PATTERNS, M.art), key = g.full.join(',');
       if (!byLook.has(key)) {
         const code = byLook.size;
         if (code >= 128) throw new Error(`${M.name}: more than 128 characters`);
@@ -1029,11 +1076,9 @@
 
   // ------------------------------------------------------------------ a frame
   const PAL = APEXSCII.PALETTE.map(hx => [1, 3, 5].map(i => parseInt(hx.substr(i, 2), 16)));
-  // What the screen shows: { pixels (320x200 RGBA, the border drawn), scroll }.
-  function frame(M, h) {
-    const P = prepare(M), out = new Uint8ClampedArray(320 * 200 * 4);
-    const put = (x, y, c) => { const i = (y * 320 + x) * 4; out[i] = c[0]; out[i + 1] = c[1]; out[i + 2] = c[2]; out[i + 3] = 255; };
-    const sc = scroll(h);
+  // The dungeon around the hero h, lit, through put(x, y, rgb); returns the scroll.
+  function background(M, h, put) {
+    const P = prepare(M), sc = scroll(h);
     for (let r = 0; r < 25; r++) for (let c = 0; c < 39; c++) {
       const g = P.chars[P.codeAt(sc.cX + c, sc.cY + r) | (LIGHT_HALF[r * 40 + c] << 7)];
       const cols = [COLORS.bg, COLORS.mc1, COLORS.mc2, LIGHT_RAM[r * 40 + c]];
@@ -1046,6 +1091,13 @@
         }
       }
     }
+    return sc;
+  }
+  // What the screen shows: { pixels (320x200 RGBA, the border drawn), scroll }.
+  function frame(M, h) {
+    const out = new Uint8ClampedArray(320 * 200 * 4);
+    const put = (x, y, c) => { const i = (y * 320 + x) * 4; out[i] = c[0]; out[i + 1] = c[1]; out[i + 2] = c[2]; out[i + 3] = 255; };
+    const sc = background(M, h, put);
     // the hero: feet at HERO, centred across
     const f = FRAMES[spriteFrame(h)], scols = [null, SPRITE.mc1, SPRITE.color, SPRITE.mc2];
     for (let r = 0; r < 21; r++) for (let c = 0; c < 12; c++) {
@@ -1057,7 +1109,7 @@
   }
 
   return { WALL_H, COLS, ROWS, HERO, COLORS, LIGHT, LIGHT_RAM, LIGHT_HALF, REL, PATTERNS, lookAt,
-    phaseOf, anchorOf, patternOf, surface, prepare, scroll, SPRITE, FRAMES, spriteFrame, frame };
+    phaseOf, anchorOf, patternOf, surface, prepare, scroll, SPRITE, FRAMES, spriteFrame, PAL, background, frame };
 });
 
 </script>

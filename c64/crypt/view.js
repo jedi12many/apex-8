@@ -3,11 +3,11 @@
  * engine is to show it. The dungeon is the iso view's (c64/iso/view.js), cut from the drawn tiles in
  * tiles.js (withTiles(M) gives a map them), scrolled so the hero stays at its centre; over it go the game's sprites, a status bar and the game's messages.
  *
- * Sprites are multicolor, 12 fat pixels by 21 rows, sharing red ($D025) and white ($D026); each has
- * its own colour. The hero is an investigator in a hat and coat with a pistol, seen from the side,
+ * Sprites (sprites.js) are multicolor, 12 fat pixels by 21 rows, sharing black ($D025) for outlines and
+ * light red ($D026) for skin and eyes; each has its own colour. The hero is an investigator in a hat and coat with a pistol, seen from the side,
  * the front or the back as it aims; the drowned are hunched
  * fish-men, the spawn tentacled eyes. A creature out of the torchlight shows dimmed, and in the dark
- * only its eyes, glowing red.
+ * only its eyes, glowing.
  *
  * More sprites than the VIC's eight: as in the shooter, the objects are sorted by Y and the n-th one
  * shown gets a hardware sprite, here 7 - (n mod 8), so that the lower on the screen (nearer) an object
@@ -17,80 +17,24 @@
  * The status bar is the last 8 lines: hearts at the left, the score at the right.
  *
  * Works in Node and in the browser (global APEXCRYPTVIEW, needing APEXSCII, APEXISO, APEXISOVIEW,
- * APEXCRYPT and APEXCRYPTTILES).
+ * APEXCRYPT, APEXCRYPTTILES and APEXCRYPTSPRITES).
  */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('../../core/iso.js'), require('../iso/view.js'), require('../../core/crypt.js'), require('./tiles.js'));
-  else root.APEXCRYPTVIEW = factory(root.APEXISO, root.APEXISOVIEW, root.APEXCRYPT, root.APEXCRYPTTILES);
-})(typeof self !== 'undefined' ? self : this, function (ISO, IV, G, TILES) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('../../core/iso.js'), require('../iso/view.js'), require('../../core/crypt.js'), require('./tiles.js'), require('./sprites.js'));
+  else root.APEXCRYPTVIEW = factory(root.APEXISO, root.APEXISOVIEW, root.APEXCRYPT, root.APEXCRYPTTILES, root.APEXCRYPTSPRITES);
+})(typeof self !== 'undefined' ? self : this, function (ISO, IV, G, TILES, SP) {
   'use strict';
 
-  const SPRITE = { mc1: 2, mc2: 1 }; // red, white
-  const COLOR = { hero: 15, drowned: 5, spawn: 4, dim: 11, bullet: 7, dead: 2 };
+  const SPRITE = SP.COLORS;
+  // Own colours. A creature out of the light is dim; hit, it flashes white.
+  const COLOR = { hero: 15, drowned: 5, spawn: 4, dim: 11, flash: 1, bullet: 7 };
   const GAP = 24;
   const BAR_LINE = 188;
 
-  // ------------------------------------------------------------------ sprites
-  // '.' clear, c red, a the sprite's own colour, w white. Drawn facing right; facing left mirrors.
-  const art = rows => {
-    const out = rows.map(r => Array.from(r.padEnd(12, '.'), ch => ({ c: 1, a: 2, w: 3 }[ch] || 0)));
-    while (out.length < 21) out.unshift(new Array(12).fill(0));
-    return out.slice(-21);
-  };
-  const HERO_TOP = [
-    '....aaaa....', '...aaaaaa...', '.aaaaaaaaaa.', '....wwww....', '....wwwa....', '.....ww.....',
-    '...aaccaa...', '..aaaccaaaa.', '..aaaccawwaa', '..aaaccaa..a', '..aaaaaaa...', '..aaaaaaa...',
-    '...aaaaaa...', '...aaaaaa...',
-  ];
-  // Facing the viewer (aiming down the screen) and away from it (up).
-  const HERO_FRONT = [
-    '....aaaa....', '...aaaaaa...', '.aaaaaaaaaa.', '....wwww....', '....wwww....', '.....ww.....',
-    '...aaccaa...', '..aaaccaaa..', '.waaaccaaaw.', '.aaaaccaaaaa', '..aaaaaaa...', '..aaaaaaa...',
-    '...aaaaaa...', '...aaaaaa...',
-  ];
-  const HERO_BACK = [
-    '....aaaa....', '...aaaaaa...', '.aaaaaaaaaa.', '....aaaa....', '....aaaa....', '.....ww.....',
-    '...aaaaaa...', '..aaaaaaaa..', '.waaaaaaaaw.', '.aaaaaaaaaa.', '..aaaaaaa...', '..aaaaaaa...',
-    '...aaaaaa...', '...aaaaaa...',
-  ];
-  const HERO_LEGS = {
-    stand: ['...aa..aa...', '...aa..aa...', '...aa..aa...', '...aa..aa...', '..ccc..ccc..'],
-    walk1: ['...aa...aa..', '..aa.....aa.', '..aa.....aa.', '.aa.......aa', '.ccc.....ccc'],
-    walk2: ['....aaaa....', '....aaa.....', '.....aa.....', '.....aa.....', '....ccc.....'],
-  };
-  const DROWNED = [
-    ['....aaaa....', '...aaaaaa...', '..aawaaawa..', '..aaaaaaaaa.', '...acccccaa.', '....aaaa....', '..a.aaaa.a..',
-      '.aa.aaaa.aa.', '.a.aawwaa.a.', 'a..aawwaa..a', 'aa.aaaaaa.aa', '...aaaaaa...', '...aa..aa...', '...aa..aa...',
-      '..aaa..aaa..', '.aa.a..a.aa.'],
-    ['....aaaa....', '...aaaaaa...', '..aawaaawa..', '..aaaaaaaaa.', '...acccccaa.', '.a..aaaa..a.', '.aa.aaaa.aa.',
-      '..aaaaaaaa..', '...aawwaa...', '...aawwaa...', '...aaaaaa...', '...aaaaaa...', '...aa...aa..', '..aa....aa..',
-      '..aaa...aaa.', '.aa.a....a.a'],
-  ];
-  const SPAWN = [
-    ['....aaaa....', '..aaaaaaaa..', '.aaawwwwaaa.', '.aawwccwwaa.', 'aaawwccwwaaa', '.aawwwwwwaa.', '.aaawwwwaaa.',
-      '..aaaaaaaa..', '..a.aaaa.a..', '.a..a..a..a.', '.a.a...a.a..', 'a..a..a...a.', 'a...a.a..a..', '.a..a..a.a..'],
-    ['....aaaa....', '..aaaaaaaa..', '.aaawwwwaaa.', '.aawwccwwaa.', 'aaawwccwwaaa', '.aawwwwwwaa.', '.aaawwwwaaa.',
-      '..aaaaaaaa..', '..a.aaaa.a..', '..a.a..a.a..', '.a..a..a..a.', '.a...a..a..a', '..a..a.a...a', '..a.a..a..a.'],
-  ];
-  const FRAMES = {};
-  for (const [name, legs] of Object.entries(HERO_LEGS)) {
-    FRAMES['hero_side_' + name] = art([...HERO_TOP, ...legs]);
-    FRAMES['hero_front_' + name] = art([...HERO_FRONT, ...legs]);
-    FRAMES['hero_back_' + name] = art([...HERO_BACK, ...legs]);
-  }
+  // ------------------------------------------------------------------ sprites (sprites.js)
+  const FRAMES = SP.FRAMES, FRAME_NAMES = Object.keys(FRAMES);
   // Which view of the hero shows for its aim: up the screen (1, 5, 9) its back, down (2, 6, 10) its front.
   const heroView = aim => ([1, 5, 9].includes(aim) ? 'back' : [2, 6, 10].includes(aim) ? 'front' : 'side');
-  FRAMES.hero_dead = art(['............', '............', '.aaa........', 'aaaaaaaaaaww', 'awwaaccaaaa.', '.ww.aaaaaaaa']);
-  DROWNED.forEach((r, k) => { FRAMES['drowned' + k] = art(r); });
-  SPAWN.forEach((r, k) => { FRAMES['spawn' + k] = art(r); });
-  // In the dark only the eyes show: the same rows, every pixel gone but the eyes, which glow red.
-  const eyes = (rows, at) => art(rows.map((r, y) => Array.from(r, (ch, x) => (at(x, y, ch) ? 'c' : '.')).join('')));
-  FRAMES.drowned_eyes = eyes(DROWNED[0], (x, y, ch) => ch === 'w' && y < 4);
-  FRAMES.spawn_eyes = eyes(SPAWN[0], (x, y, ch) => ch === 'c');
-  FRAMES.splat0 = art(['....a..a....', '..a.aaaa.a..', '.aaaaaaaaaa.', '..aaaccaaa..']);
-  FRAMES.splat1 = art(['.a........a.', '..aa.aa.aa..', 'aaaaaaaaaaaa', '.aaaaccaaaa.']);
-  FRAMES.bullet = art(['.....aa.....', '.....aa.....']);
-  const FRAME_NAMES = Object.keys(FRAMES);
 
   // ------------------------------------------------------------------ light on the creatures
   // A creature's step of light, from where its feet are on the screen, as the iso view lights the
@@ -118,7 +62,7 @@
       const step = lightStep(s.x, s.y - 10);
       if (step >= 4) { feet(c, name + '_eyes', COLOR[name], c.facing < 0); continue; }
       const frame = name + (c.awake ? (c.t >> 3) & 1 : 0);
-      feet(c, frame, c.flash ? 1 : step >= 2 ? COLOR.dim : COLOR[name], c.facing < 0);
+      feet(c, frame, c.flash ? COLOR.flash : step >= 2 ? COLOR.dim : COLOR[name], c.facing < 0);
     }
     return out;
   }

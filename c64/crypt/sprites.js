@@ -16,29 +16,43 @@
   const COLORS = { mc1: 0, mc2: 10 }; // black, light red
 
   // ------------------------------------------------------------------ the investigator
-  // A hat with a black band, a coat and trousers, black shoes; the pistol in the right hand.
+  // A hat with a black band, a raincoat to the ankles, black shoes; the pistol in the right hand. The
+  // coat's hem swings as he walks, flaring out behind from the side.
   const HAT = ['....kkkk....', '...kaaaak...', '...kaaaak...', '..kkkkkkkk..', '.kaaaaaaaak.', '..kkkkkkkk..'];
   const SIDE = [
     ...HAT,
     '...kssssk...', '...kssksk...', '....kssk....', '...kkaakk...', '..kaaaaakkkk', '..kaaaassk..', '..kaaaaak...',
-    '..kaaaaak...', '..kaakaak...',
+    '..kaaaaak...',
   ];
   const FRONT = [
     ...HAT,
     '...kssssk...', '...kksskk...', '....kssk....', '..kkaaaakk..', '.kaaaaaaaak.', '.kaaaaaaaak.', '.ksaaaaaask.',
-    '.kskaaaakkk.', '..kaakkaak..',
+    '.kskaaaakkk.',
   ];
   const BACK = [
     ...HAT,
     '...kkkkkk...', '...kkkkkk...', '....kkkk....', '..kkaaaakk..', '.kaaaaaaaak.', '.kaaaaaaaak.', '.ksaaaaaask.',
-    '.kkaaaaaask.', '..kaaaaaak..',
+    '.kkaaaaaask.',
   ];
-  const LEGS = {
-    stand: ['..kaakkaak..', '..kaak.kaak.', '..kaak.kaak.', '..kaak.kaak.', '..kkkk.kkkk.'],
-    walk1: ['..kaakkaak..', '.kaak..kaak.', '.kaak...kaak', 'kaak....kaak', 'kkkk....kkkk'],
-    walk2: ['...kaaaak...', '...kaaak....', '....kaak....', '....kaak....', '....kkkk....'],
+  // The coat below the waist and the shoes under its hem, for each view and step.
+  const COAT = {
+    side: {
+      stand: ['..kaaaaak...', '..kaaaaak...', '..kaaaaak...', '..kaaaaaak..', '..kaaaaaak..', '..kkkkkkkk..', '...kk.kk....'],
+      walk1: ['..kaaaaak...', '..kaaaaak...', '.kaaaaaak...', '.kaaaaaaak..', 'kaaaaaaaak..', 'kkkkkkkkkk..', '.kk....kk...'],
+      walk2: ['..kaaaaak...', '..kaaaaak...', '..kaaaaak...', '.kaaaaaak...', '.kaaaaaaak..', '.kkkkkkkkk..', '....kkk.....'],
+    },
+    front: {
+      stand: ['..kaaaaaak..', '..kaaaaaak..', '..kaakkaak..', '..kaakkaak..', '.kaaakkaaak.', '.kkkk..kkkk.', '..kk....kk..'],
+      walk1: ['..kaaaaaak..', '..kaaaaaak..', '..kaakkaak..', '.kaaak.kaak.', '.kaaak..kaak', '.kkkk...kkkk', '.kk......kk.'],
+      walk2: ['..kaaaaaak..', '..kaaaaaak..', '..kaakkaak..', '..kaakkaak..', '..kaakkaak..', '..kkkkkkkk..', '....kkkk....'],
+    },
+    back: {
+      stand: ['..kaaaaaak..', '..kaaaaaak..', '..kaaaaaak..', '..kaaaaaak..', '.kaaakkaaak.', '.kkkkkkkkkk.', '..kk....kk..'],
+      walk1: ['..kaaaaaak..', '..kaaaaaak..', '..kaaaaaak..', '.kaaaaaaak..', '.kaaak.kaaak', '.kkkk..kkkkk', '.kk......kk.'],
+      walk2: ['..kaaaaaak..', '..kaaaaaak..', '..kaaaaaak..', '..kaaaaaak..', '..kaakkaak..', '..kkkkkkkk..', '....kkkk....'],
+    },
   };
-  const DEAD = ['............', '............', '..kkkk......', '.kaaaakkkkkk', 'kaaaaaaaaaak', 'kkssaaaaaaak', '.kkkkkkkkkk.'];
+  const DEAD = ['............', '............', '..kkkk......', '.kaaaakkkkkk', 'kaaaaaaaaaak', 'kkssaaaaaaaa', 'kaaaaaaaaaak', '.kkkkkkkkkkk'];
 
   // ------------------------------------------------------------------ the drowned
   // A hunched fish-man facing the viewer: wide-set staring eyes in a broad head, a gaping mouth,
@@ -78,11 +92,8 @@
   const eyes = (rows, upTo) => rows.map((r, y) => (y < upTo ? r.replace(/[^s]/g, '.') : '............'));
 
   const IMAGES = {};
-  for (const [name, legs] of Object.entries(LEGS)) {
-    IMAGES['hero_side_' + name] = [...SIDE, ...legs];
-    IMAGES['hero_front_' + name] = [...FRONT, ...legs];
-    IMAGES['hero_back_' + name] = [...BACK, ...legs];
-  }
+  for (const [view, top] of [['side', SIDE], ['front', FRONT], ['back', BACK]])
+    for (const [step, coat] of Object.entries(COAT[view])) IMAGES[`hero_${view}_${step}`] = [...top, ...coat];
   IMAGES.hero_dead = DEAD;
   DROWNED.forEach((r, k) => { IMAGES['drowned' + k] = r; });
   SPAWN.forEach((r, k) => { IMAGES['spawn' + k] = r; });

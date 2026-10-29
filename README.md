@@ -1,17 +1,36 @@
-# APEX
+# APEX-8
 
-A first-person raycasting game engine for 8-, 16-, 32- and 64-bit machines, starting with the Commodore 64.
+Game engines and tools for 8-bit machines, starting with the Commodore 64:
+
+- **a first-person raycaster**: E1M1 in APEXSCII's raycast characters
+- **a parallax platformer**: Green Hills
+- **an isometric dungeon**: the Crypt, with a torchlight that follows the hero, and the Drowned Crypt, a small action game built on it
+- **a vertical shoot-'em-up**: the Dreadnought, with a sprite multiplexer, a status bar and music
+
+Each engine has a JavaScript reference that defines every frame, and a 6502 engine that is checked against it pixel for pixel in VICE, timing included. Alongside them:
+
+- **the kit**: the start-up, the multiplexer, the test scripts and profiler
+- **the SID driver**: music and effects, register-exact with its reference
+- **a SID emulation**: so the browser versions play the same sound
+- **converters**: pictures to C64 bitmaps, tiles and sprites from drawn art
+- **the tests**: run everything in VICE
+
+The C64 engines draw with the [APEXSCII](https://github.com/jedi12many/apexscii) character sets, included as a submodule.
+
+```bash
+git clone --recurse-submodules https://github.com/jedi12many/apex-8.git
+```
+
+Made something with APEX-8? Put the badge on it: see [The APEX-8 badge](#the-apex-8-badge) and [BRAND.md](BRAND.md).
+
+## The raycaster in brief
 
 Every platform shares:
 - the level format
 - the levels
 - one reference raycaster
 
-Each port draws in its own way, and is tested pixel for pixel against the reference. The C64 version draws with the [APEXSCII](https://github.com/jedi12many/apexscii) raycast character set, which is included as a submodule.
-
-```bash
-git clone --recurse-submodules https://github.com/jedi12many/apex.git
-```
+Each port draws in its own way, and is tested pixel for pixel against the reference.
 
 To play on a C64 or in VICE, load `c64/out/apex.prg` with `LOAD"*",8,1`, then `RUN`. Use a joystick in port 2, or W and S to walk and A and D to turn. `showcase/out/c64-e1m1.mp4` is a recording of it running in VICE.
 
@@ -521,4 +540,4 @@ The raycaster is a renderer so far. These are what a game built on it would need
 
 ## Licence
 
-MIT, copyright (c) 2026 jedi12many; see [LICENSE](LICENSE).
+The code is MIT, copyright (c) 2026 jedi12many; see [LICENSE](LICENSE). The APEX-8 name and badge have their own rules: see [BRAND.md](BRAND.md).

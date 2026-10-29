@@ -1,7 +1,7 @@
 // APEX C64 kit, test side: what every engine's VICE check shares. An engine's test lists its cases
 // and its timing runs; this builds them, runs VICE, compares and reports.
 //
-//   options(usage)   the command line: <VICE folder> [--ntsc | --model <name>] [--quick] [--timing]
+//   options(usage)   the command line: <VICE folder> [--ntsc | --model <name>] [--reu] [--quick] [--timing]
 //                    --model picks a VICE machine (c64, c64c, c64old, ntsc, ntscold, drean, ...)
 //   checkFrames(o, cases)   each case { name, prg() -> bytes, want() -> 320x200 RGBA, ticks, note }
 //                    runs in VICE (for c.cycles, or 6M plus 24K a tick) and must match pixel for pixel; a
@@ -24,15 +24,15 @@ function options(usage) {
   const args = process.argv.slice(2), at = args.indexOf('--model');
   const model = at >= 0 ? args[at + 1] : undefined;
   const viceDir = args.find((a, i) => !a.startsWith('--') && (at < 0 || i !== at + 1));
-  if (!viceDir) { console.error(`usage: ${usage} <VICE folder> [--ntsc | --model <name>] [--quick] [--timing]`); process.exit(2); }
-  const ntsc = args.includes('--ntsc') || /ntsc/.test(model || '');
+  if (!viceDir) { console.error(`usage: ${usage} <VICE folder> [--ntsc | --model <name>] [--reu] [--quick] [--timing]`); process.exit(2); }
+  const ntsc = args.includes('--ntsc') || /ntsc/.test(model || ''), reu = args.includes('--reu');
   const { exe, rom } = findVice(viceDir);
   return {
-    exe, rom, model, ntsc, vice: { ntsc, model },
+    exe, rom, model, ntsc, reu, vice: { ntsc, model, reu },
     quick: args.includes('--quick'), timingOnly: args.includes('--timing'),
     scratch: fs.mkdtempSync(path.join(os.tmpdir(), 'apex-check-')),
     failDir: path.join(os.tmpdir(), 'apex-check-failures'),
-    machine: model || (ntsc ? 'NTSC' : 'PAL'),
+    machine: (model || (ntsc ? 'NTSC' : 'PAL')) + (reu ? ' with an REU' : ''),
   };
 }
 

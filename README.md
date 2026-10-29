@@ -431,6 +431,17 @@ On PAL, the machine it's made for, the whole game is never late. NTSC frames are
 
 The timing test also times each whole script with VICE's stopwatch, so a frame lost any other way, such as an IRQ chain that misses the bottom of a frame, would show up too.
 
+**With an REU.** At start-up the shooter looks for an REU (`reu_detect`). With one, it copies the other screen by DMA instead of with the CPU. At the start of each frame's work, just after the bottom IRQ, it copies the top row and then 4 rows by DMA, about 400 cycles. That is in the border, where no IRQ is due for many lines, which matters because the DMA stops the CPU and its IRQs. The first 6 frames after a swap finish the copy, well ahead of when it's due, and the CPU's copy does whatever is left. 4 rows a frame did best: 3, 6, 12 and 24 were tried. The frames are the same with or without an REU, and the tests check them both ways (`--reu`). On NTSC it removes most of the late frames:
+
+| NTSC, late frames in 2,400 ticks | Without an REU | With an REU |
+|---|---|---|
+| The autopilot's run | 21 | 8 |
+| The run, with two SIDs | 34 | 13 |
+| The sweep through a whole game | 4 | 1 |
+| The sweep, with two SIDs | 9 | 1 |
+
+The frames still late are ones where the game's own work runs past an NTSC frame without any copying. On PAL there are none either way.
+
 **The brick look.** Build with `--brick` (`node c64/shmup/build.js --brick` writes `c64/out/shmup-brick.prg`) and the Dreadnought is built from toy bricks: APEXSCII's Brick theme (its `brick-stud` texture) gives a stud a character on the armour and the raised blocks, lit white on the upper left and shaded on the lower right, and the recessed panels become flat tiles. Only the character set changes, so the engine and its timing are the same; `test/shmup-check.js` and `showcase/shmup-c64-video.js` take `--brick` too (the video goes to `showcase/out/shmup-c64-brick.mp4`).
 
 ```bash
@@ -451,6 +462,7 @@ What every C64 engine shares lives in `c64/kit/` and `test/`, so a new engine st
 | `c64/kit/kit.inc` | The BASIC line, the machine's set-up (RAM in place of BASIC and the KERNAL, the IRQ vector, a cleared zero page), the script player, frame timing, late-frame counting, and the profiler's `MARK`s |
 | `c64/kit/mux.inc` | The sprite multiplexer, as the shoot-'em-up uses it: `SHOW` each object, `mux_build` sorts them and gives them hardware sprites, and two IRQs set them up down the screen. An engine can add a raster split of its own, which the chain fits between sprites |
 | `c64/kit/sid.inc`, `sidgen.js` | The SID driver, and the tables it plays from (see *Sound*) |
+| `c64/kit/reu.inc` | The REU: `reu_detect` (its address registers keep what's written to them; without one, $DF00-$DFFF reads whatever is on the bus) and `reu_copy`, which copies within the C64 by DMA, out to the REU and back, at 2 cycles a byte against the CPU's 8. The CPU and its IRQs wait while it runs, so an engine calls it where no IRQ is due for that long |
 | `test/kit.js` | The VICE checks: frames compared pixel for pixel, timing runs (late frames, late sprites, the slowest frame), the sound's registers, and a verdict |
 | `test/profile.js` | Plays an engine's script in a profiling build and shows how its slowest frame's cycles split between its parts |
 
@@ -531,7 +543,7 @@ Each program is also in `c64/out` as a `.prg`, which the Ultimate can run straig
 - *video*: PAL. The engines also pass on NTSC, but run at 60 frames a second with 13% less time for each. The shooter is late now and then in its busiest stretch on NTSC.
 - *CPU*: no turbo. The engines time their raster splits and sprite multiplexing to the stock speed. A faster CPU hasn't been tested, and VICE can't emulate the Ultimate's turbo modes.
 - *SID*: a 6581, or UltiSID set to 6581. The music's filter settings were made for it; an 8580 sounds brighter. With a second SID at $D420, the shooter and the sound players find it and play their effects on it, so the music never stops for them. On PAL that costs the shooter nothing that shows. On NTSC it is late a little more often: 32 frames in its run and 9 in its sweep, against 21 and 3 on one SID.
-- *REU*: not used yet; it does no harm left on.
+- *REU*: on. The shooter finds it and copies its screen by DMA (see the shooter's *Timing*); without one it copies with the CPU, as on a stock C64.
 
 `node c64/disk.js <VICE folder>` makes the disk again from the programs in `c64/out` (build them first). It uses VICE's `petcat` and `c1541`.
 

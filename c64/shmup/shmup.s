@@ -42,6 +42,7 @@ MUX_SPLIT    = 50 + BAR_LINE  ; the status bar's raster split (mux_split_hook): 
 .include "kit.inc"
 .include "mux.inc"
 .include "sid.inc"
+.include "reu.inc"
 
 .segment "ZEROPAGE"
 inp:     .res 1             ; joystick bits: 1 up, 2 down, 4 left, 8 right, 16 fire
@@ -326,6 +327,7 @@ start:
     sta applied
     KIT_SCRIPT_START
     jsr snd_init
+    jsr reu_detect
     lda #$fe                ; (no status bar built yet)
     sta barlast+3
     lda #0
@@ -359,6 +361,10 @@ main:
     lda #0
     sta applied
     sta latef
+    lda reu                 ; with an REU, some of the other screen by DMA, here in the border
+    beq :+
+    jsr copy_reu
+:
     jsr input
     bcc :+
     jmp kit_park
@@ -1738,7 +1744,17 @@ copy_more:
     jsr call
     jmp @next
 @top:
-    ldx cyr                 ; the top row: the level's row above this one's
+    jsr top_row
+@next:
+    inc cdone
+    ldy ys
+    jmp @part
+@done:
+    rts
+
+; The other screen's top row: the level's row above this one's.
+top_row:
+    ldx cyr
     bne :+
     ldx #LEVEL_ROWS
 :   dex
@@ -1758,10 +1774,61 @@ copy_more:
     sta (dp),y
     dey
     bpl :-
-@next:
+    rts
+
+; With an REU, at the start of each frame's work (just after the bottom IRQ, in the border, where no
+; IRQ is due for many lines; the DMA stops the CPU and its IRQs): the other screen's top row, then up
+; to REU_ROWS of its rows by DMA, a few frames finishing it well ahead of copy_more's schedule, which
+; does whatever is left. The other screen is free here whenever it isn't done (cdone < 25): cdone goes
+; to 0 with the swap, and the frame with the swap has just been shown.
+REU_ROWS = 4
+copy_reu:
+    lda cdone
+    cmp #25
+    beq @done
+    cmp #0
+    bne :+
+    jsr top_row
     inc cdone
-    ldy ys
-    jmp @part
+:   lda cdone               ; rows cdone - 1 .. of this screen into rows cdone .. of the other
+    sec
+    sbc #1
+    tax
+    lda #25                 ; n = min(REU_ROWS, 25 - cdone)
+    sec
+    sbc cdone
+    cmp #REU_ROWS
+    bcc :+
+    lda #REU_ROWS
+:   tay
+    lda ROWS40_LO,y         ; the length: n rows
+    sta reu_len
+    lda ROWS40_HI,y
+    sta reu_len+1
+    tya
+    clc
+    adc cdone
+    pha
+    lda ROWS40_LO,x         ; from this screen's row cdone - 1
+    sta reu_from
+    lda ROWS40_HI,x
+    ldy cur
+    clc
+    adc SCREEN_HI,y
+    sta reu_from+1
+    inx                     ; to the other's row cdone
+    lda ROWS40_LO,x
+    sta reu_to
+    lda cur
+    eor #1
+    tay
+    lda ROWS40_HI,x
+    clc
+    adc SCREEN_HI,y
+    sta reu_to+1
+    jsr reu_copy
+    pla
+    sta cdone
 @done:
     rts
 
@@ -2176,6 +2243,8 @@ D018_SCREEN: .byte ((SCREEN_A & $3c00) >> 6), ((SCREEN_B & $3c00) >> 6)
 D018_CHARS:  .byte ((CHARS_A & $3800) >> 10), ((CHARS_B & $3800) >> 10)
 STARS_LO:    .byte <(CHARS_A + STAR * 8), <(CHARS_B + STAR * 8)
 STARS_HI:    .byte >(CHARS_A + STAR * 8), >(CHARS_B + STAR * 8)
+ROWS40_LO:   .lobytes 0, 40, 80, 120, 160, 200, 240, 280, 320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720, 760, 800, 840, 880, 920, 960
+ROWS40_HI:   .hibytes 0, 40, 80, 120, 160, 200, 240, 280, 320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720, 760, 800, 840, 880, 920, 960
 NEED:        .byte 0, 0, 2, 5, 9, 14, 19, 25   ; the other screen's parts due by each fine scroll (back-loaded: frames with time to spare do most of it ahead)
 DRONE_Y:     .byte <-21, <-45, <-69, <-93
 DIG_BYTE:    .byte 2, 2, 1, 1, 0, 0       ; the score's digits: their BCD byte

@@ -477,6 +477,7 @@ Music and sound effects for the SID, made the way the pictures are: `core/sound.
 - *the filter*: a resonant low-pass (or band or high) whose cutoff sweeps up and down from a table, over the voices whose instruments use it
 - *effects*: steps of a waveform, a sliding frequency, ADSR and a length, each played on its own voice (the song's effects voice unless it names another) instead of the music, which goes on underneath. Effects on different voices play at once. A new effect starts unless one of higher priority is playing on its voice
 - *the music off*: the game can turn the music off. The song stands still, every voice fades on its release, and the effects have the voices to themselves. Turned on, the song goes on from where it stopped
+- *two SIDs*: with a second SID at $D420, as a C64 Ultimate can have, the music plays on the first and the effects on the second, each on its own voice there, so they never interrupt the music and can overlap. When an effect ends, its voice keeps its last registers with the gate off, so its release plays out. The driver checks for a second SID at start-up (`snd_detect`). Without one, those addresses are just the first SID again, since the chip's registers repeat every $20 bytes. So it holds voice 3 of the second still, runs the first's as a fast sawtooth, and reads the second's voice 3 output: always 0 from a real second SID. The same program plays one SID or two. The browser pages play two
 - `sound/shmup.js`: the Dreadnought's music, an original late-80s house track at 125 beats a minute in A minor. A four-on-the-floor kick with offbeat hats and claps, an octave-jumping bass through the sweeping filter, and arpeggiated chord stabs that give way to a hook. The effects borrow the stabs' voice, so firing never stops the beat. It loops every 31 seconds
 - `sound/crypt.js`: the Drowned Crypt's music, an original creeping cue in the manner of a 1920s silent film, in D minor at 75 beats a minute. A plucked bass walking chromatically into each change, stride chords on 2 and 4, and a melody that tiptoes up onto ghostly held notes. The hero's and creatures' effects are short and sit under the music. When the boss rises the music stops for its roar, moans, screeches and death shriek. `EVENTS` maps the game's events to effects
 
@@ -498,9 +499,9 @@ Music and sound effects for the SID, made the way the pictures are: `core/sound.
 | `core/sid.js` | The SID emulation, for the browser and WAVs |
 | `web/audio.js` | Plays a game's sound in a browser page |
 | `c64/sound/` | A player program for a song (`node c64/sound/build.js crypt`): the music, with the joystick (or a test's script) playing the effects |
-| `test/sound-check.js` | For each song, plays it for two loops, each effect alone, effects piling up, and the music off and on, in VICE, and compares every tick's registers |
+| `test/sound-check.js` | For each song, on one SID and on two, plays it for two loops, each effect alone, effects piling up, and the music off and on, in VICE, and compares every tick's registers. Then checks the driver finds a second SID when VICE has one at $D420, and none when it doesn't |
 | `test/sid-compare.js` | Compares the emulation's sound with VICE's recording |
-| `showcase/sound-wav.js` | Records the player in VICE as `showcase/out/<song>-music.mp3` (and a WAV, not kept in git) |
+| `showcase/sound-wav.js` | Records the player in VICE as `showcase/out/<song>-music.mp3` (and a WAV, not kept in git); with `--sids 2`, with a second SID, as `<song>-music-2sid.mp3` |
 
 ```bash
 node c64/sound/build.js
@@ -529,7 +530,7 @@ Each program is also in `c64/out` as a `.prg`, which the Ultimate can run straig
 
 - *video*: PAL. The engines also pass on NTSC, but run at 60 frames a second with 13% less time for each. The shooter is late now and then in its busiest stretch on NTSC.
 - *CPU*: no turbo. The engines time their raster splits and sprite multiplexing to the stock speed. A faster CPU hasn't been tested, and VICE can't emulate the Ultimate's turbo modes.
-- *SID*: a 6581, or UltiSID set to 6581. The music's filter settings were made for it; an 8580 sounds brighter.
+- *SID*: a 6581, or UltiSID set to 6581. The music's filter settings were made for it; an 8580 sounds brighter. With a second SID at $D420, the shooter and the sound players find it and play their effects on it, so the music never stops for them. On PAL that costs the shooter nothing that shows. On NTSC it is late a little more often: 32 frames in its run and 9 in its sweep, against 21 and 3 on one SID.
 - *REU*: not used yet; it does no harm left on.
 
 `node c64/disk.js <VICE folder>` makes the disk again from the programs in `c64/out` (build them first). It uses VICE's `petcat` and `c1541`.

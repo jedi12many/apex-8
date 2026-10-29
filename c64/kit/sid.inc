@@ -4,7 +4,12 @@
 ; Include it after kit.inc, with the song's tables (sound.inc, from c64/kit/sidgen.js) on the
 ; include path.
 ;
-;   snd_init        silence, and the song from its start, the music on
+;   snd_init        silence, and the song from its start, the music on; one SID or two (snd_detect,
+;                   unless the build sets SND_STEREO to 0 or 1)
+;   snd_detect      snd_stereo = 1 if there is a second SID at SND_SID2 ($D420 unless the build says):
+;                   the music then plays on the first and the effects on the second, as the
+;                   reference's two-SID player does
+;   snd_stereo      0 one SID, 1 two
 ;   snd_music       0 turns the music off (the song stands still, every voice released), else on
 ;
 ; An effect plays on its voice (SFX_V); the filter's cutoff sweeps by a table.
@@ -13,12 +18,19 @@
 ;   snd_tick        one tick: the next row, each voice, the effect, into the register image snd_img.
 ;                   SCRIPT builds also fold the image into the checksum snd_sum, as the tests do
 ;                   (unless SND_NOSUM: timing builds leave it out, as the game itself does)
-;   snd_out         the register image to the SID ($D400-$D418): once a frame, at a steady time
+;   snd_out         the register image to the SID ($D400-$D418), and the second's to it: once a frame,
+;                   at a steady time
 
 .include "sound.inc"
 
+.ifndef SND_SID2
+SND_SID2 = $d420
+.endif
+
 .segment "BSS"
-snd_img:   .res 25          ; the SID's registers, as the next snd_out writes them
+snd_img:   .res 50          ; the SIDs' registers, as the next snd_out writes them (the second's after)
+snd_stereo: .res 1          ; 1: two SIDs
+snd_n:     .res 1           ; the image's length: 25 or 50
 snd_timer: .res 1           ; ticks left in this row
 snd_row:   .res 1
 snd_pos:   .res 1           ; the place in the order
@@ -55,8 +67,19 @@ snd_pp:    .res 2           ; a pattern
 
 .segment "CODE"
 snd_init:
+.ifdef SND_STEREO
+    lda #SND_STEREO
+    sta snd_stereo
+.else
+    jsr snd_detect
+.endif
+    lda #25
+    ldx snd_stereo
+    beq :+
+    lda #50
+:   sta snd_n
     lda #0
-    ldx #24
+    ldx #49
 :   sta snd_img,x
     dex
     bpl :-
@@ -85,6 +108,35 @@ snd_init:
     lda #1
     sta snd_music
     rts
+
+; A second SID at SND_SID2? Without one, those addresses are the first SID again (the I/O area repeats
+; it every $20 bytes). So: hold the second's voice 3 by its test bit, run the first's as a fast
+; sawtooth, and read the second's voice 3 output: always 0 from a second SID, moving if it is the first.
+snd_detect:
+    lda #0
+    sta snd_stereo
+    lda #$08                ; the second's voice 3: held (the first's, if it is the first)
+    sta SND_SID2+$12
+    lda #$ff                ; the first's voice 3: a sawtooth at the top frequency
+    sta $d40e
+    sta $d40f
+    lda #$20
+    sta $d412
+    ldx #0
+:   lda SND_SID2+$1b        ; the second's voice 3 output
+    bne @one
+    dex
+    bne :-
+    inc snd_stereo
+@one:
+    lda #0                  ; both quiet again
+    sta $d412
+    sta $d40e
+    sta $d40f
+    ldx snd_stereo
+    beq :+
+    sta SND_SID2+$12
+:   rts
 
 snd_fx:
     stx snd_t
@@ -203,14 +255,24 @@ snd_tick:
 :   jsr snd_voice
     dex
     bpl :-
-    ; the effects, each on its voice
+    ; the effects, each on its voice (of the second SID, with two)
     ldx #2
 @fxv:
     lda sfx,x
     bpl :+
+    lda snd_stereo          ; two SIDs: an idle voice keeps its last registers, the gate off
+    beq @fxidle
+    ldy V_BASE2,x
+    lda snd_img+4,y
+    and #$fe
+    sta snd_img+4,y
+@fxidle:
     jmp @fxnext
 :   ldy V_BASE,x
-    sty snd_b
+    lda snd_stereo
+    beq :+
+    ldy V_BASE2,x
+:   sty snd_b
     lda sfx_fl,x
     sta snd_img,y
     lda sfx_fh,x
@@ -285,6 +347,11 @@ snd_tick:
     sta snd_img+23
     lda #SND_FMODE | $0f
     sta snd_img+24
+    lda snd_stereo          ; the second SID: no filter, full volume
+    beq :+
+    lda #$0f
+    sta snd_img+49
+:
 .if .defined(SCRIPT) .and .not .defined(SND_NOSUM)
     ldx #0                  ; the checksum: rotate left, add
 :   lda snd_sum+1
@@ -298,7 +365,7 @@ snd_tick:
     bcc :+
     inc snd_sum+1
 :   inx
-    cpx #25
+    cpx snd_n
     bne :--
 .endif
     rts
@@ -310,6 +377,8 @@ snd_voice:
     sty snd_b
     lda v_ins,x
     bmi @silent
+    lda snd_stereo          ; (two SIDs: the effects are on the second)
+    bne @emit
     lda sfx,x               ; (under an effect, which sets them)
     bmi @emit
     ldy v_ins,x
@@ -453,9 +522,18 @@ snd_out:
     lda snd_img+I
     sta $d400+I
 .endrepeat
+    lda snd_stereo
+    bne :+
+    rts
+:
+.repeat 25, I
+    lda snd_img+25+I
+    sta SND_SID2+I
+.endrepeat
     rts
 
 .segment "RODATA"
 V_BASE: .byte 0, 7, 14
+V_BASE2: .byte 25, 32, 39
 V_BIT:  .byte 1, 2, 4
 .segment "CODE"

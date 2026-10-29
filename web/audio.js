@@ -1,5 +1,6 @@
 /*
- * APEX audio for the browser pages: a game's sound, as the C64 makes it. Each tick the page tells it
+ * APEX audio for the browser pages: a game's sound, as the C64 makes it (by default as a C64 Ultimate
+ * with two SIDs does: the music on one, the effects on the other). Each tick the page tells it
  * what the game did (the effects to start, whether the music plays); core/sound.js turns that into the
  * SID's 25 registers, exactly as the C64's driver writes them, and core/sid.js plays them, in an
  * AudioWorklet (built from APEXSID.source), or a ScriptProcessor where worklets can't run (pages opened
@@ -9,7 +10,8 @@
  * first key press, click or touch; until then the song still moves on, silently, so it is where it
  * would be. M (the page's) mutes and unmutes.
  *
- *   const audio = APEXAUDIO.create(songDefinition)
+ *   const audio = APEXAUDIO.create(songDefinition, { sids: 2 })   two SIDs, as on a C64 Ultimate (the
+ *                                                                 default; 1 for a stock C64)
  *   audio.tick(['shot', ...], musicOn)   once a game tick (50 a second), the effects by name
  *   audio.start()                         from a user gesture; audio.toggleMute()
  *
@@ -29,23 +31,25 @@ const APEXSID = ${SID.source};
 class ApexSid extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.sid = APEXSID.create(sampleRate);
+    this.chips = [APEXSID.create(sampleRate), APEXSID.create(sampleRate)];
     this.queue = [];
     this.left = 0;
     this.starved = 0;
     this.port.onmessage = e => { this.queue.push(e.data); if (this.queue.length > 8) this.queue.splice(0, this.queue.length - 3); };
   }
+  // A frame's registers: the first SID's, then the second's if there are two.
+  write(R) { this.chips[0].write(R); if (R.length > 25) this.chips[1].write(R.slice(25)); }
   process(inputs, outputs) {
     const out = outputs[0][0];
     out.fill(0);
     for (let i = 0; i < out.length;) {
       if (this.left <= 0) {
-        if (this.queue.length) { this.sid.write(this.queue.shift()); this.starved = 0; }
-        else if (++this.starved === 25) this.sid.write(new Array(25).fill(0)); // the page stopped: silence
+        if (this.queue.length) { this.write(this.queue.shift()); this.starved = 0; }
+        else if (++this.starved === 25) this.write(new Array(50).fill(0)); // the page stopped: silence
         this.left += sampleRate / ${FPS};
       }
       const n = Math.min(out.length - i, Math.ceil(this.left));
-      this.sid.render(out, i, n);
+      for (const chip of this.chips) chip.render(out, i, n);
       i += n;
       this.left -= n;
     }
@@ -56,13 +60,14 @@ class ApexSid extends AudioWorkletProcessor {
 registerProcessor('apex-sid', ApexSid);
 `;
 
-  function create(def) {
-    const c = S.compile(def), p = S.player(c);
+  function create(def, { sids = 2 } = {}) {
+    const c = S.compile(def), p = S.player(c, { sids });
     let ctx = null, send = null, muted = false;
 
     // The fallback: the same queue and chip on the page's own thread.
     function scriptProcessor() {
-      const sid = SID.create(ctx.sampleRate), queue = [];
+      const chips = [SID.create(ctx.sampleRate), SID.create(ctx.sampleRate)], queue = [];
+      const write = R => { chips[0].write(R); if (R.length > 25) chips[1].write(R.slice(25)); };
       let left = 0, starved = 0;
       const node = ctx.createScriptProcessor(2048, 0, 1);
       node.onaudioprocess = e => {
@@ -70,11 +75,11 @@ registerProcessor('apex-sid', ApexSid);
         out.fill(0);
         for (let i = 0; i < out.length;) {
           if (left <= 0) {
-            if (queue.length) { sid.write(queue.shift()); starved = 0; } else if (++starved === 25) sid.write(new Array(25).fill(0));
+            if (queue.length) { write(queue.shift()); starved = 0; } else if (++starved === 25) write(new Array(50).fill(0));
             left += ctx.sampleRate / FPS;
           }
           const n = Math.min(out.length - i, Math.ceil(left));
-          sid.render(out, i, n);
+          for (const chip of chips) chip.render(out, i, n);
           i += n;
           left -= n;
         }

@@ -2029,10 +2029,15 @@
  *     priority is at least the one's playing there
  *   - the music can be turned off: while it is, the song stands still where it is and every voice is
  *     released (it fades on its release); turned on, it goes on from there
+ *   - with two SIDs (a C64 Ultimate's, or a stereo SID cartridge: the second at $D420), the music
+ *     plays on the first and the effects on the second, each on its voice there, so they never
+ *     interrupt the music. A voice of the second SID with no effect keeps its last registers with the
+ *     gate off (the effect's release plays out); its filter is off and its volume full
  *
- * compile(def) turns a song and its effects (see sound/shmup.js) into tables; player(c) makes a
- * player; tick(c, p, effects, music) plays one tick, starting the effects listed (in order), with
- * the music on unless music is false, and returns the register image. checksum(sum, image) folds an image into a running 16-bit checksum, which
+ * compile(def) turns a song and its effects (see sound/shmup.js) into tables; player(c, { sids }) makes a
+ * player for one SID or two; tick(c, p, effects, music) plays one tick, starting the effects listed
+ * (in order), with the music on unless music is false, and returns the register image: 25 bytes, or
+ * 50 with two SIDs (the second's after the first's). checksum(sum, image) folds an image into a running 16-bit checksum, which
  * the C64 tests compare.
  */
 (function (root, factory) {
@@ -2098,8 +2103,10 @@
     return { speed: def.speed, ins, insNames, patterns, patNames, order, effects, effNames, filter, effectsVoice };
   }
 
-  function player(c) {
+  function player(c, opts = {}) {
     return {
+      sids: opts.sids === 2 ? 2 : 1,
+      hold: [0, 1, 2].map(() => new Uint8Array(7)), // two SIDs: each effect voice's last registers
       timer: 0, row: 0, pos: 0,
       voices: [0, 1, 2].map(() => ({ ins: -1, note: 0, phase: 2, age: 0, arp: 0, pw: 0, tpos: 0 })),
       fx: [0, 1, 2].map(() => ({ sfx: -1, step: 0, left: 0, freq: 0 })), ft: 0,
@@ -2133,7 +2140,7 @@
     }
     if (music) p.timer--;
     // each voice's registers, then its state moves on
-    const R = new Uint8Array(25);
+    const stereo = p.sids === 2, R = new Uint8Array(25 * p.sids);
     let route = 0;
     for (let v = 0; v < 3; v++) {
       const vs = p.voices[v], b = 7 * v;
@@ -2146,7 +2153,7 @@
         note = tn & 0x80 ? tn & 0x7f : vs.note + ((tn ^ 0x40) - 0x40); // (a fixed note, or + n)
       }
       const f = FREQ[Math.max(0, Math.min(95, note))];
-      if (p.fx[v].sfx < 0) {
+      if (stereo || p.fx[v].sfx < 0) {
         R[b] = f & 255; R[b + 1] = f >> 8;
         R[b + 2] = vs.pw & 255; R[b + 3] = vs.pw >> 8;
         R[b + 4] = wave | (vs.phase === 1 ? 1 : 0);
@@ -2160,14 +2167,18 @@
       if (++vs.arp === ins.arp.length) vs.arp = 0;
       vs.pw = (vs.pw + ins.pwSpeed) & 0x0fff;
     }
-    // the effects, each on its voice
+    // the effects, each on its voice (of the second SID, if there are two)
     for (let v = 0; v < 3; v++) {
-      const f = p.fx[v];
-      if (f.sfx < 0) continue;
-      const e = c.effects[f.sfx], s = e.steps[f.step], b = 7 * v;
+      const f = p.fx[v], b = (stereo ? 25 : 0) + 7 * v;
+      if (f.sfx < 0) {
+        if (stereo) { R.set(p.hold[v], b); R[b + 4] &= 0xfe; } // its last registers, the gate off
+        continue;
+      }
+      const e = c.effects[f.sfx], s = e.steps[f.step];
       R[b] = f.freq & 255; R[b + 1] = f.freq >> 8;
       R[b + 2] = s.pw & 255; R[b + 3] = s.pw >> 8;
       R[b + 4] = s.ctrl; R[b + 5] = s.ad; R[b + 6] = s.sr;
+      if (stereo) p.hold[v].set(R.subarray(b, b + 7));
       f.freq = (f.freq + s.slide) & 0xffff;
       if (--f.left === 0) {
         if (++f.step === e.steps.length) f.sfx = -1;
@@ -2180,6 +2191,7 @@
     R[21] = cut & 7; R[22] = cut >> 3;
     R[23] = (c.filter.res << 4) | route;
     R[24] = c.filter.mode | 0x0f;
+    if (stereo) R[49] = 0x0f; // the second SID: no filter, full volume
     return R;
   }
 
@@ -2490,7 +2502,8 @@
 </script>
 <script>
 /*
- * APEX audio for the browser pages: a game's sound, as the C64 makes it. Each tick the page tells it
+ * APEX audio for the browser pages: a game's sound, as the C64 makes it (by default as a C64 Ultimate
+ * with two SIDs does: the music on one, the effects on the other). Each tick the page tells it
  * what the game did (the effects to start, whether the music plays); core/sound.js turns that into the
  * SID's 25 registers, exactly as the C64's driver writes them, and core/sid.js plays them, in an
  * AudioWorklet (built from APEXSID.source), or a ScriptProcessor where worklets can't run (pages opened
@@ -2500,7 +2513,8 @@
  * first key press, click or touch; until then the song still moves on, silently, so it is where it
  * would be. M (the page's) mutes and unmutes.
  *
- *   const audio = APEXAUDIO.create(songDefinition)
+ *   const audio = APEXAUDIO.create(songDefinition, { sids: 2 })   two SIDs, as on a C64 Ultimate (the
+ *                                                                 default; 1 for a stock C64)
  *   audio.tick(['shot', ...], musicOn)   once a game tick (50 a second), the effects by name
  *   audio.start()                         from a user gesture; audio.toggleMute()
  *
@@ -2520,23 +2534,25 @@ const APEXSID = ${SID.source};
 class ApexSid extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.sid = APEXSID.create(sampleRate);
+    this.chips = [APEXSID.create(sampleRate), APEXSID.create(sampleRate)];
     this.queue = [];
     this.left = 0;
     this.starved = 0;
     this.port.onmessage = e => { this.queue.push(e.data); if (this.queue.length > 8) this.queue.splice(0, this.queue.length - 3); };
   }
+  // A frame's registers: the first SID's, then the second's if there are two.
+  write(R) { this.chips[0].write(R); if (R.length > 25) this.chips[1].write(R.slice(25)); }
   process(inputs, outputs) {
     const out = outputs[0][0];
     out.fill(0);
     for (let i = 0; i < out.length;) {
       if (this.left <= 0) {
-        if (this.queue.length) { this.sid.write(this.queue.shift()); this.starved = 0; }
-        else if (++this.starved === 25) this.sid.write(new Array(25).fill(0)); // the page stopped: silence
+        if (this.queue.length) { this.write(this.queue.shift()); this.starved = 0; }
+        else if (++this.starved === 25) this.write(new Array(50).fill(0)); // the page stopped: silence
         this.left += sampleRate / ${FPS};
       }
       const n = Math.min(out.length - i, Math.ceil(this.left));
-      this.sid.render(out, i, n);
+      for (const chip of this.chips) chip.render(out, i, n);
       i += n;
       this.left -= n;
     }
@@ -2547,13 +2563,14 @@ class ApexSid extends AudioWorkletProcessor {
 registerProcessor('apex-sid', ApexSid);
 `;
 
-  function create(def) {
-    const c = S.compile(def), p = S.player(c);
+  function create(def, { sids = 2 } = {}) {
+    const c = S.compile(def), p = S.player(c, { sids });
     let ctx = null, send = null, muted = false;
 
     // The fallback: the same queue and chip on the page's own thread.
     function scriptProcessor() {
-      const sid = SID.create(ctx.sampleRate), queue = [];
+      const chips = [SID.create(ctx.sampleRate), SID.create(ctx.sampleRate)], queue = [];
+      const write = R => { chips[0].write(R); if (R.length > 25) chips[1].write(R.slice(25)); };
       let left = 0, starved = 0;
       const node = ctx.createScriptProcessor(2048, 0, 1);
       node.onaudioprocess = e => {
@@ -2561,11 +2578,11 @@ registerProcessor('apex-sid', ApexSid);
         out.fill(0);
         for (let i = 0; i < out.length;) {
           if (left <= 0) {
-            if (queue.length) { sid.write(queue.shift()); starved = 0; } else if (++starved === 25) sid.write(new Array(25).fill(0));
+            if (queue.length) { write(queue.shift()); starved = 0; } else if (++starved === 25) write(new Array(50).fill(0));
             left += ctx.sampleRate / FPS;
           }
           const n = Math.min(out.length - i, Math.ceil(left));
-          sid.render(out, i, n);
+          for (const chip of chips) chip.render(out, i, n);
           i += n;
           left -= n;
         }

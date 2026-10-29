@@ -22,12 +22,13 @@ function build(dir = path.join(here, 'build', 'game'), opts = {}) {
   return assemble({ src: path.join(here, 'shmup.s'), cfg: path.join(here, 'shmup.cfg'), dir, ...opts });
 }
 
-// The reference's sound for a game played with these inputs: the game's events each tick start the
-// effects of the same names (sound/shmup.js). { sum (core/sound.js checksum), image (the last) }
+// The reference's sound for a game played with these inputs, on one SID or two: the game's events each
+// tick start the effects of the same names (sound/shmup.js). { sum (core/sound.js checksum), image (the
+// last) }
 const song = S.compile(require('../../sound/shmup.js'));
-function soundOf(inputs) {
-  const g = G.game(level), p = S.player(song);
-  let sum = 0, image = new Uint8Array(25);
+function soundOf(inputs, sids = 1) {
+  const g = G.game(level), p = S.player(song, { sids });
+  let sum = 0, image = new Uint8Array(25 * sids);
   for (const b of inputs) {
     G.tick(level, g, b);
     image = S.tick(song, p, g.events.map(e => song.effNames.indexOf(e)));

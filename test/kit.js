@@ -93,9 +93,10 @@ async function checkSound(o, runs) {
   for (const r of runs) {
     const { prg, lbl: lblFile } = r.build();
     const lbl = labels(lblFile);
-    const img = await readMemory(o.exe, prg, lbl.script_park, lbl.snd_img, 25, o.vice);
+    const want = r.sound();
+    const img = await readMemory(o.exe, prg, lbl.script_park, lbl.snd_img, want.image.length, o.vice);
     const [s0, s1] = await readMemory(o.exe, prg, lbl.script_park, lbl.snd_sum, 2, o.vice);
-    const want = r.sound(), sum = s0 + 256 * s1;
+    const sum = s0 + 256 * s1;
     const ok = sum === want.sum && img.every((b, i) => b === want.image[i]);
     console.log(`${r.name} (${r.ticks} ticks): ${ok ? "every tick's SID registers match" : `SID checksum ${sum.toString(16)}, want ${want.sum.toString(16)}`}`);
     if (!ok) failures++;

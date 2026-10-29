@@ -22,10 +22,15 @@
  *     priority is at least the one's playing there
  *   - the music can be turned off: while it is, the song stands still where it is and every voice is
  *     released (it fades on its release); turned on, it goes on from there
+ *   - with two SIDs (a C64 Ultimate's, or a stereo SID cartridge: the second at $D420), the music
+ *     plays on the first and the effects on the second, each on its voice there, so they never
+ *     interrupt the music. A voice of the second SID with no effect keeps its last registers with the
+ *     gate off (the effect's release plays out); its filter is off and its volume full
  *
- * compile(def) turns a song and its effects (see sound/shmup.js) into tables; player(c) makes a
- * player; tick(c, p, effects, music) plays one tick, starting the effects listed (in order), with
- * the music on unless music is false, and returns the register image. checksum(sum, image) folds an image into a running 16-bit checksum, which
+ * compile(def) turns a song and its effects (see sound/shmup.js) into tables; player(c, { sids }) makes a
+ * player for one SID or two; tick(c, p, effects, music) plays one tick, starting the effects listed
+ * (in order), with the music on unless music is false, and returns the register image: 25 bytes, or
+ * 50 with two SIDs (the second's after the first's). checksum(sum, image) folds an image into a running 16-bit checksum, which
  * the C64 tests compare.
  */
 (function (root, factory) {
@@ -91,8 +96,10 @@
     return { speed: def.speed, ins, insNames, patterns, patNames, order, effects, effNames, filter, effectsVoice };
   }
 
-  function player(c) {
+  function player(c, opts = {}) {
     return {
+      sids: opts.sids === 2 ? 2 : 1,
+      hold: [0, 1, 2].map(() => new Uint8Array(7)), // two SIDs: each effect voice's last registers
       timer: 0, row: 0, pos: 0,
       voices: [0, 1, 2].map(() => ({ ins: -1, note: 0, phase: 2, age: 0, arp: 0, pw: 0, tpos: 0 })),
       fx: [0, 1, 2].map(() => ({ sfx: -1, step: 0, left: 0, freq: 0 })), ft: 0,
@@ -126,7 +133,7 @@
     }
     if (music) p.timer--;
     // each voice's registers, then its state moves on
-    const R = new Uint8Array(25);
+    const stereo = p.sids === 2, R = new Uint8Array(25 * p.sids);
     let route = 0;
     for (let v = 0; v < 3; v++) {
       const vs = p.voices[v], b = 7 * v;
@@ -139,7 +146,7 @@
         note = tn & 0x80 ? tn & 0x7f : vs.note + ((tn ^ 0x40) - 0x40); // (a fixed note, or + n)
       }
       const f = FREQ[Math.max(0, Math.min(95, note))];
-      if (p.fx[v].sfx < 0) {
+      if (stereo || p.fx[v].sfx < 0) {
         R[b] = f & 255; R[b + 1] = f >> 8;
         R[b + 2] = vs.pw & 255; R[b + 3] = vs.pw >> 8;
         R[b + 4] = wave | (vs.phase === 1 ? 1 : 0);
@@ -153,14 +160,18 @@
       if (++vs.arp === ins.arp.length) vs.arp = 0;
       vs.pw = (vs.pw + ins.pwSpeed) & 0x0fff;
     }
-    // the effects, each on its voice
+    // the effects, each on its voice (of the second SID, if there are two)
     for (let v = 0; v < 3; v++) {
-      const f = p.fx[v];
-      if (f.sfx < 0) continue;
-      const e = c.effects[f.sfx], s = e.steps[f.step], b = 7 * v;
+      const f = p.fx[v], b = (stereo ? 25 : 0) + 7 * v;
+      if (f.sfx < 0) {
+        if (stereo) { R.set(p.hold[v], b); R[b + 4] &= 0xfe; } // its last registers, the gate off
+        continue;
+      }
+      const e = c.effects[f.sfx], s = e.steps[f.step];
       R[b] = f.freq & 255; R[b + 1] = f.freq >> 8;
       R[b + 2] = s.pw & 255; R[b + 3] = s.pw >> 8;
       R[b + 4] = s.ctrl; R[b + 5] = s.ad; R[b + 6] = s.sr;
+      if (stereo) p.hold[v].set(R.subarray(b, b + 7));
       f.freq = (f.freq + s.slide) & 0xffff;
       if (--f.left === 0) {
         if (++f.step === e.steps.length) f.sfx = -1;
@@ -173,6 +184,7 @@
     R[21] = cut & 7; R[22] = cut >> 3;
     R[23] = (c.filter.res << 4) | route;
     R[24] = c.filter.mode | 0x0f;
+    if (stereo) R[49] = 0x0f; // the second SID: no filter, full volume
     return R;
   }
 

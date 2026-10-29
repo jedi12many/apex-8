@@ -3,7 +3,8 @@
 // blinking, game over, the title and a new game), play in test builds; VICE runs them, and every pixel of the frame the C64 shows must
 // match the reference's frame after the same ticks. Then each whole script plays once more to count
 // frames the engine was too late for and sprites the multiplexer set up too late, and to check every
-// tick's SID registers against the reference's sound (sound/shmup.js, played by the game's events).
+// tick's SID registers against the reference's sound (sound/shmup.js, played by the game's events), on
+// one SID and on two.
 //
 //   node test/shmup-check.js <path to VICE folder> [--ntsc | --model <name>] [--quick | --timing]
 //
@@ -34,11 +35,12 @@ const cases = [
     .map(n => frameCase(`run ${n}`, run.slice(0, n))),
   ...(o.quick ? [606, 1300] : [601, 606, 620, 665, 668, 700, 1012, 1020, 1100, 1262, 1300, 1310, 1701, 1702, 2212, RUN]).map(n => frameCase(`sweep ${n}`, sweep.slice(0, n))),
 ];
-const timing = [['run', run], ['sweep', sweep]].map(([name, inputs]) => ({
-  name, ticks: inputs.length, sound: () => soundOf(inputs),
-  build: () => { const dir = path.join(o.scratch, name); build(dir, { script: runs(inputs), defines: { SND_NOSUM: 1 } }); return { prg: path.join(dir, 'shmup.prg'), lbl: path.join(dir, 'shmup.lbl') }; },
-}));
-const sound = timing.map(t => ({ ...t, build: () => { const dir = path.join(o.scratch, `${t.name}-sound`); build(dir, { script: runs(t.name === 'run' ? run : sweep) }); return { prg: path.join(dir, 'shmup.prg'), lbl: path.join(dir, 'shmup.lbl') }; } }));
+// each script on one SID and on two (a C64 Ultimate's: the effects on the second)
+const timing = [['run', run], ['sweep', sweep]].flatMap(([name, inputs]) => [1, 2].map(sids => ({
+  name: sids === 2 ? `${name}, 2 SIDs` : name, ticks: inputs.length, inputs, sids, sound: () => soundOf(inputs, sids),
+  build: () => { const dir = path.join(o.scratch, `${name}${sids}`); build(dir, { script: runs(inputs), defines: { SND_NOSUM: 1, SND_STEREO: sids - 1 } }); return { prg: path.join(dir, 'shmup.prg'), lbl: path.join(dir, 'shmup.lbl') }; },
+})));
+const sound = timing.map(t => ({ ...t, build: () => { const dir = path.join(o.scratch, `${t.name}-sound`.replace(/\W+/g, '-')); build(dir, { script: runs(t.inputs), defines: { SND_STEREO: t.sids - 1 } }); return { prg: path.join(dir, 'shmup.prg'), lbl: path.join(dir, 'shmup.lbl') }; } }));
 
 (async () => {
   let failures = await kit.checkFrames(o, cases, { border: VIEW.COLORS.border });

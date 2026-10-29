@@ -2,8 +2,8 @@
 
 Game engines and tools for 8-bit machines, starting with the Commodore 64:
 
-- **a first-person raycaster**: E1M1 in APEXSCII's raycast characters
-- **a parallax platformer**: Green Hills
+- **a first-person raycaster**: the Cell Block (E1M1) in APEXSCII's raycast characters, with a pistol, guards to shoot, treasure and music
+- **a parallax platformer**: Green Hills, with coins, beetles, a flag and music
 - **an isometric dungeon**: the Crypt, with a torchlight that follows the hero, and the Drowned Crypt, a small action game built on it
 - **a vertical shoot-'em-up**: the Dreadnought, with a sprite multiplexer, a status bar and music
 
@@ -14,6 +14,8 @@ Each engine has a JavaScript reference that defines every frame, and a 6502 engi
 - **a SID emulation**: so the browser versions play the same sound
 - **converters**: pictures to C64 bitmaps, tiles and sprites from drawn art
 - **the tests**: run everything in VICE
+
+**Play them in the browser: [jedi12many.github.io/apex-8](https://jedi12many.github.io/apex-8/)**, the references with their sound, and the C64 disk to download (see [The demo site](#the-demo-site)).
 
 The C64 engines draw with the [APEXSCII](https://github.com/jedi12many/apexscii) character sets, included as a submodule.
 
@@ -32,7 +34,9 @@ Every platform shares:
 
 Each port draws in its own way, and is tested pixel for pixel against the reference.
 
-To play on a C64 or in VICE, load `c64/out/apex.prg` with `LOAD"*",8,1`, then `RUN`. Use a joystick in port 2, or W and S to walk and A and D to turn. `showcase/out/c64-e1m1.mp4` is a recording of it running in VICE.
+To play on a C64 or in VICE, load `c64/out/apex.prg` with `LOAD"*",8,1`, then `RUN`. Use a joystick in port 2, or W and S to walk, A and D to turn and Space to fire. `showcase/out/c64-e1m1.mp4` is a recording of it running in VICE (before the game was added). `web/ray.html` plays the reference in a browser.
+
+**The game** (`core/raygame.js`): the pistol fires once every 16 ticks and flashes for 6. A shot hits the nearest guard over the middle of the screen, if it is nearer than the wall the middle ray meets; the guard shows white for 12 ticks and is gone. Walking within 3/8 of a tile of treasure picks it up. Guards are worth 50, treasure 100, and the score shows in the panel. Treasure doesn't block the way; guards and barrels do, until a guard is gone. `sound/cell.js` is its music: an original, brooding piece in A minor, a pulsing drone, a heartbeat kick and an uneasy lead, with a shot, a guard's death and a pickup as effects.
 
 ## Layout
 
@@ -40,10 +44,13 @@ To play on a C64 or in VICE, load `c64/out/apex.prg` with `LOAD"*",8,1`, then `R
 |------|------------|
 | `core/raycast.js` | The reference raycaster. Integer maths only, so ports can match it value for value. |
 | `core/level.js` | The level format |
+| `core/raygame.js` | The game: the pistol, guards that die when shot, treasure and the score, tick by tick |
 | `levels/` | Levels, as text grids |
 | `c64/view.js` | The C64 view: 80 rays drawn with APEXSCII glyphs, plus a ROM-font status panel |
 | `c64/sprites.js` | Guards, barrels and treasure as hardware sprites, scaled and hidden behind walls |
-| `c64/apex.s`, `c64/sprites.s` | The C64 engine in 6502 assembly |
+| `c64/apex.s`, `c64/sprites.s`, `c64/raygame.s` | The C64 engine in 6502 assembly, and its game |
+| `sound/cell.js` | The Cell Block's music and effects |
+| `web/ray.html` | The reference, playable in a browser, with its sound |
 | `c64/gen.js`, `c64/build.js` | Generate the engine's tables from the reference, then assemble it with cc65 |
 | `c64/out/apex.prg` | The engine with E1M1, ready to run |
 | `showcase/walk.js` | A walk through E1M1 rendered by the reference, as videos, runnable stills and a contact sheet |
@@ -153,17 +160,19 @@ It needs ffmpeg. `--rom` shows the status panel in the real C64 ROM font.
 `c64/apex.s` and `c64/sprites.s` are the engine in 6502 assembly, about 3.5KB of code. `c64/gen.js` generates all its tables from the reference: 1/cos, column angles, wall heights, screen codes, the status panel, and the objects' pre-scaled images. Because both use the same tables and the same integer steps, every ray, wall height and sprite comes out exactly the same.
 
 Each frame:
-1. **Controls:** they run once for every 50 Hz tick since the last frame, so walking and turning speed don't depend on the frame rate. The player keeps 3/8 of a tile from walls and half a tile from an object's centre, on each axis, sliding along both; the test scripts check this against the same moves in JavaScript. If the player hasn't moved or turned, the screen showing is already right, and the frame stops here.
+1. **Controls and the game:** they run once for every 50 Hz tick since the last frame, so walking and turning speed don't depend on the frame rate. The player keeps 3/8 of a tile from walls and half a tile from a barrel's or guard's centre, on each axis, sliding along both; the test scripts check this against the same moves in JavaScript. Each tick also runs the game's timers, picks up treasure and fires (`c64/raygame.s`). A shot stops the ticks there (the rest wait for the next frame), so the frame is cast from the pose it was fired from, and after the objects are projected the engine finds the guard it hit from their depths, centres and heights and the middle ray's distance. If the player hasn't moved or turned and nothing else shown has changed, the screen showing is already right, and the frame stops here.
 2. **Rays:** every fourth ray and the last two are cast, then each ray 2 on from a multiple of 4, then each odd ray, is interpolated or cast, as in the reference. When the player has only turned, ray c is the ray c + turn / 2 was, so what its walk found (distance, face, `u`) shifts across, and only its corrected distance and height are worked out again. Only the rays coming in at the edge are cast. A fog ray keeps a lower bound on its distance, and is cast again if a column with a nearer fog line needs it. The DDA keeps the map column in the Y register, so a step east or west is one `INY` or `DEY`. Multiplications use quarter-square tables, built at start-up at `$C000`. The distance from the player to the next grid line is the same for every ray in a quadrant, so its multiplies, the steps and the 1/cos tables are patched in once per quadrant, not per ray. Wall heights come from a table lookup instead of a division.
 3. **Objects:** each is projected, using signed multiplies, a 32÷16 divide and the angle table, and sorted nearest first.
 4. **Wait:** the engine waits until the last frame is showing.
-5. **Draw:** the view is drawn into the hidden screen, 400 cells of two lookups each. The objects' masked tiles go into that screen's sprite blocks, along with the status numbers.
+5. **Draw:** the view is drawn into the hidden screen, 400 cells of two lookups each. The objects' masked tiles go into that screen's sprite blocks 1-7, along with the status numbers and the score. Sprite 0 is the pistol, expanded both ways at the bottom of the view, with a second image for the muzzle flash.
 6. **Swap:** the screens swap. The IRQ at the top of the frame shows the new screen and loads its sprite registers from a shadow copy, so walls and sprites always change together. A last IRQ switches to the ROM font for the status panel.
 
 **Gradient.** The ceiling and floor darken towards the horizon, with dithered stripes between shades. Raster IRQs, generated from the reference's `GRADIENT`, change `$D021` and `$D022` in the right border of the line before each change. Top glyphs never use the floor colour and bottom glyphs never the ceiling colour, so each register only has to be on time in its own half. Three things keep the writes in the border:
 - **No bad lines:** no change falls on a bad line or the line after one.
 - **A line between changes:** every wait starts before its line does.
 - **38-column mode:** the border hides the leftmost 7 and rightmost 9 pixels. Polling jitter and the VIC's sprite fetches can land a write a cycle early or late, and those pixels are where it would show.
+
+**Sound.** The bottom IRQ, after the split, plays the music and effects on the kit's SID driver 50 times a second (on a second SID if there is one), whatever the frame rate. The game starts effects with the IRQ held off. It costs about 5% of the CPU.
 
 The write delay was found in VICE: 49 to 52 cycles draw every test frame exactly on PAL and NTSC, and the engine uses 50. The IRQs spin about 2,300 cycles of each 50 Hz frame, about 11% of the CPU.
 
@@ -183,6 +192,7 @@ The write delay was found in VICE: 49 to 52 cycles draw every test frame exactly
 | Rays 2 angle units apart, kept when turning | 86,266 (11.4 fps) | 127,791 (7.7 fps) |
 | Built with the kit (the same code, moved) | 86,346 (11.4 fps) | 127,503 (7.7 fps) |
 | Every fourth ray cast first | 97,130 (10.1 fps) | 111,548 (8.8 fps) |
+| With the game, the pistol's sprite and the music | 106,191 (9.3 fps) | 122,295 (8.1 fps) |
 
 Casting every fourth ray first makes walking, the slowest case, 12% faster. Turning gets slower: a turn shifts the rays by 2 for each step of heading, so a ray that is a multiple of 4 often lands where a filled-in ray was last frame, which has nothing kept to reuse, and is cast afresh.
 
@@ -194,13 +204,16 @@ Memory:
 
 | Address | Contents |
 |---------|----------|
+| `$0340` | the pistol's two sprite images (the tape buffer) |
 | `$0400` | screen A |
-| `$0801–$2FFF` | code and tables |
+| `$0801–$2FFF` | code, tables and variables |
 | `$3000` | 16 sprite blocks, 8 per screen |
 | `$3400` | screen B |
 | `$3800` | the APEXSCII raycast set |
-| `$4000` | object images, movement and status tables |
+| `$4000` | the map, object images, movement and status tables, read-only data, the song and the sprite code |
 | `$C000` | multiply tables |
+
+The map must stay below `$8000`: each ray keeps the address of the tile it hit with a flag in bit 7 of its high byte.
 
 ```bash
 node c64/build.js
@@ -226,28 +239,31 @@ node test/vice-check.js "C:\path\to\GTK3VICE-3.10-win64"
 
 All the C64 checks run through the kit's test runner (`test/kit.js`), so they share their switches: `--ntsc`, `--model`, `--quick` and `--timing` (see *The C64 kit*).
 
-`test/c64-check.js` tests the 6502 engine itself. It builds the engine in test mode at 11 poses along the walk, so each build draws one frame and stops. Three more builds play scripted controls: turning (which reuses rays), walking, and sliding along and into walls and a guard. Their final position must match the same moves made in JavaScript. Every frame the C64 draws must match the reference pixel for pixel, sprites included. Pass `--ntsc` to test on NTSC too.
+`test/c64-check.js` tests the 6502 engine itself. It builds the engine in test mode at 11 poses along the walk, so each build draws one frame and stops, and one more firing with a guard hit. Five more builds play the game from scripts: turning (which reuses rays), walking, sliding along and into walls and a guard, shooting a guard, and walking round to the treasure. Their final frame must match the same game played in JavaScript. Every frame the C64 draws must match the reference pixel for pixel, sprites included. Then the shooting and treasure scripts play again with the sound ticked with the game, on one SID and on two, and every tick's SID registers must match the reference's. Pass `--ntsc` to test on NTSC too.
 
 ```bash
 node test/c64-check.js "C:\path\to\GTK3VICE-3.10-win64"
 node test/c64-bench.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
-`test/c64-bench.js` builds a version that turns 4/1024 of a turn every frame for 64 frames: a quarter turn from the start, past the guards. Each frame turns the same amount however long it takes, so every build draws the same frames. `--walk` walks along the first corridor instead. It times them with the VICE monitor's stopwatch and prints cycles per frame and frames per second.
+`test/c64-bench.js` (`--nosound` leaves the music out) builds a version that turns 4/1024 of a turn every frame for 64 frames: a quarter turn from the start, past the guards. Each frame turns the same amount however long it takes, so every build draws the same frames. `--walk` walks along the first corridor instead. It times them with the VICE monitor's stopwatch and prints cycles per frame and frames per second.
 
 ## Platformer
 
 A side-scrolling platformer engine for the C64, with layers of parallax for depth, smooth scrolling at 50 frames a second and tight controls. A JavaScript reference defines every frame; the 6502 engine draws exactly the same frames, checked pixel for pixel in VICE.
 
-To play on a C64 or in VICE, load `c64/out/side.prg` with `LOAD"*",8,1`, then `RUN`. Use a joystick in port 2 (fire or up to jump), or A and D to run and W, Z or Space to jump; R starts again. `showcase/out/side-c64.mp4` is a recording of it running in VICE.
+To play on a C64 or in VICE, load `c64/out/side.prg` with `LOAD"*",8,1`, then `RUN`. Use a joystick in port 2 (fire or up to jump), or A and D to run and W, Z or Space to jump; R starts again. `showcase/out/side-c64.mp4` is a recording of it running in VICE (before the objects and sound were added).
+
+**The game** (`core/platform.js` `game`, `play`): coins to collect, beetles that walk their ground (turning at a wall or a ledge's edge) and die when landed on, bouncing the player up, but send the player back to the start when touched any other way, and a flag that wins and starts the level again. `sound/hills.js` is its music, an original upbeat chiptune in C major, with effects for jumping, coins, stomps, hurts, falls and the win.
 
 | File | What it is |
 |------|------------|
-| `core/platform.js` | Levels, player physics and the camera, in integer maths |
+| `core/platform.js` | Levels, player physics, the camera and the game (coins, beetles, the flag), in integer maths |
+| `sound/hills.js` | Green Hills' music and effects |
 | `c64/side/view.js` | What the C64 screen shows each frame |
 | `levels/side/w1.txt` | Green Hills, the first level |
 | `web/side.html` | The reference, playable in a browser (`web/bundle.js` makes one-file versions in `web/out/`) |
-| `c64/side/side.s` | The 6502 engine (ca65) |
+| `c64/side/side.s`, `game.s` | The 6502 engine (ca65), and its game |
 | `c64/side/gen.js`, `build.js` | Turn the reference into the engine's tables, characters, sprites and drawing code, and assemble it |
 | `test/side-check.js` | Plays the level in VICE and checks every pixel of the C64's frames against the reference, and that no frame is late |
 | `showcase/side-pilot.js` | An autopilot that runs the level, used by the videos and the test |
@@ -265,7 +281,9 @@ To play on a C64 or in VICE, load `c64/out/side.prg` with `LOAD"*",8,1`, then `R
 
 The forest is four characters per row pattern, redrawn each frame with the pattern shifted; it moves in 2-pixel steps, as multicolor pixels are 2 wide. Colour RAM never changes, so it never has to scroll. The level band's background starts as the hills' green behind the treetops and turns to sky a few lines down, behind solid canopy. The whole look takes 85 of the 212 free characters.
 
-**Levels** are text, one character per 16×16 block: `#` solid, `.` empty, `P` the start. The engine draws each block as a 2×2-character front with its top and side one character up and right, choosing APEXSCII's glyphs for every cell from which faces cover its two halves.
+The mountains and hills scroll by their share of the camera rounded up, so every band's first column changes on the same frame as the level's (at a camera of 8k + 1).
+
+**Levels** are text, one character per 16×16 block: `#` solid, `.` empty, `P` the start, `o` a coin, `b` a beetle, `F` the flag. The engine draws each block as a 2×2-character front with its top and side one character up and right, choosing APEXSCII's glyphs for every cell from which faces cover its two halves.
 
 **Physics** runs once per 50 Hz frame, in 1/16 pixel:
 - running: speeds up and slows down rather than starting and stopping dead
@@ -278,14 +296,17 @@ The forest is four characters per row pattern, redrawn each frame with the patte
 - *two screens*: when a band's first column changes, the engine redraws that band from its source into the screen that isn't showing, then swaps. Each source row is a page, so a band redraws with one load and one store per character
 - *raster splits*: the bottom IRQ shows the new screen and sets the mountains' scroll and colours, the sprite and the forest's characters. Three more IRQs set the hills' scroll, the level's scroll, and the sky behind the treetops. The bands' colours change in their ground lines, which show only colour RAM, so only the scroll has to land in the narrow border window. Writes from 46 to 60 cycles after the raster line starts pass every test on PAL and NTSC, and the engine uses 53
 - *the forest*: 20 characters are rewritten from a table only when its shift changes (16 shifts)
+- *predrawing*: in a frame that doesn't swap screens, one band of the hidden screen is drawn as the next swap will want it, where the camera, going on as it last moved, next changes a column (and during the win, the new game's first screen). A swap then usually finds its screen ready, which keeps the busiest frames well inside the time
+- *objects*: up to 7 of the coins, beetles and flag are hardware sprites 1-7, the nearest the player first. The coins and the flag are in order across the level, so their distances fall towards the player and rise past it: two runs already in order, merged with the beetles. Each beetle walks a range worked out from the level once, instead of testing blocks
+- *sound*: the kit's SID driver, ticked with the game and written to the SID at the start of the bottom IRQ
 - *memory*: BASIC and the KERNAL are switched out, and the IRQs use the hardware vector
 
 The level must be 8 blocks high and at most 127 wide, so a row of characters, plus the forest past its end, fits in a page. Green Hills is 127 wide.
 
 | | PAL | NTSC |
 |---|---|---|
-| Frames late in the 26 s autopilot run | 0 | 0 |
-| Slowest frame, from the bottom of one frame to the next being ready | 64% of a frame | 76% |
+| Frames late in the 26 s game run (coins, stomps, the win and the restart), one SID or two | 0 | 0 |
+| Slowest frame, from the bottom of one frame to the next being ready | 52% of a frame | 78% |
 
 NTSC runs 60 ticks a second, so the game plays 20% faster there.
 
@@ -492,6 +513,7 @@ Music and sound effects for the SID, made the way the pictures are: `core/sound.
 - *two SIDs*: with a second SID at $D420, as a C64 Ultimate can have, the music plays on the first and the effects on the second, each on its own voice there, so they never interrupt the music and can overlap. When an effect ends, its voice keeps its last registers with the gate off, so its release plays out. The driver checks for a second SID at start-up (`snd_detect`). Without one, those addresses are just the first SID again, since the chip's registers repeat every $20 bytes. So it holds voice 3 of the second still, runs the first's as a fast sawtooth, and reads the second's voice 3 output: always 0 from a real second SID. The same program plays one SID or two. The browser pages play two
 - `sound/shmup.js`: the Dreadnought's music, an original late-80s house track at 125 beats a minute in A minor. A four-on-the-floor kick with offbeat hats and claps, an octave-jumping bass through the sweeping filter, and arpeggiated chord stabs that give way to a hook. The effects borrow the stabs' voice, so firing never stops the beat. It loops every 31 seconds
 - `sound/crypt.js`: the Drowned Crypt's music, an original creeping cue in the manner of a 1920s silent film, in D minor at 75 beats a minute. A plucked bass walking chromatically into each change, stride chords on 2 and 4, and a melody that tiptoes up onto ghostly held notes. The hero's and creatures' effects are short and sit under the music. When the boss rises the music stops for its roar, moans, screeches and death shriek. `EVENTS` maps the game's events to effects
+- `sound/hills.js`: Green Hills' music, an original upbeat chiptune in C major at 150 beats a minute, and `sound/cell.js`: the Cell Block's, a brooding A minor piece (see their engines)
 
 ### The SID in the browser
 
@@ -501,7 +523,7 @@ Music and sound effects for the SID, made the way the pictures are: `core/sound.
 - *envelopes*: as on the chip, a 15-bit rate counter that is never reset, so the ADSR bug happens, and a second counter that slows decay and release as the level falls
 - *the filter*: a resonant state-variable filter following the 6581's cutoff curve, then the volume
 
-`web/audio.js` runs it in an AudioWorklet, or a ScriptProcessor where worklets can't run (a page opened from a file). The page tells it each tick what the game did, and it starts on the first key press, click or touch, as browsers require. M mutes. The shooter and Drowned Crypt pages use it.
+`web/audio.js` runs it in an AudioWorklet, or a ScriptProcessor where worklets can't run (a page opened from a file). The page tells it each tick what the game did, and it starts on the first key press, click or touch, as browsers require. M mutes. The raycaster, platformer, shooter and Drowned Crypt pages use it.
 
 `test/sid-compare.js` sets the emulation against VICE's recording of the same music and effects, in 100 ms slices. For the Drowned Crypt, its loudness over time correlates 0.92 with VICE's and its spectra match 0.93, at the same level. For the Dreadnought it's 0.88 and 0.80; the 6581's filter is hard to model.
 
@@ -528,13 +550,13 @@ node test/sid-compare.js crypt 58
 
 | Key | Program | Controls |
 |-----|---------|----------|
-| 1 | The raycaster, E1M1 | Joystick in port 2, or W/S to walk and A/D to turn |
+| 1 | The raycaster, the Cell Block | Joystick in port 2 (fire to shoot), or W/S to walk, A/D to turn and Space to fire |
 | 2 | The platformer, Green Hills | Joystick in port 2 (fire or up to jump), or A/D to run and W, Z or Space to jump; R restarts |
 | 3 | The dungeon, the Crypt | Joystick in port 2, or W/A/S/D (two at once for diagonals); R restarts |
 | 4 | The shooter, the Dreadnought | Joystick in port 2, or W/A/S/D and Space to fire (hold for autofire); fire starts, R restarts |
 | 5 | The shooter in the brick look | As 4 |
-| 6, 7 | The two songs on the sound player | Joystick directions and fire play the first five effects |
-| 8 | The APEX-8 splash | |
+| 6, 7, 8, 9 | The Dreadnought's, the Drowned Crypt's, Green Hills' and the Cell Block's songs on the sound player | Joystick directions and fire play the first five effects |
+| 0 | The APEX-8 splash | |
 
 Each program is also in `c64/out` as a `.prg`, which the Ultimate can run straight from its file browser.
 
@@ -542,10 +564,18 @@ Each program is also in `c64/out` as a `.prg`, which the Ultimate can run straig
 
 - *video*: PAL. The engines also pass on NTSC, but run at 60 frames a second with 13% less time for each. The shooter is late now and then in its busiest stretch on NTSC.
 - *CPU*: no turbo. The engines time their raster splits and sprite multiplexing to the stock speed. A faster CPU hasn't been tested, and VICE can't emulate the Ultimate's turbo modes.
-- *SID*: a 6581, or UltiSID set to 6581. The music's filter settings were made for it; an 8580 sounds brighter. With a second SID at $D420, the shooter and the sound players find it and play their effects on it, so the music never stops for them. On PAL that costs the shooter nothing that shows. On NTSC it is late a little more often: 32 frames in its run and 9 in its sweep, against 21 and 3 on one SID.
+- *SID*: a 6581, or UltiSID set to 6581. The music's filter settings were made for it; an 8580 sounds brighter. With a second SID at $D420, the shooter, the platformer, the raycaster and the sound players find it and play their effects on it, so the music never stops for them. On PAL that costs the shooter nothing that shows. On NTSC it is late a little more often: 32 frames in its run and 9 in its sweep, against 21 and 3 on one SID.
 - *REU*: on. The shooter finds it and copies its screen by DMA (see the shooter's *Timing*); without one it copies with the CPU, as on a stock C64.
 
 `node c64/disk.js <VICE folder>` makes the disk again from the programs in `c64/out` (build them first). It uses VICE's `petcat` and `c1541`.
+
+## The demo site
+
+`docs/` is the demo site GitHub Pages serves at [jedi12many.github.io/apex-8](https://jedi12many.github.io/apex-8/): a menu (`web/index.html`) with a still of each demo, every playable page as a single file, and the C64 programs with `apex-8.d81`. `node web/site.js` builds it again: it bundles the pages (`web/bundle.js`), renders the raycaster's and the platformer's stills from their references, takes the others from the showcase videos, and copies `c64/out`. Build the programs and the disk first. The raycaster's page shows its status panel in APEXSCII's own text font, where the C64 uses its ROM font.
+
+```bash
+node web/site.js
+```
 
 ## The APEX-8 badge
 

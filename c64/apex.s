@@ -7,13 +7,18 @@
 ;         at the top of the frame, so drawing never shows)
 ;   show  the status panel below the view in the ROM font, through a raster split
 ;
-; Controls: joystick in port 2 or W/S to walk, A/D or joystick left/right to turn.
+; The game (raygame.s, as core/raygame.js): fire the pistol (the joystick's button or space), shoot
+; the guards, pick up the treasure. The sound (sound/cell.js) plays on the kit's SID driver from the
+; bottom IRQ, 50 times a second, on a second SID if there is one.
+;
+; Controls: joystick in port 2 or W/S to walk, A/D or joystick left/right to turn, fire or space to shoot.
 ; Assemble with c64/build.js; build/gen.inc holds the generated tables and constants. The BASIC line
 ; and the scripts come from the kit (c64/kit/kit.inc); the engine keeps the KERNAL and its own IRQ
 ; set-up, as the gradient's timing is tuned to them.
 
 .include "gen.inc"
 .include "kit.inc"
+.include "sid.inc"
 
 SQ1LO    = $c000            ; quarter-square tables, built at start-up (512 entries each)
 SQ1HI    = $c200
@@ -26,6 +31,8 @@ D018_A   = $1e              ; screen $0400, APEXSCII at $3800
 D018_B   = $de              ; screen $3400, APEXSCII at $3800
 D018_ROM_A = $14            ; the same screens with the ROM font ($1000 for the VIC)
 D018_ROM_B = $d4
+GUN_BLK0 = $0340            ; the pistol's sprite blocks, idle and firing (the tape buffer)
+GUN_BLK1 = $0380
 
 .segment "ZEROPAGE"
 px:      .res 2             ; player position, 8.8 tiles
@@ -74,11 +81,11 @@ xl:      .res 1
 xh:      .res 1
 yl:      .res 1
 yh:      .res 1
+
+.segment "BSS"
 frames:  .res 1             ; BENCH builds only
 ticks0:  .res 1
 ticks_used: .res 1
-
-.segment "BSS"
 HE:      .res 40            ; per screen column: the even ray's j + 41 * (shadeB + 2 * joint) (c64/view.js)
 HO:      .res 40            ; and the odd ray's
 RJ:      .res RAYS          ; per ray: j (half height / 2), + 41 for shade B
@@ -166,6 +173,23 @@ start:
 .endif
 
     jsr init_squares
+    jsr game_init
+.ifdef TEST_FLASH
+    lda #FLASH
+    sta flash
+.endif
+.ifdef TEST_HIT
+    lda #HIT
+    sta OBJ_HIT + TEST_HIT
+.endif
+    ldx #62                 ; the pistol's two images
+:   lda GUN0,x
+    sta GUN_BLK0,x
+    lda GUN1,x
+    sta GUN_BLK1,x
+    dex
+    bpl :-
+    jsr snd_init
     lda #$ff                ; sprites: all multicolor, in front, shared colours
     sta $d01c
     lda #0
@@ -222,11 +246,24 @@ park:
 .else
 main:
     jsr control
+    lda shot                ; a shot, or something else shown changed: draw
+    ora dirty
+    bne @draw
     jsr moved               ; standing still: the screen showing is already right
     beq main
+@draw:
+    jsr moved
+    lda #0
+    sta dirty
     jsr cast
     jsr project
-    lda flipt               ; the last flip must be showing before drawing over the other screen
+    lda shot                ; what a shot hit, from this pose
+    beq :+
+    jsr resolve
+.ifdef SND_SYNC
+    jsr snd_tick            ; (the tick's sound, now its effects are all in)
+.endif
+:   lda flipt               ; the last flip must be showing before drawing over the other screen
 :   cmp ticks
     beq :-
     lda front
@@ -291,6 +328,10 @@ irq_split:
     sta $0315
     lda #$ff
     sta $d019
+    jsr snd_out             ; the sound, at the same moment every frame
+.ifndef SND_SYNC
+    jsr snd_tick            ; (SND_SYNC test builds tick it with the game instead)
+.endif
     jmp $ea81
 
 ; Top of the frame: APEXSCII and the screen to show, and the KERNAL's keyboard scan.
@@ -1458,6 +1499,28 @@ draw_b:
     sta scr + STATUS_ROW * 40 + POS_H + 1
     lda HEAD2,x
     sta scr + STATUS_ROW * 40 + POS_H + 2
+    lda score+1             ; the score's 4 digits
+    lsr
+    lsr
+    lsr
+    lsr
+    ora #$30
+    sta scr + (STATUS_ROW + 1) * 40 + POS_S
+    lda score+1
+    and #15
+    ora #$30
+    sta scr + (STATUS_ROW + 1) * 40 + POS_S + 1
+    lda score
+    lsr
+    lsr
+    lsr
+    lsr
+    ora #$30
+    sta scr + (STATUS_ROW + 1) * 40 + POS_S + 2
+    lda score
+    and #15
+    ora #$30
+    sta scr + (STATUS_ROW + 1) * 40 + POS_S + 3
 .endmacro
 
 status_a:
@@ -1517,6 +1580,7 @@ control:
     sta last
 @tick:
     jsr input
+    jsr game_timers
     lda inp
     and #4
     beq :+
@@ -1560,6 +1624,19 @@ control:
     sta dy
 :   jsr walk
 @next:
+    jsr pickup
+    jsr fire
+    bcc :+
+    dec nt                  ; fired: the rest of the ticks wait for the next call, after the cast
+    lda last
+    sec
+    sbc nt
+    sta last
+    rts
+:
+.ifdef SND_SYNC
+    jsr snd_tick
+.endif
     dec nt
     bne @tick
     rts
@@ -1574,16 +1651,19 @@ input:
 .ifdef SCRIPT
     jsr kit_script          ; scripted test: the script's inputs, then nothing
     bcc :+
+.ifdef SND_SYNC
+    jmp kit_park            ; (a sound test stops there, its checksum done)
+.endif
     lda #0
     sta inp
 :   rts
 .endif
     lda $dc00
     eor #$ff
-    and #$0f
+    and #$1f
     sta inp
     lda $cb
-    ldx #3
+    ldx #4
 :   cmp KEYS,x
     beq @key
     dex
@@ -1687,6 +1767,11 @@ clear:
 .if NOBJ > 0
     ldx #NOBJ - 1           ; and no object within OBJ_RADIUS on both axes: -R <= n - o < R
 @obj:
+    lda OBJ_ON,x            ; (gone, or treasure: not in the way)
+    beq @far
+    lda OBJT,x
+    cmp #T_TREASURE
+    beq @far
     sec
     lda nx
     sbc OBJXLO,x
@@ -1736,6 +1821,7 @@ tile:
 .endif
 
 .include "sprites.s"
+.include "raygame.s"
 
 .segment "RODATA"
 XSTEP_OP: .byte $c8, $88, $88, $c8 ; per quadrant of the ray angle: INY (east) or DEY (west)
@@ -1749,8 +1835,8 @@ GCEIL:
     .byte (I + 63) / 64     ; ceil(u / 64)
 .endrepeat
 .segment "RODATA"
-KEYS:    .byte $09, $0d, $0a, $12 ; W S A D
-KEYBITS: .byte 1, 2, 4, 8
+KEYS:    .byte $09, $0d, $0a, $12, $3c ; W S A D, space
+KEYBITS: .byte 1, 2, 4, 8, 16
 ROWLO:
 .repeat 64, I
     .byte <(LEVEL + I * 32)
@@ -1759,6 +1845,8 @@ ROWHI:
 .repeat 64, I
     .byte >(LEVEL + I * 32)
 .endrepeat
+
+.assert LEVEL + LEVEL_H * 32 <= $8000, error, "the map must be below $8000 (HITH keeps a flag in bit 7)"
 
 .segment "CHARSET"
     .incbin "charset.bin"

@@ -1,61 +1,69 @@
 // Checks the 6502 engine against the reference renderer: builds c64/apex.s in test mode at several
 // poses along the walk, runs each in VICE and compares every pixel of the frame the C64 drew itself.
-// Scripted builds also play the controls (turning, walking, sliding along and into walls) and must
-// end on the same frame as the same moves made here.
+// Scripted builds also play the game (turning, walking, sliding along and into walls, shooting a guard,
+// picking up treasure) and must end on the same frame as the same game played here (core/raygame.js),
+// and the sound builds must set every tick's SID registers as the reference's sound does, on one SID
+// and on two.
 //
-//   node test/c64-check.js <path to VICE folder> [--ntsc | --model <name>]
+//   node test/c64-check.js <path to VICE folder> [--quick] [--ntsc | --model <name>]
 //
 // Needs cc65 (ca65, ld65) on the PATH.
 const path = require('path');
 const kit = require('./kit.js');
-const APEXRAY = require('../core/raycast.js');
+const GAME = require('../core/raygame.js');
 const VIEW = require('../c64/view.js');
-const { MOVE_SPEED, HEADING_STEP, WALL_RADIUS, OBJ_RADIUS } = require('../c64/gen.js');
-const { map, build } = require('../c64/build.js');
+const { map, build, soundOf } = require('../c64/build.js');
 const walk = require('../showcase/walk.js');
 
 const o = kit.options('node test/c64-check.js');
 
-// The engine's controls, tick by tick from the start: turn by HEADING_STEP, or step MOVE_SPEED along
-// the heading (backwards negates the step), each axis only if the square WALL_RADIUS around the
-// new position is clear of walls and no object is within OBJ_RADIUS on both axes.
-function play(script) {
-  const solid = (tx, ty) => tx < 0 || ty < 0 || tx >= map.w || ty >= map.h || map.cells[ty * map.w + tx];
-  const R = WALL_RADIUS, near = d => d >= -OBJ_RADIUS && d < OBJ_RADIUS;
-  const clear = (x, y) => [[-R, -R], [R, -R], [-R, R], [R, R]].every(([ox, oy]) => !solid((x + ox) >> 8, (y + oy) >> 8)) &&
-    !(map.objects || []).some(o => near(x - o.x) && near(y - o.y));
-  const p = { ...map.start };
-  for (const [bits, n] of script) for (let k = 0; k < n; k++) {
-    if (bits & 4) p.a = (p.a - HEADING_STEP) & 1023;
-    if (bits & 8) p.a = (p.a + HEADING_STEP) & 1023;
-    if (bits & 3) {
-      const sgn = bits & 2 ? -1 : 1;
-      const dx = sgn * ((APEXRAY.cos(p.a) * MOVE_SPEED) >> 8), dy = sgn * ((APEXRAY.sin(p.a) * MOVE_SPEED) >> 8);
-      if (clear(p.x + dx, p.y)) p.x += dx;
-      if (clear(p.x, p.y + dy)) p.y += dy;
-    }
-  }
-  return p;
+// The game after a script, tick by tick from the start, and then long enough for every timer to run
+// out (the C64 goes on ticking with nothing pressed).
+function play(script, idle = 60) {
+  const g = GAME.game(map);
+  for (const [bits, n] of [...script, [0, idle]]) for (let k = 0; k < n; k++) GAME.play(map, g, bits, VIEW.caster);
+  return g;
 }
+const inputs = script => script.flatMap(([bits, n]) => Array(n).fill(bits));
 const SCRIPTS = [
   ['turn and walk', [[8, 32], [1, 120], [4, 64], [1, 90]]],
   ['into a wall', [[1, 200], [8, 20], [1, 150], [2, 40]]],
   ['into a guard', [[8, 32], [1, 150]]],
+  // turn to a guard and shoot it: it falls (white), then is gone, and the score is 50
+  ['shoot a guard', [[8, 32], [16, 1], [0, 30]]],
+  // round to the treasure north of the room's middle, shooting the guard on the way
+  ['treasure', [[8, 64], [1, 43], [4, 64], [1, 420], [16, 1], [0, 20], [4, 64], [1, 100], [8, 128], [0, 20]]],
 ];
 
 const route = walk.path(), dir = path.join(o.scratch, 'build');
-const frameCase = (name, pose, prg) => ({
-  name, cycles: 30000000, prg,
-  want: () => { const f = VIEW.frame(map, pose, 'mc', VIEW.statusLines(map, pose)); return f.rgba(o.rom, true); },
+const frameCase = (name, pose, prg, g = GAME.game(map), cycles = 30000000) => ({
+  name, cycles, prg,
+  want: () => { const f = VIEW.frame(map, pose, 'mc', VIEW.statusLines(map, pose, g.score), GAME.shown(g)); return f.rgba(o.rom, true); },
 });
+// A fresh game firing at a pose, with object hit shown white.
+const firing = (pose, hit) => { const g = GAME.game(map); g.flash = GAME.FLASH; g.objects[hit].hit = GAME.HIT; return g; };
+const aim = { x: 896, y: 2688, a: 128 };
 const cases = [
   frameCase('start', map.start, () => build(map.start, dir)),
   ...[60, 150, 200, 230, 290, 350, 480, 570, 700, 900].map(k => frameCase(`walk ${k}`, route[k], () => build(route[k], dir))),
-  ...SCRIPTS.map(([name, script]) => frameCase(name, play(script), () => build(null, dir, { script }))),
+  frameCase('firing', aim, () => build({ ...aim, flash: true, hit: 5 }, dir), firing(aim, 5)),
+  ...SCRIPTS.map(([name, script]) => { const g = play(script); return frameCase(name, g.p, () => build(null, dir, { script }), g, 45000000); }),
 ];
+
+// The sound: the game's scripts with shots and pickups, the SID ticked with the game (SND_SYNC).
+const sound = [1, 2].flatMap(sids => SCRIPTS.slice(3).map(([name, script]) => ({
+  name: `${name}${sids === 2 ? ', 2 SIDs' : ''}`, ticks: inputs(script).length,
+  build: () => {
+    const d = path.join(o.scratch, `sound${sids}`);
+    build(null, d, { script, defines: { SND_SYNC: 1, SND_STEREO: sids - 1 } });
+    return { prg: path.join(d, 'apex.prg'), lbl: path.join(d, 'apex.lbl') };
+  },
+  sound: () => soundOf(inputs(script), sids),
+})));
 
 (async () => {
   const border = VIEW.frame(map, map.start, 'mc', VIEW.statusLines(map, map.start)).opts.border;
-  const failures = await kit.checkFrames(o, cases, { border, width: 14 });
-  kit.finish(o, failures, 'the 6502 raycaster draws every frame exactly like the reference');
+  let failures = await kit.checkFrames(o, o.quick ? cases.slice(0, 2).concat(cases.slice(-1)) : cases, { border, width: 14 });
+  failures += await kit.checkSound(o, sound);
+  kit.finish(o, failures, 'the 6502 raycaster draws every frame and plays every SID tick exactly like the reference');
 })().catch(e => { console.error(e.message); process.exit(1); });

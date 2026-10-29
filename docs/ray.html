@@ -1,0 +1,2168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>APEX Cell Block</title>
+<style>
+  /* One look on purpose: a C64 screen in a dark room, whatever the viewer's theme. */
+  :root { --bg: #15131c; --fg: #e4e1ee; --dim: #9893ad; --key: #2c2838; --key-on: #4a4460; color-scheme: dark; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; box-sizing: border-box; min-height: 100vh; touch-action: manipulation; }
+  canvas { width: min(100%, 960px); aspect-ratio: 384 / 272; image-rendering: pixelated; background: #000; }
+  .help { color: var(--dim); text-align: center; max-width: 960px; }
+  .pad { display: none; width: min(100%, 960px); justify-content: space-between; align-items: center; gap: 12px; user-select: none; -webkit-user-select: none; }
+  .pad div { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 64px); gap: 8px; }
+  .pad button { width: 64px; height: 64px; border-radius: 50%; border: 0; background: var(--key); color: var(--fg); font-size: 24px; }
+  .pad button.fire { width: 88px; height: 88px; font-size: 16px; font-weight: 600; }
+  .pad button.on { background: var(--key-on); }
+  .pad button:focus-visible { outline: 2px solid var(--fg); }
+  @media (pointer: coarse) { .pad { display: flex; } }
+</style>
+</head>
+<body>
+<canvas id="screen" width="384" height="272"></canvas>
+<div class="pad">
+  <div>
+    <span></span><button data-bit="1" aria-label="forward">▲</button><span></span>
+    <button data-bit="4" aria-label="turn left">◀</button><button data-bit="2" aria-label="back">▼</button><button data-bit="8" aria-label="turn right">▶</button>
+  </div>
+  <button class="fire" data-bit="16" aria-label="fire">FIRE</button>
+</div>
+<p class="help" id="help">Up / Down or W / S to walk · Left / Right or A / D to turn · Space, Ctrl or F to fire · shoot the guards, pick up the treasure · R to restart · M mutes the sound · gamepad works too</p>
+<script>
+/*
+ * APEXSCII — PETSCII-style character sets for the Commodore 64, one per perspective:
+ * isometric 2:1, military 45°, top-down 3/4, side oblique, first-person dungeon and raycast,
+ * each in hi-res (8x8) and multicolor (4x8).
+ *
+ * Every set keeps PETSCII text at screen codes $00-$3F, then two shade sets (smooth and brick),
+ * line art and block elements; the rest of the 256 slots are free. buildDefault(mode, persp)
+ * returns the glyphs, their names and the layout regions.
+ *
+ * Also here: the C64 screen decoder, runnable .prg / .asm writers and specimen sheets.
+ * Works in the browser (window.APEXSCII) and in Node (require).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSCII = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- text font
+  const TEXT_NAMES = '@ABCDEFGHIJKLMNOPQRSTUVWXYZ[£]↑← !"#$%&\'()*+,-./0123456789:;<=>?';
+  const FONT_SRC = [
+    '..####.. .##..##. .##.###. .##.###. .##..... .##...#. ..####..', // @
+    '...##... ..####.. .##..##. .######. .##..##. .##..##. .##..##.', // A
+    '.#####.. .##..##. .##..##. .#####.. .##..##. .##..##. .#####..',
+    '..####.. .##..##. .##..... .##..... .##..... .##..##. ..####..',
+    '.####... .##.##.. .##..##. .##..##. .##..##. .##.##.. .####...',
+    '.######. .##..... .##..... .####... .##..... .##..... .######.',
+    '.######. .##..... .##..... .####... .##..... .##..... .##.....',
+    '..####.. .##..##. .##..... .##.###. .##..##. .##..##. ..####..',
+    '.##..##. .##..##. .##..##. .######. .##..##. .##..##. .##..##.',
+    '..####.. ...##... ...##... ...##... ...##... ...##... ..####..',
+    '...####. ....##.. ....##.. ....##.. ....##.. .##.##.. ..###...',
+    '.##..##. .##.##.. .####... .###.... .####... .##.##.. .##..##.',
+    '.##..... .##..... .##..... .##..... .##..... .##..... .######.',
+    '.##...## .###.### .####### .##.#.## .##...## .##...## .##...##',
+    '.##..##. .###.##. .######. .######. .##.###. .##..##. .##..##.',
+    '..####.. .##..##. .##..##. .##..##. .##..##. .##..##. ..####..',
+    '.#####.. .##..##. .##..##. .#####.. .##..... .##..... .##.....',
+    '..####.. .##..##. .##..##. .##..##. .##..##. ..####.. ....###.',
+    '.#####.. .##..##. .##..##. .#####.. .####... .##.##.. .##..##.',
+    '..####.. .##..##. .##..... ..####.. .....##. .##..##. ..####..',
+    '.######. ...##... ...##... ...##... ...##... ...##... ...##...',
+    '.##..##. .##..##. .##..##. .##..##. .##..##. .##..##. ..####..',
+    '.##..##. .##..##. .##..##. .##..##. .##..##. ..####.. ...##...',
+    '.##...## .##...## .##...## .##.#.## .####### .###.### .##...##',
+    '.##..##. .##..##. ..####.. ...##... ..####.. .##..##. .##..##.',
+    '.##..##. .##..##. .##..##. ..####.. ...##... ...##... ...##...',
+    '.######. .....##. ....##.. ...##... ..##.... .##..... .######.', // Z
+    '..####.. ..##.... ..##.... ..##.... ..##.... ..##.... ..####..', // [
+    '....##.. ...##.#. ..##.... .#####.. ..##.... .##...#. ######..', // £
+    '..####.. ....##.. ....##.. ....##.. ....##.. ....##.. ..####..', // ]
+    '...##... ..####.. .######. ...##... ...##... ...##... ...##...', // ↑
+    '........ ..#..... .##..... ######## .##..... ..#..... ........', // ←
+    '........',                                                        // space
+    '...##... ...##... ...##... ...##... ........ ........ ...##...', // !
+    '.##..##. .##..##. .##..##.',                                      // "
+    '.##..##. .##..##. ######## .##..##. ######## .##..##. .##..##.', // #
+    '...##... ..#####. .##..... ..####.. .....##. .#####.. ...##...', // $
+    '.##...#. .##..##. ....##.. ...##... ..##.... .##..##. .#...##.', // %
+    '..####.. .##..##. ..####.. ..###... .##..### .##..##. ..#####.', // &
+    '.....##. ....##.. ...##...',                                      // '
+    '....##.. ...##... ..##.... ..##.... ..##.... ...##... ....##..', // (
+    '..##.... ...##... ....##.. ....##.. ....##.. ...##... ..##....', // )
+    '........ .##..##. ..####.. ######## ..####.. .##..##. ........', // *
+    '........ ...##... ...##... .######. ...##... ...##... ........', // +
+    '........ ........ ........ ........ ........ ...##... ...##... ..##....', // ,
+    '........ ........ ........ .######.',                             // -
+    '........ ........ ........ ........ ........ ...##... ...##...', // .
+    '........ ......## .....##. ....##.. ...##... ..##.... .##.....', // /
+    '..####.. .##..##. .##.###. .###.##. .##..##. .##..##. ..####..', // 0
+    '...##... ..###... ...##... ...##... ...##... ...##... .######.',
+    '..####.. .##..##. .....##. ....##.. ..##.... .##..... .######.',
+    '..####.. .##..##. .....##. ...###.. .....##. .##..##. ..####..',
+    '.....##. ....###. ...####. .##..##. .####### .....##. .....##.',
+    '.######. .##..... .#####.. .....##. .....##. .##..##. ..####..',
+    '..####.. .##..##. .##..... .#####.. .##..##. .##..##. ..####..',
+    '.######. .##..##. ....##.. ...##... ...##... ...##... ...##...',
+    '..####.. .##..##. .##..##. ..####.. .##..##. .##..##. ..####..',
+    '..####.. .##..##. .##..##. ..#####. .....##. .##..##. ..####..', // 9
+    '........ ........ ...##... ........ ........ ...##... ........', // :
+    '........ ........ ...##... ........ ........ ...##... ...##... ..##....', // ;
+    '....###. ...###.. ..###... .###.... ..###... ...###.. ....###.', // <
+    '........ ........ .######. ........ .######.',                   // =
+    '.###.... ..###... ...###.. ....###. ...###.. ..###... .###....', // >
+    '..####.. .##..##. .....##. ....##.. ...##... ........ ...##...', // ?
+  ];
+
+  function parseGlyph(src) {
+    const rows = src.trim().split(/\s+/);
+    if (rows.length > 8) throw new Error('glyph has >8 rows: ' + src);
+    const g = new Uint8Array(8);
+    rows.forEach((r, y) => {
+      if (r.length !== 8) throw new Error('row not 8 wide: "' + r + '"');
+      for (let x = 0; x < 8; x++) if (r[x] === '#') g[y] |= 0x80 >> x;
+    });
+    return g;
+  }
+
+  // ---------------------------------------------------------- shade patterns
+  // Patterns are periodic in 8x8 so a glyph looks identical wherever it lands.
+  function brickWall(x, y) {
+    x &= 7; y &= 7;
+    if ((y & 3) === 3) return false;
+    return x !== (y < 4 ? 0 : 4);
+  }
+  const SETS = {
+    smooth: {
+      E: () => false,
+      T: () => true,
+      L: (x, y) => ((x + y) & 1) === 0,
+      R: (x, y) => (x & 1) === 0 && (y & 1) === 0,
+    },
+    brick: {
+      E: () => false,
+      T: (x, y) => !(((x & 3) === 0 && (y & 3) === 0) || ((x & 3) === 2 && (y & 3) === 2)),
+      L: brickWall,
+      R: (x, y) => brickWall(x, y) && ((x + y) & 1) === 0,
+    },
+  };
+  // Multicolor patterns work on 4x8 fat pixels: fn(fx, y) -> 2-bit value.
+  //   00 = $D021 background, 01 = $D022 (MC1), 10 = $D023 (MC2), 11 = the cell's colour RAM (0-7).
+  // The top face takes the cell colour, so materials share glyphs and differ only by colour;
+  // the left/right faces use the two shared shades.
+  function brickWallMC(fx, y) {
+    y &= 7;
+    if ((y & 3) === 3) return false;
+    return (fx & 3) !== (y < 4 ? 0 : 2);
+  }
+  const MC_SETS = {
+    smooth: { E: () => 0, T: () => 3, L: () => 1, R: () => 2 },
+    brick: {
+      E: () => 0,
+      T: (fx, y) => ((y & 3) === 0 && ((fx + (y >> 2)) & 1) === 0) ? 2 : 1, // light paving, dark joints
+      L: (fx, y) => brickWallMC(fx, y) ? 3 : 1,                             // bricks in cell colour, light mortar
+      R: (fx, y) => brickWallMC(fx, y) ? (((fx + y) & 1) ? 3 : 2) : 0,      // shaded bricks, dark mortar
+    },
+  };
+  // Dungeon faces: ceiling, ground, front wall, side wall, door (vertical planks).
+  Object.assign(SETS.smooth, { C: () => false, G: SETS.smooth.R, W: SETS.smooth.T, S: SETS.smooth.L, D: x => (x & 3) !== 3 });
+  Object.assign(SETS.brick, { C: () => false, G: SETS.brick.T, W: SETS.brick.L, S: SETS.brick.R, D: x => (x & 3) !== 3 });
+  Object.assign(MC_SETS.smooth, { C: () => 0, G: () => 2, W: () => 3, S: () => 1, D: fx => (fx & 1) ? 2 : 3 });
+  Object.assign(MC_SETS.brick, { C: () => 0, G: MC_SETS.brick.T, W: MC_SETS.brick.L, S: MC_SETS.brick.R, D: fx => (fx & 1) ? 2 : 3 });
+
+  // ------------------------------------------------------------ theme textures
+  // A theme repaints the two shade sets of every perspective with its own textures; glyph roles and
+  // screen codes stay the same, so maps and renderers work with any theme. A texture is 8 rows of
+  // 8 pixels ('#' on) for hi-res, or 8 rows of 4 fat pixels ('0'-'3') for multicolor, tiled every
+  // 8 pixels. Faces: T top, L lit side, R shaded side; dungeon C ceiling and D door. The dungeon's
+  // floor, front wall and side wall default to T, L and R.
+  const tex = rows => (x, y) => rows[y & 7][x & 7] === '#';
+  const texMC = rows => (fx, y) => +rows[y & 7][fx & 3];
+  const shaded = f => (x, y) => f(x, y) && ((x + y) & 1) === 0; // a darker side: every other pixel
+  function defineSet(name, hi, mc) {
+    const full = (s, none, door) => Object.assign({ E: none, C: none, G: s.T, W: s.L, S: s.R, D: door }, s);
+    SETS[name] = full(hi, () => false, x => (x & 3) !== 3);
+    MC_SETS[name] = full(mc, () => 0, fx => (fx & 1) ? 2 : 3);
+  }
+  const IRON_DOOR = tex(['########', '###.###.', '###.###.', '###.###.', '###.###.', '########', '###.###.', '###.###.']);
+  const IRON_DOOR_MC = texMC(['1111', '3303', '3303', '3303', '3303', '1111', '3303', '3303']);
+  const COBWEB = tex(['#.......', '.#......', '..#.....', '...#....', '........', '........', '......#.', '........']);
+  const COBWEB_MC = texMC(['1000', '0100', '0000', '0010', '0000', '0000', '0001', '0000']);
+
+  const cryptL = tex(['#######.', '#.######', '#######.', '........', '###.####', '###.##.#', '###.####', '........']);
+  defineSet('crypt-stone', {
+    T: tex(['#######.', '#######.', '#.#####.', '........', '###.####', '###.####', '###.##.#', '........']),
+    L: cryptL, R: shaded(cryptL), C: COBWEB, D: IRON_DOOR,
+  }, {
+    T: texMC(['3330', '3330', '3130', '0000', '3033', '3033', '3031', '0000']),
+    L: texMC(['1110', '1210', '1110', '0000', '1011', '1011', '1012', '0000']),
+    R: texMC(['2220', '2020', '2220', '0000', '2022', '2022', '2020', '0000']), C: COBWEB_MC, D: IRON_DOOR_MC,
+  });
+  const mossL = tex(['#.#####.', '#.###.#.', '#####.#.', '........', '###.#.##', '###.#.##', '###.####', '........']);
+  defineSet('crypt-moss', {
+    T: tex(['#.#####.', '#######.', '###.##..', '........', '###.##.#', '#.#.####', '###.####', '........']),
+    L: mossL, R: shaded(mossL), C: COBWEB, D: IRON_DOOR,
+  }, {
+    T: texMC(['3130', '3330', '3310', '0000', '3031', '3133', '3033', '0000']),
+    L: texMC(['1210', '1210', '1110', '0000', '1021', '1021', '1011', '0000']),
+    R: texMC(['2020', '2020', '2220', '0000', '2022', '2022', '2022', '0000']), C: COBWEB_MC, D: IRON_DOOR_MC,
+  });
+
+  const CANOPY = tex(['#..#....', '.#....#.', '....#..#', '#.#.....', '.....#..', '..#....#', '#...#...', '.#....#.']);
+  const CANOPY_MC = texMC(['1020', '0102', '2010', '0201', '1020', '0102', '2010', '0201']);
+  const PLANK_DOOR = tex(['########', '###.###.', '###.###.', '###.###.', '###.###.', '###.###.', '###.###.', '########']);
+  const PLANK_DOOR_MC = texMC(['2222', '3303', '3303', '3303', '3303', '3303', '3303', '2222']);
+  const dirt = tex(['#.#.#.#.', '.#.###.#', '#.#####.', '.#.###.#', '#.#.#.#.', '.#.#.#.#', '###.#.#.', '##.#.#.#']);
+  defineSet('forest-grass', {
+    T: tex(['########', '##.#####', '#.#.####', '########', '######.#', '#####.#.', '########', '########']),
+    L: dirt, R: shaded(dirt), C: CANOPY, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '3233', '3333', '3332', '3333', '3323', '3333', '2333']),
+    L: texMC(['1121', '1111', '2111', '1112', '1111', '1211', '1111', '1121']),
+    R: texMC(['2202', '2222', '0222', '2220', '2222', '2022', '2222', '2202']), C: CANOPY_MC, D: PLANK_DOOR_MC,
+  });
+  const bark = tex(['#.##.###', '#.##.###', '#.###.##', '#.###.##', '##.#.###', '##.#.###', '#.##.#.#', '#.##.###']);
+  defineSet('forest-wood', {
+    T: tex(['#######.', '#######.', '........', '###.####', '###.####', '........', '#####.##', '........']),
+    L: bark, R: shaded(bark), C: CANOPY, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3330', '3330', '0000', '3033', '3033', '0000', '3303', '0000']),
+    L: texMC(['3131', '3131', '3113', '3113', '1313', '1313', '3131', '3131']),
+    R: texMC(['2020', '2020', '2002', '2002', '0202', '0202', '2020', '2020']), C: CANOPY_MC, D: PLANK_DOOR_MC,
+  });
+
+  const BEAMS = tex(['########', '........', '........', '........', '########', '........', '........', '........']);
+  const BEAMS_MC = texMC(['2222', '0000', '0000', '0000', '2222', '0000', '0000', '0000']);
+  const timber = (x, y) => !((y & 7) === 0 || (x & 7) === 0 || (x & 7) === (y & 7)); // half-timbered panels
+  const timberMC = (fx, y) => ((y & 7) === 0 || (fx & 3) === 0 || (fx & 3) === (y & 7) >> 1 ? 2 : 1);
+  defineSet('town-cobble', {
+    T: tex(['###.###.', '###.###.', '###.###.', '........', '#.###.##', '#.###.##', '#.###.##', '........']),
+    L: timber, R: shaded(timber), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    // Cobbles in the shared shade (MC1) with a fat-pixel accent of the material's own colour.
+    T: texMC(['3101', '1101', '1101', '0000', '0310', '0110', '0110', '0000']),
+    L: timberMC, R: (fx, y) => (timberMC(fx, y) === 2 ? 2 : ((fx + y) & 1 ? 1 : 0)), C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+  defineSet('town-roof', {
+    T: tex(['.######.', '########', '########', '#.#.#.#.', '###..###', '########', '########', '#.#.#.#.']),
+    L: SETS.brick.L, R: SETS.brick.R, C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['0330', '3333', '3333', '1313', '3003', '3333', '3333', '1313']),
+    L: MC_SETS.brick.L, R: MC_SETS.brick.R, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+
+  // Toy bricks: studded plates on top (a stud a cell, lit on its upper left, shaded on its lower
+  // right), smooth 1x1 brick sides with a glint, and flat tiles with a groove for the second set.
+  const brickL = tex(['#######.', '#.#####.', '#######.', '#######.', '#######.', '#######.', '#######.', '........']);
+  const BRICK_L_MC = texMC(['3332', '3132', '3332', '3332', '3332', '3332', '3332', '0000']);
+  const BRICK_R_MC = texMC(['3230', '2320', '3230', '2320', '3230', '2320', '3230', '0000']);
+  defineSet('brick-stud', {
+    T: tex(['########', '##....##', '#.####.#', '#.####.#', '#.####.#', '#.####.#', '##....##', '########']),
+    L: brickL, R: shaded(brickL), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '1133', '1323', '1323', '1323', '3223', '3333', '3333']),
+    L: BRICK_L_MC, R: BRICK_R_MC, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+  defineSet('brick-tile', {
+    T: tex(['#######.', '#######.', '#######.', '#######.', '#######.', '#######.', '#######.', '........']),
+    L: brickL, R: shaded(brickL), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '3333', '3333', '3333', '3333', '3333', '3333', '2222']),
+    L: BRICK_L_MC, R: BRICK_R_MC, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+
+  // Animated textures: frames of a top-face texture, for a renderer to cycle through. They aren't in
+  // any theme's layout; on the C64 the few glyphs they produce are rewritten each frame. Water ripples
+  // drift right by one fat pixel per frame (four frames loop); its sides are the smooth ones.
+  const ANIMATIONS = { water: [] };
+  for (let f = 0; f < 4; f++) {
+    const crest = (x, y) => (y & 3) === 1 && ((x + 2 * f + ((y >> 2) & 1) * 4) & 7) < 3;
+    const crestMC = (fx, y) => (y & 3) === 1 && ((fx + f + ((y >> 2) & 1) * 2) & 3) < 2;
+    defineSet(`water-${f}`, { T: (x, y) => !crest(x, y), L: SETS.smooth.L, R: SETS.smooth.R },
+      { T: (fx, y) => (crestMC(fx, y) ? 1 : 3), L: MC_SETS.smooth.L, R: MC_SETS.smooth.R });
+    ANIMATIONS.water.push(`water-${f}`);
+  }
+
+  // Each theme names the pattern sets that fill the two shade-set regions of every perspective.
+  const THEMES = {
+    classic: { name: 'Classic', sets: ['smooth', 'brick'] },
+    crypt: { name: 'Crypt', sets: ['crypt-stone', 'crypt-moss'] },
+    forest: { name: 'Forest', sets: ['forest-grass', 'forest-wood'] },
+    town: { name: 'Town', sets: ['town-cobble', 'town-roof'] },
+    brick: { name: 'Brick', sets: ['brick-stud', 'brick-tile'] },
+  };
+  const FACE_NAMES = { E: 'empty', T: 'top', L: 'left', R: 'right' };
+
+  // 45° boundaries, corner to corner across a cell: military, side oblique and dungeon views.
+  const B45 = [
+    { id: '/', name: '/ 45°', row: x => 7 - x },
+    { id: '\\', name: '\\ 45°', row: x => x },
+  ];
+
+  // Every perspective shares the text block at $00-$3F, then its own shade sets.
+  //   faces: what the pair glyphs combine; key: which pattern each face uses; solids: plain faces.
+  // The top-down 3/4 view has no slopes at all, so it carries outline variants instead.
+  const PERSPECTIVES = {
+    iso: { name: 'Isometric 2:1' },
+    military: {
+      name: 'Military 45°', faces: ['E', 'T', 'L', 'R'], solids: ['T', 'L', 'R'], bounds: B45,
+      key: { E: 'E', T: 'T', L: 'L', R: 'R' }, faceNames: FACE_NAMES,
+    },
+    oblique: {
+      name: 'Top-down 3/4', faces: [], solids: [], bounds: [], edges: true,
+      key: { T: 'T', F: 'L' }, faceNames: { T: 'top', F: 'front' },
+    },
+    side: {
+      name: 'Side oblique', faces: ['E', 'T', 'F', 'R'], solids: ['T', 'F', 'R'], bounds: [B45[0]],
+      key: { E: 'E', T: 'T', F: 'L', R: 'R' }, faceNames: { E: 'empty', T: 'top', F: 'front', R: 'side' },
+    },
+    dungeon: {
+      name: 'First-person dungeon', faces: ['C', 'G', 'W', 'S'], solids: ['C', 'G', 'W', 'S', 'D'], bounds: B45,
+      key: { C: 'C', G: 'G', W: 'W', S: 'S', D: 'D' },
+      faceNames: { C: 'ceiling', G: 'floor', W: 'front wall', S: 'side wall', D: 'door' },
+    },
+    ray: { name: 'Raycast' },
+  };
+
+  // Raycast view: every screen column is two 4-pixel ray columns, and each ray column is in one of
+  // nine states: 0 empty, 1-4 wall shade A 2/4/6/8 pixels high, 5-8 shade B the same. The "top" glyphs
+  // are where a wall rises out of the ceiling (wall at the bottom of the cell), the "bottom" glyphs where
+  // it meets the floor (wall at the top). Screen code = base + 9 * left state + right state, so a full
+  // wall is top or bottom with both states 4 (shade A) or 8 (shade B).
+  // Multicolor: ceiling 00 ($D021), floor 01 ($D022), wall A 10 ($D023), wall B 11 (colour RAM). Walls
+  // are the VIC's foreground bit pairs, so sprites behind walls can use background priority, and
+  // colour RAM never changes from frame to frame. Hi-res: wall A solid, wall B checkered, floor dotted.
+  const RAY = { STATES: 9, top: 0x40, bottom: 0x40 + 81 };
+  RAY.state = (shade, h) => (h <= 0 ? 0 : (shade ? 4 : 0) + Math.min(4, h >> 1)); // h in pixels, rounded down to even
+  RAY.height = s => (s ? ((s - 1) & 3) * 2 + 2 : 0);
+  RAY.shade = s => (s > 4 ? 1 : 0);
+  const RAY_STATE_NAMES = ['empty', 'A2', 'A4', 'A6', 'A8', 'B2', 'B4', 'B6', 'B8'];
+
+  // The four 2:1 slope boundaries; row(x) is the first row of the "below" region.
+  const BOUNDS = [
+    { id: '/u', name: '/ upper', row: x => 3 - (x >> 1) },
+    { id: '/l', name: '/ lower', row: x => 7 - (x >> 1) },
+    { id: '\\u', name: '\\ upper', row: x => x >> 1 },
+    { id: '\\l', name: '\\ lower', row: x => 4 + (x >> 1) },
+  ];
+  const FACES = ['E', 'T', 'L', 'R'];
+  const PAIRS = [];
+  for (const a of FACES) for (const b of FACES) if (a !== b) PAIRS.push([a, b]);
+
+  function glyphFrom(fn) {
+    const g = new Uint8Array(8);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) if (fn(x, y)) g[y] |= 0x80 >> x;
+    return g;
+  }
+  function glyphFromMC(fn) {
+    const g = new Uint8Array(8);
+    for (let y = 0; y < 8; y++) for (let fx = 0; fx < 4; fx++) g[y] |= (fn(fx, y) & 3) << (6 - 2 * fx);
+    return g;
+  }
+
+  // ----------------------------------------------------------- default set
+  const REGIONS = [
+    { from: 0x00, to: 0x3f, name: 'text' },
+    { from: 0x40, to: 0x72, name: 'smooth' },
+    { from: 0x73, to: 0xa5, name: 'brick' },
+    { from: 0xa6, to: 0xad, name: 'lines' },
+    { from: 0xae, to: 0xb5, name: 'blocks' },
+    { from: 0xb6, to: 0xff, name: 'free' },
+  ];
+
+  // In multicolor mode the shade sets and free slots are fat-pixel glyphs; text, lines and
+  // blocks stay hi-res (they are shown with colour RAM 0-7, which keeps a cell hi-res).
+  const LAYOUTS = {};
+  const layout = persp => LAYOUTS[persp] || (LAYOUTS[persp] = buildDefault('hires', persp).regions);
+  function isMCSlot(i, persp = 'iso') {
+    const r = layout(persp).find(r => i >= r.from && i <= r.to);
+    return !['text', 'lines', 'blocks'].includes(r.name);
+  }
+
+  // theme picks the textures (see THEMES); the layout and glyph roles are the same for every theme.
+  // style.outline draws a dark seam where two different faces meet (see pairFn).
+  function buildDefault(mode = 'hires', persp = 'iso', theme = 'classic', style = {}) {
+    const sets = THEMES[theme].sets, outline = !!style.outline;
+    return persp === 'iso' ? buildIso(mode, sets, outline) : persp === 'ray' ? buildRay(mode) : buildPerspective(mode, persp, sets, outline);
+  }
+
+  // The raycast set has flat shading only, so it is the same in every theme and style (see RAY).
+  function buildRay(mode) {
+    const mc = mode === 'mc';
+    const glyphs = [], names = [], regions = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0, start = 0;
+    const add = (g, name) => { glyphs[i] = g; names[i++] = name; };
+    const region = name => { regions.push({ from: start, to: i - 1, name }); start = i; };
+    FONT_SRC.forEach((src, k) => add(parseGlyph(src), 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k])));
+    region('text');
+    const px = mc
+      ? { ceiling: () => 0, floor: () => 1, wall: [() => 2, () => 3] }
+      : { ceiling: () => false, floor: (x, y) => (x & 3) === 1 && (y & 3) === 2, wall: [() => true, (x, y) => ((x + y) & 1) === 0] };
+    const make = mc ? glyphFromMC : glyphFrom, half = mc ? x => x >> 1 : x => x >> 2;
+    for (const end of ['top', 'bottom']) {
+      for (let a = 0; a < 9; a++) for (let b = 0; b < 9; b++) {
+        add(make((x, y) => {
+          const s = half(x) ? b : a, h = RAY.height(s);
+          const isWall = end === 'top' ? y >= 8 - h : y < h;
+          return isWall ? px.wall[RAY.shade(s)](x, y) : (end === 'top' ? px.ceiling : px.floor)(x, y);
+        }), `${mc ? 'mc ' : ''}ray ${end} · ${RAY_STATE_NAMES[a]} | ${RAY_STATE_NAMES[b]}`);
+      }
+      region('ray ' + end);
+    }
+    EDGE_BLOCK_GLYPHS.slice(0, 4).forEach(([n, fn]) => add(glyphFrom(fn), 'line · ' + n));
+    region('lines');
+    EDGE_BLOCK_GLYPHS.slice(4).forEach(([n, fn]) => add(glyphFrom(fn), 'block · ' + n));
+    region('blocks');
+    i = 256; region('free');
+    return { glyphs, names, regions };
+  }
+
+  const EDGE_BLOCK_GLYPHS = [
+    ['left edge', (x) => x === 0], ['right edge', (x) => x === 7],
+    ['top edge', (x, y) => y === 0], ['bottom edge', (x, y) => y === 7],
+    ['upper half', (x, y) => y < 4], ['lower half', (x, y) => y >= 4],
+    ['left half', (x) => x < 4], ['right half', (x) => x >= 4],
+    ['quad TL', (x, y) => x < 4 && y < 4], ['quad TR', (x, y) => x >= 4 && y < 4],
+    ['quad BL', (x, y) => x < 4 && y >= 4], ['quad BR', (x, y) => x >= 4 && y >= 4],
+  ];
+
+  // A pair glyph: face pa above the boundary, pc below it. With a seam, the first row of the lower face
+  // is left dark (0 in either mode) — except in a cell's top row, so renderers can apply the same rule
+  // to every pixel without knowing where boundaries fall.
+  const pairFn = (row, b, pa, pc, seam) => (x, y) => {
+    const r = row(b, x);
+    return seam && y === r && y > 0 ? 0 : (y < r ? pa : pc)(x, y);
+  };
+
+  function buildPerspective(mode, persp, sets, outline) {
+    const P = PERSPECTIVES[persp], mc = mode === 'mc';
+    const glyphs = [], names = [], regions = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0, start = 0;
+    const add = (g, name) => { glyphs[i] = g; names[i++] = name; };
+    const region = name => { regions.push({ from: start, to: i - 1, name }); start = i; };
+    FONT_SRC.forEach((src, k) => add(parseGlyph(src), 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k])));
+    region('text');
+    const pairs = [];
+    for (const a of P.faces) for (const b of P.faces) if (a !== b) pairs.push([a, b]);
+    for (const setName of sets) {
+      const pat = f => (mc ? MC_SETS : SETS)[setName][P.key[f]], make = mc ? glyphFromMC : glyphFrom;
+      const row = mc ? (b, fx) => b.row(fx * 2) : (b, x) => b.row(x);
+      const label = (mc ? 'mc ' : '') + (outline ? 'outlined ' : '') + setName, fn = P.faceNames;
+      for (const f of P.solids) add(make(pat(f)), `${label} · ${fn[f]} face`);
+      for (const b of P.bounds) for (const [a, c] of pairs) {
+        add(make(pairFn(row, b, pat(a), pat(c), outline && a !== 'E' && c !== 'E')), `${label} · ${b.name} · ${fn[a]} over ${fn[c]}`);
+      }
+      if (P.edges) {
+        // Outlines where a block drops away: top faces with any of N/E/S/W, front faces with W/E.
+        const maxX = mc ? 3 : 7, off = mc ? 0 : false;
+        for (let e = 0; e < 16; e++) {
+          const on = [e & 1 && 'N', e & 2 && 'E', e & 4 && 'S', e & 8 && 'W'].filter(Boolean);
+          add(make((x, y) => ((e & 1) && y === 0) || ((e & 4) && y === 7) || ((e & 8) && x === 0) || ((e & 2) && x === maxX)
+            ? off : pat('T')(x, y)), `${label} · top · ${on.length ? 'edges ' + on.join('') : 'no edges'}`);
+        }
+        for (let e = 0; e < 4; e++) {
+          add(make((x, y) => ((e & 1) && x === 0) || ((e & 2) && x === maxX) ? off : pat('F')(x, y)),
+            `${label} · front · ${['no edges', 'edge W', 'edge E', 'edges WE'][e]}`);
+        }
+      }
+      region(setName);
+    }
+    for (const b of P.bounds) add(glyphFrom((x, y) => y === b.row(x)), `line · ${b.name}`);
+    EDGE_BLOCK_GLYPHS.slice(0, 4).forEach(([n, fn]) => add(glyphFrom(fn), 'line · ' + n));
+    region('lines');
+    EDGE_BLOCK_GLYPHS.slice(4).forEach(([n, fn]) => add(glyphFrom(fn), 'block · ' + n));
+    region('blocks');
+    i = 256; region('free');
+    return { glyphs, names, regions };
+  }
+
+  function buildIso(mode, sets, outline) {
+    const mc = mode === 'mc';
+    const glyphs = [], names = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0;
+    FONT_SRC.forEach((src, k) => {
+      glyphs[i] = parseGlyph(src);
+      names[i++] = 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k]);
+    });
+    for (const setName of sets) {
+      const set = (mc ? MC_SETS : SETS)[setName], make = mc ? glyphFromMC : glyphFrom;
+      const row = mc ? (b, fx) => b.row(fx * 2) : (b, x) => b.row(x);
+      const label = (mc ? 'mc ' : '') + (outline ? 'outlined ' : '') + setName;
+      for (const f of ['T', 'L', 'R']) {
+        glyphs[i] = make(set[f]);
+        names[i++] = `${label} · ${FACE_NAMES[f]} face`;
+      }
+      for (const b of BOUNDS) for (const [a, c] of PAIRS) {
+        glyphs[i] = make(pairFn(row, b, set[a], set[c], outline && a !== 'E' && c !== 'E'));
+        names[i++] = `${label} · ${b.name} · ${FACE_NAMES[a]} over ${FACE_NAMES[c]}`;
+      }
+    }
+    for (const b of BOUNDS) {
+      glyphs[i] = glyphFrom((x, y) => y === b.row(x));
+      names[i++] = `line · ${b.name}`;
+    }
+    [['left edge', (x) => x === 0], ['right edge', (x) => x === 7],
+     ['top edge', (x, y) => y === 0], ['bottom edge', (x, y) => y === 7],
+     ['upper half', (x, y) => y < 4], ['lower half', (x, y) => y >= 4],
+     ['left half', (x) => x < 4], ['right half', (x) => x >= 4],
+     ['quad TL', (x, y) => x < 4 && y < 4], ['quad TR', (x, y) => x >= 4 && y < 4],
+     ['quad BL', (x, y) => x < 4 && y >= 4], ['quad BR', (x, y) => x >= 4 && y >= 4],
+    ].forEach(([n, fn], k) => {
+      glyphs[i] = glyphFrom(fn);
+      names[i++] = (k < 4 ? 'line · ' : 'block · ') + n;
+    });
+    if (i !== 0xb6) throw new Error('layout drift: ended at ' + i.toString(16));
+    const regions = REGIONS.map(r => ({ ...r, name: r.name === 'smooth' ? sets[0] : r.name === 'brick' ? sets[1] : r.name }));
+    return { glyphs, names, regions };
+  }
+
+  // --------------------------------------------------------------- palette
+  const PALETTE = ['#000000', '#ffffff', '#68372b', '#70a4b2', '#6f3d86', '#588d43', '#352879', '#b8c76f',
+                   '#6f4f25', '#433900', '#9a6759', '#444444', '#6c6c6c', '#9ad284', '#6c5eb5', '#959595'];
+  const COLOR_NAMES = ['black', 'white', 'red', 'cyan', 'purple', 'green', 'blue', 'yellow',
+                       'orange', 'brown', 'light red', 'dark grey', 'grey', 'light green', 'light blue', 'light grey'];
+
+  // --------------------------------------------------------------- screens
+  const W = 320, H = 200;
+
+  function asciiToScreen(ch) {
+    const c = ch.toUpperCase().charCodeAt(0);
+    if (c >= 65 && c <= 90) return c - 64;
+    if (ch === '@') return 0;
+    if (ch === '[') return 27;
+    if (ch === ']') return 29;
+    if (c >= 32 && c <= 63) return c;
+    return 32;
+  }
+
+  // Decode a 40x25 screen the way the VIC does: in MC mode, colour RAM bit 3 makes a cell multicolor.
+  // opts: { mode, bg, mc1, mc2, romRows }. The bottom `romRows` rows come from the ROM font (see
+  // screenPrg): pass the 4K chargen ROM as `rom` for an exact picture; otherwise APEXSCII's own text
+  // glyphs stand in (inverted for reverse codes).
+  function screenRGB(chars, screen, color, opts, rom) {
+    const pal = PALETTE.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
+    const out = new Uint8ClampedArray(W * H * 4), mc = opts.mode === 'mc', firstRom = 25 - (opts.romRows || 0);
+    const romGlyph = code => {
+      if (rom) return rom.subarray(code * 8, code * 8 + 8);
+      const t = (code & 0x7f) < 0x40 ? chars[code & 0x3f] : new Uint8Array(8);
+      return code & 0x80 ? t.map(b => b ^ 0xff) : t;
+    };
+    for (let cy = 0; cy < 25; cy++) for (let cx = 0; cx < 40; cx++) {
+      const k = cy * 40 + cx, cr = color[k];
+      const g = cy >= firstRom ? romGlyph(screen[k]) : chars[screen[k]];
+      const multi = mc && (cr & 8);
+      const cols = multi ? [opts.bg, opts.mc1, opts.mc2, cr & 7] : [opts.bg, cr];
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+        const v = multi ? (g[y] >> (6 - 2 * (x >> 1))) & 3 : (g[y] >> (7 - x)) & 1;
+        const c = pal[cols[v]], p = ((cy * 8 + y) * W + cx * 8 + x) * 4;
+        out[p] = c[0]; out[p + 1] = c[1]; out[p + 2] = c[2]; out[p + 3] = 255;
+      }
+    }
+    return out;
+  }
+
+  // --------------------------------------------------------------- exports
+  function flatten(chars) {
+    const out = new Uint8Array(2048);
+    chars.forEach((g, i) => out.set(g, i * 8));
+    return out;
+  }
+  function charsetPrg(chars) {
+    const out = new Uint8Array(2050);
+    out[0] = 0x00; out[1] = 0x38; out.set(flatten(chars), 2);
+    return out;
+  }
+
+  // Self-contained runnable PRG for a 40x25 screen: BASIC "10 SYS2064", copies screen/colour/charset
+  // into place, points the VIC at $3800 and parks. Memory: $0A00 screen, $0E00 colour, $1200 charset.
+  // opts: { mode, bg, border, mc1, mc2, romRows }. Multicolor also sets $D022/$D023 and $D016 bit 4.
+  //
+  // With romRows > 0, a two-stage raster IRQ swaps $D018 every frame: APEXSCII ($1E) above, the ROM
+  // uppercase/graphics font ($14, VIC sees ROM at $1000) for the bottom rows. The swap is polled to
+  // the very start of the first ROM row's raster line, before the VIC fetches that line's glyphs.
+  // ROM rows should use colour RAM 0-7, so they stay hi-res in MC mode.
+  function screenPrg(chars, screen, color, opts) {
+    const { bg, border } = opts, ORG = 0x0810;
+    const SCR = 0x0a00, COL = 0x0e00, CHR = 0x1200, START = 0x0801, END = 0x1a00;
+    const split = (opts.romRows || 0) > 0;
+    const L = 51 + 8 * (25 - (opts.romRows || 0)); // first raster line of the ROM rows (PAL and NTSC)
+    const lo = v => v & 0xff, hi = v => v >> 8;
+    const labels = {};
+    // Two passes: the first records label addresses, the second fills in forward references.
+    const emit = () => {
+      const c = [], pc = () => ORG + c.length, mark = n => { labels[n] = pc(); };
+      const at = n => labels[n] || 0, rel = n => (at(n) - (pc() + 2)) & 0xff;
+      const setVec = n => c.push(0xa9, lo(at(n)), 0x8d, 0x14, 0x03, 0xa9, hi(at(n)), 0x8d, 0x15, 0x03); // $0314/5 = n
+      c.push(
+        0xa9, border & 15, 0x8d, 0x20, 0xd0,   // LDA #border : STA $D020
+        0xa9, bg & 15, 0x8d, 0x21, 0xd0,       // LDA #bg     : STA $D021
+        0xa9, 0x80, 0x8d, 0x91, 0x02);         // LDA #$80    : STA $0291 (lock shift+C= charset switch)
+      if (opts.mode === 'mc') c.push(
+        0xa9, opts.mc1 & 15, 0x8d, 0x22, 0xd0, // LDA #mc1    : STA $D022
+        0xa9, opts.mc2 & 15, 0x8d, 0x23, 0xd0, // LDA #mc2    : STA $D023
+        0xa9, 0xd8, 0x8d, 0x16, 0xd0);         // LDA #$D8    : STA $D016 (multicolor on)
+      c.push(0xa2, 0x00);                      // LDX #0
+      mark('copy');
+      for (let p = 0; p < 4; p++) c.push(0xbd, 0x00, hi(SCR) + p, 0x9d, 0x00, 0x04 + p); // LDA src,X : STA dst,X
+      for (let p = 0; p < 4; p++) c.push(0xbd, 0x00, hi(COL) + p, 0x9d, 0x00, 0xd8 + p);
+      for (let p = 0; p < 8; p++) c.push(0xbd, 0x00, hi(CHR) + p, 0x9d, 0x00, 0x38 + p);
+      c.push(0xe8);                                    // INX
+      c.push(0xd0, rel('copy'));                       // BNE copy
+      c.push(0xa9, 0x1e, 0x8d, 0x18, 0xd0);            // LDA #$1E : STA $D018
+      if (split) {
+        c.push(0x78);                                  // SEI
+        c.push(0xa9, 0x7f, 0x8d, 0x0d, 0xdc);          // LDA #$7F : STA $DC0D (CIA timer IRQs off)
+        c.push(0xad, 0x0d, 0xdc);                      // LDA $DC0D (ack)
+        c.push(0xa9, 0x01, 0x8d, 0x1a, 0xd0);          // LDA #1 : STA $D01A (raster IRQ on)
+        c.push(0xad, 0x11, 0xd0, 0x29, 0x7f, 0x8d, 0x11, 0xd0); // clear raster bit 8
+        c.push(0xa9, L - 2, 0x8d, 0x12, 0xd0);         // first IRQ two lines above the split
+        setVec('split');
+        c.push(0x58);                                  // CLI
+      }
+      mark('park');
+      c.push(0x4c, lo(at('park')), hi(at('park')));    // JMP park
+      if (split) {
+        mark('split');
+        c.push(0xa9, L, 0xa2, 0x14);                   // LDA #L : LDX #$14
+        mark('wait');
+        c.push(0xcd, 0x12, 0xd0);                      // CMP $D012
+        c.push(0xd0, rel('wait'));                     // BNE wait
+        c.push(0x8e, 0x18, 0xd0);                      // STX $D018 (ROM font from here down)
+        c.push(0xa9, 0x00, 0x8d, 0x12, 0xd0);          // next IRQ at line 0
+        setVec('top');
+        c.push(0xa9, 0xff, 0x8d, 0x19, 0xd0);          // ack VIC IRQ
+        c.push(0x4c, 0x81, 0xea);                      // JMP $EA81 (restore regs, RTI)
+        mark('top');
+        c.push(0xa9, 0x1e, 0x8d, 0x18, 0xd0);          // APEXSCII above the split
+        c.push(0xa9, L - 2, 0x8d, 0x12, 0xd0);
+        setVec('split');
+        c.push(0xa9, 0xff, 0x8d, 0x19, 0xd0);
+        c.push(0x4c, 0x31, 0xea);                      // JMP $EA31 (KERNAL keyboard/jiffy once a frame)
+      }
+      return c;
+    };
+    emit();
+    const code = emit();
+    if (ORG + code.length > SCR) throw new Error('PRG code overruns screen data');
+    const mem = new Uint8Array(END - START);
+    const put = (addr, bytes) => mem.set(bytes, addr - START);
+    put(0x0801, [0x0b, 0x08, 0x0a, 0x00, 0x9e, 0x32, 0x30, 0x36, 0x34, 0x00, 0x00, 0x00]);
+    put(ORG, code);
+    put(SCR, screen);
+    put(COL, color.map(c => c & 15));
+    put(CHR, flatten(chars));
+    const out = new Uint8Array(mem.length + 2);
+    out[0] = 0x01; out[1] = 0x08; out.set(mem, 2);
+    return out;
+  }
+
+  const hex = (v, w = 2) => '$' + v.toString(16).toUpperCase().padStart(w, '0');
+  function charsetAsm(chars, names) {
+    const lines = ['; APEXSCII character set — 256 glyphs x 8 bytes', '; load/copy to a 2K boundary, e.g. $3800 (VIC $D018 = $1E)', 'apexscii:'];
+    chars.forEach((g, i) => lines.push(`    .byte ${Array.from(g, b => hex(b)).join(',')}  ; ${hex(i)} ${names[i] || ''}`));
+    return lines.join('\n') + '\n';
+  }
+  function screenAsm(screen, color, label = 'screen') {
+    const out = ['; APEXSCII screen — 40x25 screen codes then colour RAM values', `${label}_codes:`];
+    for (let r = 0; r < 25; r++) out.push('    .byte ' + Array.from(screen.slice(r * 40, r * 40 + 40), b => hex(b)).join(','));
+    out.push(`${label}_color:`);
+    for (let r = 0; r < 25; r++) out.push('    .byte ' + Array.from(color.slice(r * 40, r * 40 + 40), b => hex(b)).join(','));
+    return out.join('\n') + '\n';
+  }
+
+  // -------------------------------------------------------------- specimens
+  // A specimen sheet shows a whole set on the C64: the 256 glyphs as a 16x16 grid with hex labels
+  // (columns spaced for legibility), the layout regions underneath, and a status row in the ROM
+  // font, so the raster split is exercised too. Text stays below colour 8, so it is hi-res in MC.
+  function specimen(persp = 'iso', mode = 'hires', theme = 'classic', style = {}) {
+    const { glyphs, regions } = buildDefault(mode, persp, theme, style), mc = mode === 'mc';
+    const ink = mc ? { title: 7, sub: 1, label: 3, legend: 1 } : { title: 7, sub: 15, label: 12, legend: 15 };
+    const screen = new Uint8Array(1000).fill(0x20), color = new Uint8Array(1000).fill(1);
+    const text = (row, col, s, c, rev) => {
+      for (let k = 0; k < s.length && col + k < 40; k++) {
+        screen[row * 40 + col + k] = asciiToScreen(s[k]) | (rev ? 0x80 : 0);
+        color[row * 40 + col + k] = c;
+      }
+    };
+    const centre = (row, s, c, rev) => text(row, (40 - s.length) >> 1, s, c, rev);
+    const HEX = '0123456789ABCDEF';
+    centre(0, 'APEXSCII ' + PERSPECTIVES[persp].name.toUpperCase().replace('°', ''), ink.title);
+    centre(1, (theme === 'classic' ? '' : THEMES[theme].name.toUpperCase() + '  ') + (style.outline ? 'OUTLINED  ' : '') +
+      (mc ? 'MULTICOLOR 4X8' : 'HI-RES 8X8'), ink.sub);
+    for (let k = 0; k < 16; k++) text(3, 7 + 2 * k, HEX[k], ink.label);
+    for (let r = 0; r < 16; r++) {
+      text(4 + r, 3, HEX[r] + '0', ink.label);
+      for (let k = 0; k < 16; k++) {
+        const code = r * 16 + k, at = (4 + r) * 40 + 7 + 2 * k, region = regions.find(g => code >= g.from && code <= g.to).name;
+        screen[at] = code;
+        // MC slots use green as the cell colour; hi-res glyphs: white text, green sets, grey line art.
+        const hires = region === 'text' ? 1 : region === 'lines' || region === 'blocks' ? (mc ? 7 : 15) : 13;
+        color[at] = mc && isMCSlot(code, persp) ? 8 | 5 : hires;
+      }
+    }
+    // Region legend, wrapped over two rows.
+    const items = regions.map(g => `${g.name.toUpperCase()} ${g.from.toString(16).toUpperCase().padStart(2, '0')}-${g.to.toString(16).toUpperCase()}`);
+    const lines = [''];
+    for (const it of items) {
+      const cur = lines[lines.length - 1];
+      if ((cur ? cur.length + 2 : 0) + it.length > 38) lines.push(it); else lines[lines.length - 1] = cur ? cur + '  ' + it : it;
+    }
+    lines.slice(0, 3).forEach((l, i) => centre(21 + i, l, ink.legend)); // rows 21-23; the ROM row is 24
+    const tag = ' ROM FONT ', rest = ' STATUS ROW', start = (40 - tag.length - rest.length) >> 1;
+    text(24, start, tag, 7, true);
+    text(24, start + tag.length, rest, 7);
+    return { chars: glyphs, screen, color, opts: { mode, bg: 0, border: 0, mc1: 12, mc2: 11, romRows: 1 } };
+  }
+  const specimenPrg = (persp, mode, theme, style) => { const s = specimen(persp, mode, theme, style); return screenPrg(s.chars, s.screen, s.color, s.opts); };
+
+  return {
+    W, H, PALETTE, COLOR_NAMES, REGIONS, PERSPECTIVES, THEMES, ANIMATIONS, SETS, MC_SETS, BOUNDS, B45, PAIRS, FACE_NAMES, RAY,
+    glyphFrom, glyphFromMC, buildDefault, layout, isMCSlot, asciiToScreen,
+    screenRGB, screenPrg, screenAsm, flatten, charsetPrg, charsetAsm, hex, specimen, specimenPrg,
+  };
+});
+
+</script>
+<script>
+/*
+ * APEX raycaster — the reference implementation every platform port is checked against.
+ *
+ * It uses integer maths only, the way an 8-bit CPU would run it, so a 6502 port that uses the same
+ * tables gets exactly the same numbers:
+ *   - positions are 8.8 fixed point in tiles (256 = one tile)
+ *   - angles run 0-1023 for a full turn: 0 east, 256 south (y grows downward, as in the map text)
+ *   - per ray, a DDA walk over the grid using sec() tables, then a fisheye correction per column
+ *
+ * makeCaster(opts) builds the tables for one view (ray count, field of view, wall scale); cast()
+ * returns one { halfH, side, tile, dist, u } per ray, where u (0-255) is where along the wall face the ray
+ * hit, left to right as seen. Platforms turn those into pixels their own way.
+ *
+ * With opts.interpolate, only the even rays (and the last) are cast. An odd ray whose neighbours hit
+ * the same face of the same tile takes the mean of their heights and distances instead: on a flat wall
+ * 1/distance, and so the wall height, changes linearly across the screen. Any other odd ray is cast.
+ * With opts.interpolate 4 (for a ray count that is a multiple of 4), only every fourth ray and the last
+ * two are cast at first; each ray 2 on from a multiple of 4 is filled the same way from the rays 2 either
+ * side, or cast, and then the odd rays as above.
+ *
+ * With opts.fog, a wall whose half height would be fog pixels or less is too far away to see: its ray
+ * returns halfH 0, dist 0xFFFF and no tile. FOG_PERP is the nearest distance that happens at, and
+ * project() leaves out objects that far away or more. A port can stop each ray's walk there.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXRAY = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const ANG = 1024, QUAD = 256, ONE = 256, MAX16 = 0xffff;
+  const rad = a => (a * 2 * Math.PI) / ANG;
+
+  // SEC[k] = 1/cos(k) for k in 0..256 (one quadrant), 8.8, saturating at $FFFF.
+  const SEC = Array.from({ length: QUAD + 1 }, (_, k) => {
+    const c = Math.cos(rad(k));
+    return c < ONE / MAX16 ? MAX16 : Math.min(MAX16, Math.round(ONE / c));
+  });
+  // SIN[k] for k in 0..256, 0.8 (256 = 1.0), for moving the player.
+  const SIN = Array.from({ length: QUAD + 1 }, (_, k) => Math.round(Math.sin(rad(k)) * ONE));
+
+  function sin(a) {
+    a &= ANG - 1;
+    const q = a >> 8, k = a & 255;
+    const v = q & 1 ? SIN[QUAD - k] : SIN[k];
+    return q & 2 ? -v : v;
+  }
+  const cos = a => sin(a + QUAD);
+
+  // opts: rays (columns), fov (degrees), scale (half-wall height in pixels at one tile), maxH (half the
+  // view height in pixels), even (round half-heights down to even pixels), maxSteps (DDA limit),
+  // interpolate (true: cast every other ray where it can; 4: every fourth; see above), fog (see above; 0 for none), uNear (u
+// is 0 for rays whose halfH / 2 is less).
+  function makeCaster(opts = {}) {
+    const o = Object.assign({ rays: 80, fov: 66, scale: 100, maxH: 80, even: true, maxSteps: 64, interpolate: false, fog: 0, uNear: 0 }, opts);
+    // With angleStep, rays are angleStep apart (the field of view is rays * angleStep), so turning by a
+    // multiple of it shifts the rays, and a port can keep the ones it has; walls bow a little at the
+    // sides. Otherwise rays are evenly spaced on the screen plane, which keeps walls straight.
+    if (o.angleStep) o.fov = (o.rays * o.angleStep * 360) / ANG;
+    const t = Math.tan((o.fov * Math.PI) / 360);
+    // Each ray's angle relative to the view direction.
+    const COL_ANGLE = Array.from({ length: o.rays }, (_, c) => o.angleStep ? ((2 * c + 1 - o.rays) * o.angleStep) / 2 :
+      Math.round((Math.atan((((c + 0.5) * 2) / o.rays - 1) * t) * ANG) / (2 * Math.PI)));
+    // Fisheye correction: cos of that angle, 0.8 fixed, capped at 255.
+    const COL_COS = COL_ANGLE.map(a => Math.min(255, Math.round(Math.cos(rad(a)) * ONE)));
+    const SCALE = o.scale * ONE;
+    // halfH <= fog exactly when perp > SCALE / (fog + 2), as halfH is rounded down to even.
+    const FOG_PERP = o.fog ? Math.floor(SCALE / (o.fog + 2)) + 1 : Infinity;
+
+    // map: { w, h, cells: Uint8Array, 0 = open, anything else = a wall tile }; outside the map is solid.
+    function cast(map, px, py, pa) {
+      const out = new Array(o.rays);
+      const solid = (x, y) => (x < 0 || y < 0 || x >= map.w || y >= map.h ? 1 : map.cells[y * map.w + x]);
+      const ray = c => {
+        const a = (pa + COL_ANGLE[c]) & (ANG - 1), q = a >> 8, k = a & 255;
+        const secX = q & 1 ? SEC[QUAD - k] : SEC[k], secY = q & 1 ? SEC[k] : SEC[QUAD - k];
+        const stepX = q === 0 || q === 3 ? 1 : -1, stepY = q < 2 ? 1 : -1;
+        let mapX = px >> 8, mapY = py >> 8;
+        const fx = px & 255, fy = py & 255;
+        let sideX = Math.min(MAX16, ((stepX > 0 ? ONE - fx : fx) * secX) >> 8);
+        let sideY = Math.min(MAX16, ((stepY > 0 ? ONE - fy : fy) * secY) >> 8);
+        let side = 0, dist = 0, tile = 0;
+        for (let n = 0; n < o.maxSteps; n++) {
+          if (sideX < sideY) { mapX += stepX; side = 0; dist = sideX; sideX = Math.min(MAX16, sideX + secX); }
+          else { mapY += stepY; side = 1; dist = sideY; sideY = Math.min(MAX16, sideY + secY); }
+          tile = solid(mapX, mapY);
+          if (tile) break;
+        }
+        const perp = (dist * COL_COS[c]) >> 8;
+        if (perp >= FOG_PERP) { out[c] = { halfH: 0, side: 0, tile: 0, dist: 0xffff, mapX: -1, mapY: -1, u: 0 }; return; }
+        let halfH = perp ? Math.min(o.maxH, Math.floor(SCALE / perp)) : o.maxH;
+        if (o.even) halfH &= ~1;
+        // u: where along the wall face the ray hit, 0-255 across one tile, left to right as seen.
+        const along = side === 0 ? py + ((dist * sin(a)) >> 8) : px + ((dist * cos(a)) >> 8);
+        const u = halfH >> 1 < o.uNear ? 0 : side === 0 ? (stepX > 0 ? along & 255 : 255 - (along & 255)) : (stepY > 0 ? 255 - (along & 255) : along & 255);
+        out[c] = { halfH, side, tile, dist: perp, mapX, mapY, u };
+      };
+      if (!o.interpolate) {
+        for (let c = 0; c < o.rays; c++) ray(c);
+        return out;
+      }
+      // Ray c from rays c - d and c + d when they hit the same face, or cast.
+      const fill = (c, d) => {
+        const l = out[c - d], r = out[c + d];
+        if (l.mapX !== r.mapX || l.mapY !== r.mapY || l.side !== r.side) { ray(c); return; }
+        let halfH = (l.halfH + r.halfH) >> 1;
+        if (o.even) halfH &= ~1;
+        const u = (l.u + r.u) >> 1;
+        out[c] = { halfH, side: l.side, tile: l.tile, dist: (l.dist + r.dist) >> 1, mapX: l.mapX, mapY: l.mapY, u, interpolated: true };
+      };
+      if (o.interpolate === 4) {
+        for (let c = 0; c < o.rays; c += 4) ray(c);
+        ray(o.rays - 2);
+        ray(o.rays - 1);
+        for (let c = 2; c < o.rays - 2; c += 4) fill(c, 2);
+      } else {
+        for (let c = 0; c < o.rays; c += 2) ray(c);
+        if (!(o.rays & 1)) ray(o.rays - 1);
+      }
+      for (let c = 1; c < o.rays - 1; c += 2) fill(c, 1);
+      return out;
+    }
+
+    // Where a point object at (x, y) appears: depth along the view (8.8 tiles, comparable with a ray's
+    // dist), col its screen position in ray columns (8.8, 0 = left edge) and halfH the half height of a
+    // wall at that depth, uncapped. Null when it is behind the player or closer than an eighth of a tile.
+    const FOCAL = Math.round(((o.rays / 2) * ONE) / t);
+    // With angleStep, an object |lat| / depth to the side (r = that * 256, up to 512) is ATAN_COL[r]
+    // ray columns (8.8) from the centre.
+    const ATAN_COL = Array.from({ length: 513 }, (_, r) => Math.floor((Math.atan(r / ONE) * ANG * ONE) / (2 * Math.PI * (o.angleStep || 1))));
+    function project(p, x, y) {
+      const dx = x - p.x, dy = y - p.y, c = cos(p.a), s = sin(p.a);
+      const depth = (dx * c + dy * s) >> 8, lat = (dy * c - dx * s) >> 8;
+      if (depth < 32 || depth >= FOG_PERP) return null;
+      const col = o.angleStep ? (lat < 0 ? -1 : 1) * ATAN_COL[Math.min(512, Math.floor((Math.abs(lat) * ONE) / depth))] : Math.floor((lat * FOCAL) / depth);
+      return { depth, col: (o.rays / 2) * ONE + col, halfH: Math.floor(SCALE / depth) };
+    }
+
+    return { opts: o, COL_ANGLE, COL_COS, FOG_PERP, ATAN_COL, cast, project };
+  }
+
+  // Move by `speed` (8.8 tiles) along angle a, sliding along walls; keeps `radius` (8.8) clear of them.
+  function move(map, p, a, speed, radius = 64) {
+    const solid = (x, y) => x < 0 || y < 0 || x >= map.w || y >= map.h || map.cells[y * map.w + x];
+    const dx = (cos(a) * speed) >> 8, dy = (sin(a) * speed) >> 8;
+    const clear = (x, y) => !solid((x - radius) >> 8, (y - radius) >> 8) && !solid((x + radius) >> 8, (y - radius) >> 8) &&
+      !solid((x - radius) >> 8, (y + radius) >> 8) && !solid((x + radius) >> 8, (y + radius) >> 8);
+    if (clear(p.x + dx, p.y)) p.x += dx;
+    if (clear(p.x, p.y + dy)) p.y += dy;
+    return p;
+  }
+
+  return { ANG, QUAD, ONE, SEC, SIN, sin, cos, makeCaster, move };
+});
+
+</script>
+<script>
+/*
+ * APEX level format: a text grid, one character per tile.
+ *
+ *   #        wall (tile 1)
+ *   1-9      wall of that tile type
+ *   . or ' ' open floor
+ *   N E S W  open floor, where the player starts, facing that way
+ *   G B $    open floor with an object on it: guard, barrel, treasure
+ *   ; ...    comment line (the first one names the level)
+ *
+ * parse(text) returns { name, w, h, cells, start: { x, y, a }, objects: [{ type, x, y }] }, with
+ * positions in 8.8 tiles (the centre of the square) and the angle in raycast units (0 east, 256 south).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXLEVEL = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const FACING = { E: 0, S: 256, W: 512, N: 768 };
+  const OBJECTS = { G: 'guard', B: 'barrel', $: 'treasure' };
+
+  function parse(text) {
+    const lines = text.replace(/\r/g, '').split('\n');
+    const comments = lines.filter(l => l.startsWith(';')), rows = lines.filter(l => !l.startsWith(';') && l.trim());
+    const w = Math.max(...rows.map(r => r.length)), h = rows.length;
+    const cells = new Uint8Array(w * h);
+    let start = null;
+    const objects = [];
+    rows.forEach((r, y) => {
+      for (let x = 0; x < w; x++) {
+        const ch = r[x] || ' ';
+        if (ch === '#') cells[y * w + x] = 1;
+        else if (ch >= '1' && ch <= '9') cells[y * w + x] = +ch;
+        else if (ch in FACING) start = { x: x * 256 + 128, y: y * 256 + 128, a: FACING[ch] };
+        else if (ch in OBJECTS) objects.push({ type: OBJECTS[ch], x: x * 256 + 128, y: y * 256 + 128 });
+        else if (ch !== '.' && ch !== ' ') throw new Error(`level: unknown tile '${ch}' at ${x},${y}`);
+      }
+    });
+    if (!start) throw new Error('level: no player start (N, E, S or W)');
+    return { name: comments.length ? comments[0].slice(1).trim() : 'untitled', w, h, cells, start, objects };
+  }
+
+  return { parse, FACING, OBJECTS };
+});
+
+</script>
+<script>
+/*
+ * The raycaster's game: walking and turning as before, plus a pistol, guards that die when shot and
+ * treasure to pick up. Every port follows it tick by tick (50 a second).
+ *
+ * game(map) starts one; play(map, g, bits, caster) plays one tick with the controls in bits
+ * (1 forward, 2 back, 4 turn left, 8 turn right, 16 fire), and lists what happened in g.events (for
+ * the sound): shot, die, pickup. caster is the view's raycaster (c64/view.js caster): a shot hits the
+ * nearest guard over the middle of the screen, nearer than the wall the middle ray meets.
+ *
+ * Each tick, in order:
+ *   1. the timers: the pistol's cooling and flash; a guard that was shot is gone HIT ticks later
+ *   2. turning, then walking: each axis only if the square WALL_RADIUS around the new position is
+ *      clear of walls and no barrel or guard is within OBJ_RADIUS on both axes (treasure doesn't block)
+ *   3. treasure within PICK_RADIUS on both axes is picked up (TREASURE points)
+ *   4. firing, when the pistol is cool: it flashes for FLASH ticks and cools for COOL; a guard it hits
+ *      shows white for HIT ticks (GUARD points)
+ * The score is shown as 4 decimal digits (it wraps at 10000, as the C64's BCD does).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./raycast.js'));
+  else root.APEXRAYGAME = factory(root.APEXRAY);
+})(typeof self !== 'undefined' ? self : this, function (APEXRAY) {
+  'use strict';
+
+  const MOVE_SPEED = 6;             // 8.8 tiles per tick
+  const HEADING_STEP = 4;           // the player's angle is always a multiple of this
+  const WALL_RADIUS = 96;           // the player keeps 3/8 of a tile from walls on each axis
+  const OBJ_RADIUS = 128;           // and half a tile from a barrel's or guard's centre, on one axis at least
+  const PICK_RADIUS = 96;           // treasure this near on both axes is picked up
+  const COOL = 16, FLASH = 6, HIT = 12;
+  const TREASURE = 100, GUARD = 50;
+  const FIRE = 16;
+  const HEIGHT = { guard: 218 };    // as c64/sprites.js TYPES (256ths of a wall)
+
+  function game(map) {
+    return {
+      p: { ...map.start }, objects: (map.objects || []).map(o => ({ ...o, on: true, hit: 0 })),
+      score: 0, cool: 0, flash: 0, t: 0, events: [],
+    };
+  }
+
+  const blocks = o => o.on && o.type !== 'treasure';
+
+  // Is (x, y) a place the player can stand?
+  function clear(map, g, x, y) {
+    const solid = (tx, ty) => tx < 0 || ty < 0 || tx >= map.w || ty >= map.h || map.cells[ty * map.w + tx];
+    const R = WALL_RADIUS, near = d => d >= -OBJ_RADIUS && d < OBJ_RADIUS;
+    return [[-R, -R], [R, -R], [-R, R], [R, R]].every(([ox, oy]) => !solid((x + ox) >> 8, (y + oy) >> 8)) &&
+      !g.objects.some(o => blocks(o) && near(x - o.x) && near(y - o.y));
+  }
+
+  // The guard a shot from p hits: its index, or -1. A guard is over the middle of the screen when its
+  // centre is within H / 8 + 4 pixels of the middle (H its height on screen), and must be nearer than
+  // the middle ray's wall. The nearest wins; at the same depth, the first in the level.
+  function target(map, g, caster) {
+    const p = g.p, rays = caster.cast(map, p.x, p.y, p.a), mid = rays[rays.length >> 1].dist;
+    const middle = (rays.length >> 1) * 4;
+    let best = -1, bestDepth = 0;
+    g.objects.forEach((o, i) => {
+      if (o.type !== 'guard' || !o.on || o.hit) return;
+      const pr = caster.project(p, o.x, o.y);
+      if (!pr || pr.depth >= mid) return;
+      const x = (pr.col * 4) >> 8, H = (2 * pr.halfH * HEIGHT.guard) >> 8;
+      if (Math.abs(x - middle) >= (H >> 3) + 4) return;
+      if (best < 0 || pr.depth < bestDepth) { best = i; bestDepth = pr.depth; }
+    });
+    return best;
+  }
+
+  function play(map, g, bits, caster) {
+    const p = g.p, events = (g.events = []);
+    g.t++;
+    if (g.cool) g.cool--;
+    if (g.flash) g.flash--;
+    for (const o of g.objects) if (o.hit && --o.hit === 0) o.on = false;
+
+    if (bits & 4) p.a = (p.a - HEADING_STEP) & 1023;
+    if (bits & 8) p.a = (p.a + HEADING_STEP) & 1023;
+    if (bits & 3) {
+      const sgn = bits & 2 ? -1 : 1;
+      const dx = sgn * ((APEXRAY.cos(p.a) * MOVE_SPEED) >> 8), dy = sgn * ((APEXRAY.sin(p.a) * MOVE_SPEED) >> 8);
+      if (clear(map, g, p.x + dx, p.y)) p.x += dx;
+      if (clear(map, g, p.x, p.y + dy)) p.y += dy;
+    }
+
+    const near = d => d >= -PICK_RADIUS && d < PICK_RADIUS;
+    for (const o of g.objects) {
+      if (o.type !== 'treasure' || !o.on || !near(p.x - o.x) || !near(p.y - o.y)) continue;
+      o.on = false;
+      g.score = (g.score + TREASURE) % 10000;
+      events.push('pickup');
+    }
+
+    if (bits & FIRE && !g.cool) {
+      g.cool = COOL;
+      g.flash = FLASH;
+      events.push('shot');
+      const k = target(map, g, caster);
+      if (k >= 0) {
+        g.objects[k].hit = HIT;
+        g.score = (g.score + GUARD) % 10000;
+        events.push('die');
+      }
+    }
+    return g;
+  }
+
+  // What the view shows of a game: the objects still there (white while a shot guard falls) and
+  // whether the pistol is flashing.
+  function shown(g) {
+    return { objects: g.objects.filter(o => o.on).map(o => (o.hit ? { ...o, color: 1 } : o)), flash: g.flash > 0, score: g.score };
+  }
+
+  return { MOVE_SPEED, HEADING_STEP, WALL_RADIUS, OBJ_RADIUS, PICK_RADIUS, COOL, FLASH, HIT, TREASURE, GUARD, FIRE,
+    game, play, clear, target, shown };
+});
+
+</script>
+<script>
+/*
+ * Objects in the C64 raycast view as hardware sprites.
+ *
+ * Each frame, every visible object goes through these steps:
+ *   1. projected with the reference raycaster
+ *   2. given the image for its height: heights are rounded down to one of SIZES, and each size's
+ *      image is scaled from multicolor source art once (on the C64, at start-up)
+ *   3. masked column by column against the rays, so it disappears behind nearer walls, and row by row
+ *      to the view
+ *   4. cut into 24x21 sprites on a fixed grid; an object uses X/Y expansion when that takes fewer
+ *      sprites. The grid starts at the first byte-aligned column a sprite can reach on the left (VIC
+ *      x >= 0) and at the top of the view, so the C64 copies whole bytes and never shifts pixels.
+ * The pistol is sprite 0 (in front of everything), expanded both ways at the bottom middle of the view;
+ * the nearest objects claim the other 7 first, and an object that doesn't fit whole is skipped.
+ * c64/apex.s does exactly this each frame, and the VICE test checks it pixel for pixel.
+ *
+ * Source art: '.' transparent, 'a' $D025 (black outline), 'b' the object's own colour,
+ * 'c' $D026 (light red: skin, highlights). One fat pixel is two screen pixels wide.
+ *
+ * Works in Node and in the browser (global APEXRAYSPRITES, needing APEXSCII).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('../apexscii/apexscii.js'));
+  else root.APEXRAYSPRITES = factory(root.APEXSCII);
+})(typeof self !== 'undefined' ? self : this, function (APEXSCII) {
+  'use strict';
+
+  const SHARED = { mc1: 0, mc2: 10 };
+
+  const GUARD = [
+    '......aaaa......', '....aabbbbaa....', '...abbbbbbbba...', '...abbbbbbbba...', '..aaaaaaaaaaaa..',
+    '...acccccccca...', '...acaaccaaca...', '...acccccccca...', '...accccaccca...', '...acccccccca...',
+    '....accaacca....', '.....acccca.....', '......acca......', '...aaabbbbaaa...', '..abbbbbbbbbba..',
+    '.abbbbbabbabbbba', '.abbbbbabbabbbba', 'abbbbbbbaabbbbba', 'abbabbbbbbbbabba', 'abbabbbbbbbbabba',
+    'abbabbbbbbbbabba', 'abbabbbbbbbbabba', 'abbabbbbbbbbabba', 'abbaaaaaaaaaabba', 'abbabbbccbbbabba',
+    'abbabbbbbbbbabba', 'acca.bbbbbb.acca', 'acca.bbbbbb.acca', '.aa..bbbbbb.aaaa', '.....bbbbbb.aaa.',
+    '....abbbabbba...', '....abbbaabbba..', '....abbbaabbba..', '....abbbaabbba..', '....abbbaabbba..',
+    '....abbbaabbba..', '....abbbaabbba..', '....abbbaabbba..', '....abbbaabbba..', '....abbbaabbba..',
+    '....abbbaabbba..', '....abbbaabbba..', '....abbbaabbba..', '....abbbaabbba..', '....abbbaabbba..',
+    '....abbbaabbba..', '....aaaaa.aaaaa.', '....aaaaa.aaaaa.', '...aaaaaa.aaaaaa', '...aaaaaa.aaaaaa',
+  ];
+  const BARREL = [
+    '...aaaa...', '.aabbbbaa.', 'abcbbbbbba', 'aaaaaaaaaa', 'abcbbbbbba', 'abcbbbbbba', 'abcbbbbbba',
+    'abcbbbbbba', 'abcbbbbbba', 'aaaaaaaaaa', 'abcbbbbbba', 'abcbbbbbba', 'abcbbbbbba', 'abcbbbbbba',
+    'abcbbbbbba', 'abcbbbbbba', 'aaaaaaaaaa', 'abcbbbbbba', 'abcbbbbbba', 'abcbbbbbba', 'abcbbbbbba',
+    'abcbbbbbba', 'aaaaaaaaaa', '.aabbbbaa.', '...aaaa...',
+  ];
+  const TREASURE = [
+    'aaaaaaaaaa', 'abccbbbbba', 'abcbbbbbba', 'abcbbbbbba', '.abbbbbba.', '..abbbba..', '...abba...',
+    '....aa....', '....ab....', '....ab....', '...abba...', '..abbbba..', '.abbbbbba.', 'aaaaaaaaaa',
+  ];
+  // The pistol, held out in the right hand, from behind: one sprite, 12 fat pixels by 21, expanded both
+  // ways. Firing, the flash shows over the barrel and the sprite's colour (its highlights and the
+  // flash) turns from grey to yellow.
+  const GUN = [
+    '............', '............', '............', '....aaaa....', '....abba....', '....abaa....',
+    '....abaa....', '....abaa....', '...aabaaa...', '...abaaaa...', '...abaaaa...', '..aaccccaa..',
+    '.acccccccca.', 'accacccaccca', 'acccccccccca', 'accacccaccca', 'acccccccccca', '.acccccccca.',
+    '..acccccca..', '..acccccca..', '..acccccca..',
+  ];
+  const FLASH = ['...b.bb.b...', '....bbbb....', '...bbbbbb...', '....bbbb....', '....bbbb....'];
+  const GUN_COLOR = { idle: 12, flash: 7 };
+  // The pistol's sprite data (63 bytes) and its place: the bottom middle of a view rows high.
+  function gunData(flash) {
+    const rows = GUN.map((r, y) => (flash && y < FLASH.length ? FLASH[y].split('').map((c, x) => (c === '.' ? r[x] : c)).join('') : r));
+    const data = new Uint8Array(64);
+    rows.forEach((r, y) => { for (let x = 0; x < 12; x++) data[y * 3 + (x >> 2)] |= '.abc'.indexOf(r[x]) << (6 - 2 * (x & 3)); });
+    return data;
+  }
+  const gunPlace = rows => ({ x: 160 - 24, y: rows - 42 });
+
+  // height: the object's height as a fraction of a wall, in 256ths.
+  const TYPES = {
+    guard: { art: GUARD, color: 9, height: 218 },
+    barrel: { art: BARREL, color: 5, height: 150 },
+    treasure: { art: TREASURE, color: 7, height: 80 },
+  };
+  for (const [name, t] of Object.entries(TYPES)) {
+    if (t.art.some(r => r.length !== t.art[0].length)) throw new Error(`sprite art for ${name} has ragged rows`);
+  }
+
+  // The heights an object can have on screen, in pixels: about 12% apart, from 4 up.
+  const SIZES = [];
+  for (let h = 4; h <= 210; h = Math.max(h + 1, Math.floor(h * 1.125))) SIZES.push(h);
+
+  // One type's image at one of SIZES: expansion, fat pixels per row, rows and the 2-bit pixels.
+  const IMAGES = new Map();
+  function image(type, H) {
+    const key = type.art + H;
+    if (IMAGES.has(key)) return IMAGES.get(key);
+    const art = type.art, artW = art[0].length, artH = art.length;
+    const W = Math.max(2, Math.round((H * artW * 2) / artH));
+    // Fewer sprites wins; on a tie, unexpanded (finer pixels).
+    const count = e => Math.ceil(W / (24 * (1 + e))) * Math.ceil(H / (21 * (1 + e)));
+    const e = count(1) < count(0) ? 1 : 0, u = 2 * (1 + e), ey = 1 + e;
+    const fatW = Math.max(1, Math.round(W / u)), rows = Math.max(1, Math.round(H / ey));
+    const px = new Uint8Array(fatW * rows);
+    for (let ry = 0; ry < rows; ry++) {
+      const src = art[Math.floor((ry * artH) / rows)];
+      for (let fx = 0; fx < fatW; fx++) px[ry * fatW + fx] = '.abc'.indexOf(src[Math.floor((fx * artW) / fatW)]);
+    }
+    const img = { e, u, ey, fatW, rows, px };
+    IMAGES.set(key, img);
+    return img;
+  }
+  // The largest of SIZES not above H, or -1 when H is below the smallest.
+  const sizeIndex = H => { let k = -1; while (k + 1 < SIZES.length && SIZES[k + 1] <= H) k++; return k; };
+  // A type's largest size: the last one whose whole image fits in the VIC's 8 sprites. Closer objects
+  // stay at that size.
+  function maxSize(type) {
+    let k = 0;
+    while (k + 1 < SIZES.length) {
+      const im = image(type, SIZES[k + 1]);
+      if (Math.ceil(im.fatW / 12) * Math.ceil(im.rows / 21) > 8) break;
+      k++;
+    }
+    return k;
+  }
+
+  // The sprite set for one frame. view: { horizon, rows (pixel rows of the view), pxPerRay }. An
+  // object's color, if it has one, is used instead of its type's; flash: the pistol is firing.
+  // Returns { mc1, mc2, frames, list } as overlay and prg take it.
+  function place(caster, rays, objects, player, view, flash = false) {
+    const seen = [];
+    for (const o of objects) {
+      const pr = caster.project(player, o.x, o.y);
+      if (pr) seen.push({ o, pr });
+    }
+    seen.sort((p, q) => p.pr.depth - q.pr.depth);
+    const frames = [gunData(flash)], list = [{ ...gunPlace(view.rows), mc: true, xx: true, yy: true, frame: 0, color: flash ? GUN_COLOR.flash : GUN_COLOR.idle }];
+    for (const { o, pr } of seen) {
+      const tiles = cut(TYPES[o.type], pr, rays, view);
+      if (!tiles.length || list.length + tiles.length > 8) continue;
+      for (const t of tiles) { list.push({ ...t, frame: frames.length, color: o.color ?? TYPES[o.type].color }); frames.push(t.data); }
+    }
+    list.forEach(s => delete s.data);
+    return { ...SHARED, frames, list };
+  }
+
+  // One object's masked sprites: [{ x, y, mc, xx, yy, data }].
+  function cut(type, pr, rays, view) {
+    let k = sizeIndex((2 * pr.halfH * type.height) >> 8);
+    if (k < 0) return [];
+    k = Math.min(k, maxSize(type));
+    const { e, u, ey, fatW, rows, px } = image(type, SIZES[k]);
+    const left = ((pr.col * view.pxPerRay) >> 8) - ((fatW * u) >> 1), top = view.horizon + pr.halfH - rows * ey;
+    // Where the grid starts: columns in steps of 4 (one byte) until VIC x >= 0; rows at the view's top.
+    let k0 = 0;
+    while (left + k0 * u < -24) k0 += 4;
+    const r0 = top >= 0 ? 0 : Math.ceil(-top / ey);
+    const colOn = Array.from({ length: fatW }, (_, fx) => {
+      const Xc = left + fx * u + (u >> 1);
+      return Xc >= 0 && Xc < view.pxPerRay * rays.length && pr.depth < rays[Xc >> 2].dist;
+    });
+    const rowOn = ry => { const Y = top + ry * ey; return Y >= 0 && Y + ey <= view.rows; };
+    const out = [];
+    for (let ty = r0; ty < rows; ty += 21) for (let tx = k0; tx < fatW; tx += 12) {
+      const data = new Uint8Array(64);
+      let any = false;
+      for (let y = 0; y < 21 && ty + y < rows; y++) {
+        if (!rowOn(ty + y)) continue;
+        for (let x = 0; x < 12 && tx + x < fatW; x++) {
+          const v = colOn[tx + x] ? px[(ty + y) * fatW + tx + x] : 0;
+          if (v) { data[y * 3 + (x >> 2)] |= v << (6 - 2 * (x & 3)); any = true; }
+        }
+      }
+      if (any) out.push({ x: left + tx * u, y: top + ty * ey, mc: true, xx: !!e, yy: !!e, data });
+    }
+    return out;
+  }
+
+  // Draw sprites over a 320x200 RGBA screen (from screenRGB) the way the VIC does; sprite 0 on top.
+  function overlay(rgba, sprites) {
+    const pal = APEXSCII.PALETTE.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
+    for (let i = sprites.list.length - 1; i >= 0; i--) {
+      const s = sprites.list[i], f = sprites.frames[s.frame], sx = s.xx ? 2 : 1, sy = s.yy ? 2 : 1;
+      for (let y = 0; y < 21; y++) for (let x = 0; x < 24; x++) {
+        const byte = f[y * 3 + (x >> 3)];
+        const c = s.mc ? [-1, sprites.mc1, s.color, sprites.mc2][(byte >> (6 - 2 * ((x & 7) >> 1))) & 3]
+                       : (byte >> (7 - (x & 7))) & 1 ? s.color : -1;
+        if (c < 0) continue;
+        for (let dy = 0; dy < sy; dy++) for (let dx = 0; dx < sx; dx++) {
+          const X = s.x + x * sx + dx, Y = s.y + y * sy + dy;
+          if (X >= 0 && Y >= 0 && X < 320 && Y < 200) rgba.set(pal[c], (Y * 320 + X) * 4);
+        }
+      }
+    }
+    return rgba;
+  }
+
+  // A runnable PRG with sprites: APEXSCII's screen program, plus the sprite frames at $2000 (pointers
+  // $80 up, stored at $07F8 with the screen) and a set-up routine after them that BASIC's SYS runs
+  // first; it programs the VIC's sprite registers and then jumps into the screen program at $0810.
+  function prg(chars, screen, color, opts, sprites) {
+    const DATA = 0x2000, n = sprites.list.length;
+    if (n > 8) throw new Error('the VIC has only 8 sprites');
+    const scr = new Uint8Array(1024);
+    scr.set(screen.subarray(0, 1000));
+    sprites.list.forEach((s, i) => { scr[1016 + i] = (DATA >> 6) + s.frame; });
+    const base = APEXSCII.screenPrg(chars, scr, color, opts);
+    const init = DATA + Math.max(1, sprites.frames.length) * 64, code = [];
+    const sta = (v, addr) => code.push(0xa9, v & 0xff, 0x8d, addr & 0xff, addr >> 8); // LDA #v : STA addr
+    let msb = 0, mc = 0, xx = 0, yy = 0;
+    sprites.list.forEach((s, i) => {
+      const vx = s.x + 24, vy = s.y + 50; // VIC sprite coordinates of the screen's top-left corner
+      sta(vx, 0xd000 + 2 * i); sta(vy, 0xd001 + 2 * i); sta(s.color, 0xd027 + i);
+      if (vx > 255) msb |= 1 << i;
+      if (s.mc) mc |= 1 << i;
+      if (s.xx) xx |= 1 << i;
+      if (s.yy) yy |= 1 << i;
+    });
+    sta(msb, 0xd010); sta(mc, 0xd01c); sta(xx, 0xd01d); sta(yy, 0xd017);
+    sta(sprites.mc1, 0xd025); sta(sprites.mc2, 0xd026); sta((1 << n) - 1, 0xd015);
+    code.push(0x4c, 0x10, 0x08); // JMP $0810
+    const at = addr => 2 + addr - 0x0801, out = new Uint8Array(at(init + code.length));
+    out.set(base);
+    sprites.frames.forEach((f, k) => out.set(f, at(DATA + k * 64)));
+    out.set(code, at(init));
+    out.set(Array.from(String(init), ch => ch.charCodeAt(0)), at(0x0806)); // "10 SYS<init>" (4 digits)
+    return out;
+  }
+
+  return { SHARED, TYPES, SIZES, GUN_COLOR, gunData, gunPlace, image, sizeIndex, maxSize, place, cut, overlay, prg };
+});
+
+</script>
+<script>
+/*
+ * The C64 raycast view: 80 rays drawn with APEXSCII's raycast character set.
+ *
+ * Screen rows 0-19 are the view (320x160, horizon between rows 9 and 10). Rows 20-24 are a status
+ * panel in the C64's ROM font, shown through APEXSCII's raster split. Each screen column shows two
+ * rays. Each half of the view is a mirror of the other, so one wall height gives both ends:
+ *   top row r (0-9):     wall pixels in the cell = clamp(halfH - 8 * (9 - r), 0, 8), a "ray top" glyph
+ *   bottom row 10 + r:   the same with 8 * r, a "ray bottom" glyph
+ * Rays that hit an east/west face use wall shade B, north/south faces shade A, as Wolfenstein does.
+ *
+ * Multicolor colours: ceiling $D021, floor $D022, wall A $D023, wall B colour RAM (never changes).
+ * Objects (guards, barrels, treasure) are hardware sprites; see sprites.js.
+ *
+ * The engine also shades the ceiling and floor towards the horizon by changing $D021 and $D022 on
+ * the raster lines GRADIENT gives, with dithered stripes between shades. Top glyphs never use the
+ * floor colour and bottom glyphs never the ceiling colour, so each register only has to change on
+ * time in its own half of the view. It shows 38 columns: the border hides the leftmost 7 and rightmost
+ * 9 pixels, where a colour change could land a cycle early or late. rgba(rom, true) draws all this.
+ *
+ * Works in Node and in the browser (global APEXRAYVIEW, needing APEXSCII, APEXRAY and APEXRAYSPRITES).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('../apexscii/apexscii.js'), require('../core/raycast.js'), require('./sprites.js'));
+  else root.APEXRAYVIEW = factory(root.APEXSCII, root.APEXRAY, root.APEXRAYSPRITES);
+})(typeof self !== 'undefined' ? self : this, function (APEXSCII, APEXRAY, SPRITES) {
+  'use strict';
+
+  const { RAY } = APEXSCII;
+
+  const VIEW_ROWS = 20, HALF_ROWS = VIEW_ROWS / 2, STATUS_ROWS = 25 - VIEW_ROWS;
+  const COLOURS = {
+    mc: { bg: 11, mc1: 12, mc2: 14, wallB: 6, border: 0, text: 1, accent: 7 },
+    hires: { bg: 0, ink: 14, border: 0, text: 1, accent: 7 },
+  };
+
+  // Ceiling and floor colour on each of the view's 160 pixel lines, from bands of [colour, lines]; a
+  // band [a, b, n] dithers a and b in stripes two lines high (a a b b a a b b). The ceiling runs from
+  // the top down to the horizon, the floor from the horizon down. The engine needs a line between colour
+  // changes, and can't change one on a bad line (every 8th line, starting with the first, where the VIC
+  // holds the CPU), so each dither band starts on a bad line.
+  function shades(list) {
+    const out = [];
+    for (const band of list) {
+      if (band.length === 2) out.push(...Array(band[1]).fill(band[0]));
+      else out.push(...Array.from({ length: band[2] }, (_, i) => (i & 2 ? band[1] : band[0])));
+    }
+    return out;
+  }
+  // DARK lines each side of the horizon are black, and a wall that would fit inside them is fog: the
+  // view leaves it out, and the engine stops each ray before it. 24 was tried too: about 3% faster, but
+  // walls and guards vanish under 5 tiles away.
+  const DARK = 16;
+  const GRADIENT = {
+    ceiling: shades([[12, 24], [12, 11, 8], [11, 40 - DARK], [11, 0, 8], [0, DARK]]),
+    floor: shades([[0, DARK], [0, 11, 8], [11, 48 - DARK], [11, 12, 8], [12, 16]]),
+  };
+  if (GRADIENT.ceiling.length !== HALF_ROWS * 8 || GRADIENT.floor.length !== HALF_ROWS * 8) throw new Error('GRADIENT must cover each half');
+
+  // Bricks only on walls with j (half height / 2) at least TEX_NEAR; 0 for every wall. 20 (about 3
+  // tiles) was tried: 5% faster, but bricks popped in too close. See below.
+  const TEX_NEAR = 0;
+  // Rays are 2 angle units apart (a 56.25 degree view), so a turn (4 units a tick) shifts them by 2 and
+  // the engine keeps the ones it has. Scale 160 kept walls and objects in proportion at that width, but
+  // was slower (further fog, more sprites) and looked no better than 120.
+  const caster = APEXRAY.makeCaster({ rays: 80, angleStep: 2, scale: 120, maxH: HALF_ROWS * 8, even: true, interpolate: 4, fog: DARK, uNear: TEX_NEAR - 4 });
+
+  // Bricks (multicolor only). A wall of half height h = 2j is 4 courses of bricks, mirrored about the
+  // horizon (80) so the bottom half is the top half upside down: mortar lines at 80 - j and 80 + j, and
+  // a double line either side of the horizon. Joints sit at u = 0 and 128 on the outer courses and 64
+  // and 192 on the inner two. Rays nearer than TEX_NEAR (in j) carry u; others have plain walls.
+  //
+  // Cells that are solid wall of one shade for both rays get brick glyphs, other cells the raycast set's.
+  // In a brick cell the left ray's strip is plain, a joint, or has a mortar line at line 1, 3, 5 or 7
+  // (rounded up to odd) that runs across the whole cell; the right ray's strip is plain or a joint.
+  // Mortar is the other wall shade. A ray is a joint on a course when a multiple of 64 of that parity
+  // lies between its u and the next ray's (the same face, both with u; the last ray extrapolates).
+  //
+  // The engine works from one byte per ray, stored = j + 41 * (shadeB + 2 * joint), where joint is 0, 1
+  // (an outer-course joint) or 2 (inner). Per row, tables give the left ray's state (0-18) and the right
+  // ray's (0-10), and PAIRT / PAIRB[11 * left + right] the top and bottom screen codes; see c64/gen.js.
+  // The brick glyphs go at the start of the set, which the view never uses, except $20: the status
+  // panel's first line is spaces, and the font switch can land a few cycles into it, so $20 stays blank.
+  const TEX_CODES = Array.from({ length: 44 }, (_, i) => (i < 0x20 ? i : i + 1));
+  const PLAIN = 0, JOINT = 5; // left strip types; 1-4 are a mortar line at line 1, 3, 5, 7
+
+  const sameFace = (a, b) => a.mapX === b.mapX && a.mapY === b.mapY && a.side === b.side;
+  function jointCodes(rays) {
+    return rays.map((r, c) => {
+      if (!r.u) return 0;
+      let lo = r.u, hi;
+      if (c + 1 < rays.length) { if (!sameFace(r, rays[c + 1])) return 0; hi = rays[c + 1].u; }
+      else { if (!sameFace(r, rays[c - 1])) return 0; hi = Math.max(0, Math.min(255, 2 * r.u - rays[c - 1].u)); }
+      if (hi < lo) [lo, hi] = [hi, lo];
+      const ga = (lo + 63) >> 6, gb = (hi + 63) >> 6;
+      return ga === gb ? 0 : 1 + (ga & 1);
+    });
+  }
+
+  // A ray's strip type in row b (0 = next to the horizon) of either half, when the cell is solid wall:
+  // a mortar line (1-4), else a joint on this cell's course, else plain.
+  function stripType(b, j, joint) {
+    if (j < TEX_NEAR) return PLAIN;
+    let line = -1;
+    if (j >= 8 * b + 1 && j <= 8 * b + 8) line = 8 * b + 8 - j;
+    else if (b === 0) line = 7;
+    if (line >= 0) return 1 + (line >> 1);
+    const course = Math.floor((2 * j - 8 * b - 4) / j);
+    return joint === 1 + (course & 1) ? JOINT : PLAIN;
+  }
+  // Left states: 0 empty, 1-3 shade A wall end 2/4/6 pixels, 4-6 shade B, 7-12 solid A by strip type,
+  // 13-18 solid B. Right states: the same up to 6, then 7/8 solid A plain/joint, 9/10 solid B.
+  function leftState(b, j, shadeB, joint) {
+    const rem = 2 * j - 8 * b;
+    if (rem <= 0) return 0;
+    if (rem < 8) return 1 + 3 * shadeB + (rem >> 1) - 1;
+    return 7 + 6 * shadeB + stripType(b, j, joint);
+  }
+  function rightState(b, j, shadeB, joint) {
+    const s = leftState(b, j, shadeB, joint);
+    return s < 7 ? s : 7 + 2 * shadeB + ((s - 7) % 6 === JOINT ? 1 : 0);
+  }
+  // The brick glyph for a shade and left / right strip types (the top half's way up), and its code;
+  // the bottom half's are the same upside down, 22 codes on.
+  const texCode = (top, shadeB, tl, tr) => TEX_CODES[(top ? 0 : 22) + 11 * shadeB + 2 * tl + tr - 1];
+  function texGlyph(top, shadeB, tl, tr) {
+    const wall = shadeB ? 3 : 2, mortar = 5 - wall;
+    const g = Array.from({ length: 8 }, (_, line) => {
+      const across = tl >= 1 && tl <= 4 && line === 2 * tl - 1;
+      const L = tl === JOINT || across ? mortar : wall, R = tr === 1 || across ? mortar : wall;
+      return (L << 6) | (L << 4) | (R << 2) | R;
+    });
+    return Uint8Array.from(top ? g : g.reverse());
+  }
+  // The screen code for a cell from its left and right states.
+  function pairCode(top, sl, sr) {
+    const fullL = sl >= 7, fullR = sr >= 7;
+    const shL = fullL ? +(sl >= 13) : +(sl >= 4), shR = fullR ? +(sr >= 9) : +(sr >= 4);
+    if (fullL && fullR && shL === shR) {
+      const tl = (sl - 7) % 6, tr = (sr - 7) & 1;
+      if (tl || tr) return texCode(top, shL, tl, tr);
+    }
+    const old = (s, full, sh) => (s === 0 ? 0 : RAY.state(sh, full ? 8 : 2 * (s - 3 * sh)));
+    return (top ? RAY.top : RAY.bottom) + 9 * old(sl, fullL, shL) + old(sr, fullR, shR);
+  }
+  // The multicolor raycast set with the brick glyphs added.
+  let CHARSET = null;
+  function charset() {
+    if (CHARSET) return CHARSET;
+    const chars = APEXSCII.buildDefault('mc', 'ray').glyphs.map(g => Uint8Array.from(g));
+    for (const top of [true, false]) for (let sh = 0; sh < 2; sh++) for (let tl = 0; tl < 6; tl++) for (let tr = 0; tr < 2; tr++)
+      if (tl || tr) chars[texCode(top, sh, tl, tr)] = texGlyph(top, sh, tl, tr);
+    return (CHARSET = chars);
+  }
+
+  // The screen codes for one frame of rays (80 entries from cast()); bricks when textured.
+  function viewCodes(rays, textured = false) {
+    const screen = new Uint8Array(VIEW_ROWS * 40);
+    const state = (ray, below) => RAY.state(ray.side === 0 ? 1 : 0, Math.max(0, Math.min(8, ray.halfH - 8 * below)));
+    const joints = textured && jointCodes(rays);
+    for (let cx = 0; cx < 40; cx++) {
+      const L = rays[2 * cx], R = rays[2 * cx + 1];
+      const d = (ray, k) => [ray.halfH >> 1, ray.side === 0 ? 1 : 0, joints[k]];
+      for (let r = 0; r < HALF_ROWS; r++) {
+        if (textured) {
+          const sl = leftState(r, ...d(L, 2 * cx)), sr = rightState(r, ...d(R, 2 * cx + 1));
+          screen[(HALF_ROWS - 1 - r) * 40 + cx] = pairCode(true, sl, sr);
+          screen[(HALF_ROWS + r) * 40 + cx] = pairCode(false, sl, sr);
+          continue;
+        }
+        const sl = state(L, r), sr = state(R, r), code = 9 * sl + sr;
+        screen[(HALF_ROWS - 1 - r) * 40 + cx] = RAY.top + code;
+        screen[(HALF_ROWS + r) * 40 + cx] = RAY.bottom + code;
+      }
+    }
+    return screen;
+  }
+
+  // A whole 40x25 frame: the view, the objects and the pistol as sprites, and the status panel. status:
+  // up to 5 lines of text, where {...} is shown in reverse video. show: what a game shows
+  // (core/raygame.js shown): its objects and whether the pistol is flashing; without it, the map's objects.
+  function frame(map, player, mode = 'mc', status = [], show = { objects: map.objects || [], flash: false }) {
+    const C = COLOURS[mode], mc = mode === 'mc';
+    const screen = new Uint8Array(1000).fill(0x20), color = new Uint8Array(1000).fill(C.text);
+    const rays = caster.cast(map, player.x, player.y, player.a);
+    screen.set(viewCodes(rays, mc));
+    const sprites = SPRITES.place(caster, rays, show.objects, player, { horizon: HALF_ROWS * 8, rows: VIEW_ROWS * 8, pxPerRay: 4 }, show.flash);
+    color.fill(mc ? 8 | C.wallB : C.ink, 0, VIEW_ROWS * 40);
+    status.slice(0, STATUS_ROWS).forEach((line, k) => {
+      let col = 1, rev = false;
+      for (const ch of line) {
+        if (ch === '{' || ch === '}') { rev = ch === '{'; continue; }
+        if (col > 39) break;
+        const at = (VIEW_ROWS + k) * 40 + col++;
+        screen[at] = APEXSCII.asciiToScreen(ch) | (rev ? 0x80 : 0);
+        color[at] = rev ? C.accent : C.text;
+      }
+    });
+    const chars = mc ? charset() : APEXSCII.buildDefault(mode, 'ray').glyphs;
+    const opts = mc
+      ? { mode, bg: C.bg, mc1: C.mc1, mc2: C.mc2, border: C.border, romRows: STATUS_ROWS }
+      : { mode, bg: C.bg, border: C.border, romRows: STATUS_ROWS };
+    return {
+      chars, screen, color, opts, sprites,
+      prg: () => SPRITES.prg(chars, screen, color, opts, sprites),
+      rgba: (rom, engine = false) => {
+        const px = APEXSCII.screenRGB(chars, screen, color, opts, rom);
+        if (!engine || !mc) return SPRITES.overlay(px, sprites);
+        shade(px, chars, screen, color);
+        return narrow(SPRITES.overlay(px, sprites), C.border);
+      },
+    };
+  }
+
+  // Repaints the view's ceiling and floor pixels (multicolor codes 00 and 01) with GRADIENT.
+  const PAL = APEXSCII.PALETTE.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
+  function shade(px, chars, screen, color) {
+    for (let cy = 0; cy < VIEW_ROWS; cy++) for (let cx = 0; cx < 40; cx++) {
+      const k = cy * 40 + cx, g = chars[screen[k]];
+      if (!(color[k] & 8)) continue;
+      for (let y = 0; y < 8; y++) {
+        const line = cy * 8 + y;
+        for (let x = 0; x < 8; x++) {
+          const v = (g[y] >> (6 - 2 * (x >> 1))) & 3;
+          if (v > 1) continue;
+          const c = PAL[v ? GRADIENT.floor[line - HALF_ROWS * 8] : GRADIENT.ceiling[line]], p = (line * 320 + cx * 8 + x) * 4;
+          px[p] = c[0]; px[p + 1] = c[1]; px[p + 2] = c[2];
+        }
+      }
+    }
+  }
+
+  // 38-column mode: the border covers x 0-6 and 311-319.
+  function narrow(px, border) {
+    const c = PAL[border];
+    for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++) {
+      if (x >= 7 && x < 311) continue;
+      const p = (y * 320 + x) * 4;
+      px[p] = c[0]; px[p + 1] = c[1]; px[p + 2] = c[2];
+    }
+    return px;
+  }
+
+  // The status panel the showcase and tests use: the level, the position and heading, and the score.
+  function statusLines(map, p, score = 0) {
+    const num = v => (v / 256).toFixed(1).padStart(4, '0');
+    const deg = String(Math.round((p.a * 360) / 1024) % 360).padStart(3, '0');
+    return ['', `{ APEX } ${map.name.toUpperCase()}`, '', `X ${num(p.x)}  Y ${num(p.y)}  HEADING ${deg}`, `SCORE ${String(score).padStart(4, '0')}`];
+  }
+
+  return { VIEW_ROWS, STATUS_ROWS, COLOURS, DARK, GRADIENT, caster, viewCodes, frame, statusLines,
+    TEX_NEAR, charset, leftState, rightState, pairCode };
+});
+
+</script>
+<script>
+/*
+ * APEX sound: the reference for SID music and sound effects. Integer maths only, so a 6502 driver
+ * that follows the same steps writes exactly the same SID registers every frame.
+ *
+ *   - one tick per frame; each tick sets all 25 SID registers (the register image)
+ *   - music: 3 voices, each playing patterns of 32 rows in its own order list (all the same length;
+ *     the song loops); a row lasts `speed` ticks. A row on a voice is a note (with its instrument, or
+ *     the voice's last), a release, or nothing (the note goes on)
+ *   - instruments: a waveform, ADSR, a pulse width that sweeps, an arpeggio (semitones added tick by
+ *     tick, round and round) and a gate length (ticks until release; 0 holds it). Or, for drums, a
+ *     table: per tick of the note a waveform and a note (the played note + n, or a fixed note), the
+ *     last held. An instrument can go through the filter
+ *   - a new note restarts hard: one tick with the gate off and the envelope's rates and sustain at 0
+ *     (so the SID's envelope counter comes round at once, and the note's attack starts on time: the
+ *     SID's ADSR bug), then the gate on (a table starts once it's on)
+ *   - the filter: one for the song, a resonant low-pass (or band or high) whose cutoff sweeps up and
+ *     down, over the voices playing instruments that use it
+ *   - a sound effect plays on its voice (its own `voice`, else the song's effectsVoice, voice 3 unless
+ *     it says) instead of the music, which goes on underneath; effects on different voices play at
+ *     once. An effect is steps, each a waveform (with its gate bit), a frequency that slides, ADSR, a
+ *     pulse width and a length in ticks. A new effect starts if none is playing on its voice or its
+ *     priority is at least the one's playing there
+ *   - the music can be turned off: while it is, the song stands still where it is and every voice is
+ *     released (it fades on its release); turned on, it goes on from there
+ *   - with two SIDs (a C64 Ultimate's, or a stereo SID cartridge: the second at $D420), the music
+ *     plays on the first and the effects on the second, each on its voice there, so they never
+ *     interrupt the music. A voice of the second SID with no effect keeps its last registers with the
+ *     gate off (the effect's release plays out); its filter is off and its volume full
+ *
+ * compile(def) turns a song and its effects (see sound/shmup.js) into tables; player(c, { sids }) makes a
+ * player for one SID or two; tick(c, p, effects, music) plays one tick, starting the effects listed
+ * (in order), with the music on unless music is false, and returns the register image: 25 bytes, or
+ * 50 with two SIDs (the second's after the first's). checksum(sum, image) folds an image into a running 16-bit checksum, which
+ * the C64 tests compare.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSOUND = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const ROWS = 32;
+  const WAVE = { tri: 0x10, saw: 0x20, pulse: 0x40, noise: 0x80 };
+  const PAL_CLOCK = 985248;
+  // SID frequency values for notes 0-95 (C-0 to B-7), A-4 (57) at 440 Hz on a PAL machine.
+  const FREQ = Array.from({ length: 96 }, (_, n) => Math.min(0xffff, Math.round((440 * 2 ** ((n - 57) / 12) * 16777216) / PAL_CLOCK)));
+  const NAMES = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];
+  const noteOf = s => {
+    const i = NAMES.indexOf(s.slice(0, 2)), oct = +s[2];
+    if (i < 0 || !(oct >= 0 && oct <= 7)) throw new Error(`not a note: ${s}`);
+    return oct * 12 + i;
+  };
+  // Row tokens in the tables: 0 nothing, 1 release, 2 + note (with the instrument in the next byte).
+  const NOTHING = 0, RELEASE = 1;
+  const FILTER_MODE = { low: 0x10, band: 0x20, high: 0x40 };
+
+  // def: { speed, instruments: { name: { wave, ad, sr, pw, pwSpeed, arp, gate } }, patterns: { name:
+  // 'C-3:inst . . == ...' (32 tokens) }, order: [[names] x 3], effects: { name: { priority, steps:
+  // [{ wave, gate, freq, slide, ad, sr, pw, ticks }] } } }
+  function compile(def) {
+    const insNames = Object.keys(def.instruments), ins = insNames.map(n => {
+      const i = def.instruments[n];
+      // a table step: [wave, note], the note + n or a fixed note ('C-3'): as tw (the waveform) and tn
+      // (a fixed note + $80, or n as a signed byte)
+      const table = (i.table || []).map(([w, n]) => [WAVE[w], typeof n === 'string' ? 0x80 | noteOf(n) : n & 0x7f]);
+      return { wave: WAVE[i.wave || 'pulse'], ad: i.ad, sr: i.sr, pw: i.pw || 0, pwSpeed: i.pwSpeed || 0, arp: i.arp && i.arp.length ? i.arp : [0], gate: i.gate || 0, table, filter: !!i.filter };
+    });
+    const patNames = Object.keys(def.patterns), patterns = patNames.map(n => {
+      const toks = def.patterns[n].trim().split(/\s+/);
+      if (toks.length !== ROWS) throw new Error(`pattern ${n}: ${toks.length} rows, not ${ROWS}`);
+      return toks.map(t => {
+        if (t === '.') return { op: NOTHING };
+        if (t === '==') return { op: RELEASE };
+        const [note, insName] = t.split(':');
+        const k = insName === undefined ? -1 : insNames.indexOf(insName);
+        if (insName !== undefined && k < 0) throw new Error(`pattern ${n}: no instrument ${insName}`);
+        return { op: 2, note: noteOf(note), ins: k };
+      });
+    });
+    const order = def.order.map(list => list.map(n => {
+      const k = patNames.indexOf(n);
+      if (k < 0) throw new Error(`no pattern ${n}`);
+      return k;
+    }));
+    if (order.length !== 3 || order.some(l => l.length !== order[0].length)) throw new Error('3 order lists of one length');
+    const effectsVoice = def.effectsVoice === undefined ? 2 : def.effectsVoice;
+    const effNames = Object.keys(def.effects || {}), effects = effNames.map(n => {
+      const e = def.effects[n];
+      return { priority: e.priority, voice: e.voice === undefined ? effectsVoice : e.voice, steps: e.steps.map(s => ({ ctrl: WAVE[s.wave] | (s.gate === false ? 0 : 1), freq: s.freq & 0xffff, slide: s.slide || 0, ad: s.ad, sr: s.sr, pw: s.pw || 0, ticks: s.ticks })) };
+    });
+    // the filter's cutoff (11 bits) tick by tick: a triangle from min to max and back over period ticks
+    const f = def.filter || { res: 0, min: 0, max: 0, period: 2 };
+    if (f.period < 2 || f.period > 256 || f.period & 1) throw new Error('filter period: an even number of ticks up to 256');
+    const half = f.period / 2, cut = Array.from({ length: f.period }, (_, k) => f.min + Math.floor(((f.max - f.min) * (k < half ? k : f.period - k)) / half));
+    const filter = { res: f.res, mode: FILTER_MODE[f.mode] || 0, cut };
+    return { speed: def.speed, ins, insNames, patterns, patNames, order, effects, effNames, filter, effectsVoice };
+  }
+
+  function player(c, opts = {}) {
+    return {
+      sids: opts.sids === 2 ? 2 : 1,
+      hold: [0, 1, 2].map(() => new Uint8Array(7)), // two SIDs: each effect voice's last registers
+      timer: 0, row: 0, pos: 0,
+      voices: [0, 1, 2].map(() => ({ ins: -1, note: 0, phase: 2, age: 0, arp: 0, pw: 0, tpos: 0 })),
+      fx: [0, 1, 2].map(() => ({ sfx: -1, step: 0, left: 0, freq: 0 })), ft: 0,
+    };
+  }
+
+  function startEffect(c, p, id) {
+    const f = p.fx[c.effects[id].voice];
+    if (f.sfx >= 0 && c.effects[id].priority < c.effects[f.sfx].priority) return;
+    f.sfx = id; f.step = 0;
+    const s = c.effects[id].steps[0];
+    f.left = s.ticks; f.freq = s.freq;
+  }
+
+  function tick(c, p, effects = [], music = true) {
+    for (const id of effects) startEffect(c, p, id);
+    // the music off: the song stands still, every voice released
+    if (!music) for (const vs of p.voices) vs.phase = 2;
+    // a new row on every voice
+    else if (p.timer === 0) {
+      for (let v = 0; v < 3; v++) {
+        const r = c.patterns[c.order[v][p.pos]][p.row], vs = p.voices[v];
+        if (r.op === RELEASE) vs.phase = 2;
+        else if (r.op >= 2) {
+          if (r.ins >= 0) vs.ins = r.ins;
+          if (vs.ins >= 0) Object.assign(vs, { note: r.note, phase: 0, age: 0, arp: 0, tpos: 0, pw: c.ins[vs.ins].pw });
+        }
+      }
+      if (++p.row === ROWS) { p.row = 0; if (++p.pos === c.order[0].length) p.pos = 0; }
+      p.timer = c.speed;
+    }
+    if (music) p.timer--;
+    // each voice's registers, then its state moves on
+    const stereo = p.sids === 2, R = new Uint8Array(25 * p.sids);
+    let route = 0;
+    for (let v = 0; v < 3; v++) {
+      const vs = p.voices[v], b = 7 * v;
+      if (vs.ins < 0) continue;
+      const ins = c.ins[vs.ins];
+      let wave = ins.wave, note = vs.note + ins.arp[vs.arp];
+      if (ins.table.length) {
+        const [tw, tn] = ins.table[Math.min(vs.tpos, ins.table.length - 1)];
+        wave = tw;
+        note = tn & 0x80 ? tn & 0x7f : vs.note + ((tn ^ 0x40) - 0x40); // (a fixed note, or + n)
+      }
+      const f = FREQ[Math.max(0, Math.min(95, note))];
+      if (stereo || p.fx[v].sfx < 0) {
+        R[b] = f & 255; R[b + 1] = f >> 8;
+        R[b + 2] = vs.pw & 255; R[b + 3] = vs.pw >> 8;
+        R[b + 4] = wave | (vs.phase === 1 ? 1 : 0);
+        R[b + 5] = vs.phase === 0 ? 0 : ins.ad; R[b + 6] = vs.phase === 0 ? 0 : ins.sr;
+        if (ins.filter) route |= 1 << v;
+      }
+      if (vs.phase !== 0 && vs.tpos < 255) vs.tpos++;
+      if (vs.phase === 0) vs.phase = 1;
+      else if (vs.phase === 1 && ins.gate && vs.age + 1 >= ins.gate) vs.phase = 2;
+      if (vs.age < 255) vs.age++;
+      if (++vs.arp === ins.arp.length) vs.arp = 0;
+      vs.pw = (vs.pw + ins.pwSpeed) & 0x0fff;
+    }
+    // the effects, each on its voice (of the second SID, if there are two)
+    for (let v = 0; v < 3; v++) {
+      const f = p.fx[v], b = (stereo ? 25 : 0) + 7 * v;
+      if (f.sfx < 0) {
+        if (stereo) { R.set(p.hold[v], b); R[b + 4] &= 0xfe; } // its last registers, the gate off
+        continue;
+      }
+      const e = c.effects[f.sfx], s = e.steps[f.step];
+      R[b] = f.freq & 255; R[b + 1] = f.freq >> 8;
+      R[b + 2] = s.pw & 255; R[b + 3] = s.pw >> 8;
+      R[b + 4] = s.ctrl; R[b + 5] = s.ad; R[b + 6] = s.sr;
+      if (stereo) p.hold[v].set(R.subarray(b, b + 7));
+      f.freq = (f.freq + s.slide) & 0xffff;
+      if (--f.left === 0) {
+        if (++f.step === e.steps.length) f.sfx = -1;
+        else { const n = e.steps[f.step]; f.left = n.ticks; f.freq = n.freq; }
+      }
+    }
+    // the filter, and the volume
+    const cut = c.filter.cut[p.ft];
+    if (++p.ft === c.filter.cut.length) p.ft = 0;
+    R[21] = cut & 7; R[22] = cut >> 3;
+    R[23] = (c.filter.res << 4) | route;
+    R[24] = c.filter.mode | 0x0f;
+    if (stereo) R[49] = 0x0f; // the second SID: no filter, full volume
+    return R;
+  }
+
+  const checksum = (sum, R) => {
+    for (const b of R) sum = ((((sum << 1) | (sum >> 15)) & 0xffff) + b) & 0xffff;
+    return sum;
+  };
+
+  return { ROWS, WAVE, FREQ, NOTHING, RELEASE, noteOf, compile, player, tick, checksum };
+});
+
+</script>
+<script>
+/*
+ * APEX SID: an emulation of the C64's sound chip, for hearing the games outside a C64 (the browser
+ * pages, WAV files). It plays the register image core/sound.js makes each frame (all 25 registers,
+ * written at once), so the music and effects sound as the C64's SID makes them, closely though not
+ * exactly (the C64 tests check the registers, not the sound):
+ *
+ *   - three voices, each a 24-bit phase accumulator adding its frequency every cycle (985248 a second,
+ *     PAL), giving a triangle, sawtooth, pulse (against the 12-bit pulse width) or noise (a 23-bit
+ *     shift register clocked by bit 19), and combinations of them as the bitwise AND (roughly); sync
+ *     and ring modulation from the voice before, the test bit
+ *   - an envelope per voice: attack, decay to the sustain level, release, at the SID's rates, decay and
+ *     release slowing as the level falls (its piecewise exponential), its rate counter never reset
+ *     (so the ADSR bug happens as on the chip); the gate starts and releases it
+ *   - the filter: a resonant state-variable filter (low, band and high pass, mixed by the mode bits)
+ *     over the voices routed to it, its cutoff following the 6581's curve; voice 3 can be cut from the
+ *     output; the master volume
+ *
+ * create(sampleRate) makes a chip; write(R) sets its 25 registers; render(out, at, n) adds n samples
+ * (-1..1) into out from at. Works in Node, in the browser (global APEXSID), and inside an
+ * AudioWorklet (APEXSID.source is this file's factory as text, to build one from).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSID = Object.assign(factory(), { source: '(' + factory.toString() + ')()' });
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const CLOCK = 985248;
+  // Cycles per envelope step for rates 0-15 (attack; decay and release use the same, slowed below).
+  const RATE = [9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251];
+  // Decay and release take 1, 2, 4, 8, 16 or 30 steps of the rate per level step as the level falls.
+  const slowdown = l => (l >= 0x5d ? 1 : l >= 0x36 ? 2 : l >= 0x1a ? 4 : l >= 0x0e ? 8 : l >= 0x06 ? 16 : 30);
+  const ATTACK = 0, DECAY = 1, RELEASE = 2;
+  // The output's scale: as loud as VICE's recordings of the same (test/sid-compare.js).
+  const LEVEL = 0.095;
+  // The 6581's filter cutoff in Hz for the 11-bit cutoff register, every $100 (roughly, as measured
+  // chips go): low and flat at first, then rising steeply. Between the points it is interpolated on a
+  // log scale.
+  const CUTOFF = [220, 230, 300, 520, 1000, 2200, 4500, 8000, 12000];
+  const cutoffHz = fc => {
+    const i = Math.min(7, fc >> 8), t = (fc & 255) / 256;
+    return CUTOFF[i] * (CUTOFF[i + 1] / CUTOFF[i]) ** t;
+  };
+
+  function create(sampleRate) {
+    const cps = CLOCK / sampleRate; // cycles a sample
+    const voices = [0, 1, 2].map(() => ({
+      acc: 0, freq: 0, pw: 0, ctrl: 0, ad: 0, sr: 0, noise: 0x7ffff8, gate: false,
+      env: 0, state: RELEASE, rc: 0, ec: 0, frac: 0,
+    }));
+    let cutoff = 0, res = 0, route = 0, mode = 0, volume = 0, voice3off = false;
+    let low = 0, band = 0; // the filter's state
+
+    function write(R) {
+      voices.forEach((v, k) => {
+        const b = 7 * k;
+        v.freq = R[b] | (R[b + 1] << 8);
+        v.pw = (R[b + 2] | (R[b + 3] << 8)) & 0x0fff;
+        const ctrl = R[b + 4], gate = !!(ctrl & 1);
+        if (gate && !v.gate) { v.state = ATTACK; v.ec = 0; }
+        if (!gate && v.gate) v.state = RELEASE;
+        v.gate = gate;
+        if (ctrl & 8) { v.acc = 0; v.noise = 0x7ffff8; } // the test bit: the oscillator held at 0
+        v.ctrl = ctrl;
+        v.ad = R[b + 5]; v.sr = R[b + 6];
+      });
+      cutoff = (R[21] & 7) | (R[22] << 3);
+      res = R[23] >> 4; route = R[23] & 7;
+      mode = R[24] & 0x70; volume = R[24] & 15; voice3off = !!(R[24] & 0x80);
+    }
+
+    // A voice's envelope moves on by `cycles`. As on the chip: a 15-bit rate counter counts cycles up
+    // to the rate's period and steps the envelope there; it is never reset, so a period shorter than
+    // the count so far waits for the counter to come round (up to 32768 cycles: the ADSR bug, which
+    // the driver's hard restart avoids). Decay and release step only every slowdown(level) of those.
+    function envelope(v, cycles) {
+      v.frac += cycles;
+      let c = Math.floor(v.frac);
+      v.frac -= c;
+      while (c > 0) {
+        const p = RATE[v.state === ATTACK ? v.ad >> 4 : v.state === DECAY ? v.ad & 15 : v.sr & 15];
+        const need = v.rc < p ? p - v.rc : 0x8000 - v.rc + p;
+        if (c < need) { v.rc = (v.rc + c) & 0x7fff; return; }
+        c -= need;
+        v.rc = 0;
+        if (v.state === ATTACK) {
+          if (++v.env >= 0xff) { v.env = 0xff; v.state = DECAY; v.ec = 0; }
+        } else if (!(v.state === DECAY && v.env <= (v.sr >> 4) * 17) && v.env > 0 && ++v.ec >= slowdown(v.env)) {
+          v.ec = 0;
+          v.env--;
+        }
+      }
+    }
+
+    // A voice's waveform, 12 bits, from its accumulator (and the voice before's, for ring modulation).
+    function wave(v, before) {
+      const c = v.ctrl, a = Math.floor(v.acc);
+      let out = 0xfff, any = false;
+      const and = w => { out &= w; any = true; };
+      if (c & 0x10) { // triangle: the top bit folds the ramp (or the voice before's, ring modulated)
+        const fold = (c & 4 ? (a ^ Math.floor(before.acc)) : a) & 0x800000;
+        and(((fold ? ~a : a) >> 11) & 0xfff);
+      }
+      if (c & 0x20) and(a >> 12);
+      if (c & 0x40) and((a >> 12) >= v.pw ? 0xfff : 0);
+      if (c & 0x80) { // noise: 8 bits of the shift register
+        const n = v.noise;
+        and((((n >> 20) & 1) << 11) | (((n >> 18) & 1) << 10) | (((n >> 14) & 1) << 9) | (((n >> 11) & 1) << 8) |
+          (((n >> 9) & 1) << 7) | (((n >> 5) & 1) << 6) | (((n >> 2) & 1) << 5) | ((n & 1) << 4));
+      }
+      return any ? out : 0x800;
+    }
+
+    function render(out, at, n) {
+      // the filter's coefficients for this stretch
+      const fc = cutoffHz(cutoff), f = 2 * Math.sin(Math.PI * Math.min(fc, sampleRate / 4) / sampleRate);
+      const q = 1.0 / (0.707 + res / 15 * 2.2);
+      for (let s = 0; s < n; s++) {
+        let direct = 0, filtered = 0;
+        for (let k = 0; k < 3; k++) {
+          const v = voices[k], before = voices[(k + 2) % 3];
+          if (!(v.ctrl & 8)) {
+            const step = v.freq * cps, old = v.acc, next = old + step;
+            // noise: its shift register clocks each time bit 19 of the accumulator goes up
+            if (v.ctrl & 0x80) for (let t = Math.floor(next / 0x100000) - Math.floor(old / 0x100000); t > 0; t--) {
+              const bit = ((v.noise >> 22) ^ (v.noise >> 17)) & 1;
+              v.noise = ((v.noise << 1) | bit) & 0x7fffff;
+            }
+            v.acc = next % 0x1000000;
+            // hard sync: the next voice restarts when this one's top bit rises
+            const after = voices[(k + 1) % 3];
+            if ((after.ctrl & 2) && Math.floor((next + 0x800000) / 0x1000000) > Math.floor((old + 0x800000) / 0x1000000)) after.acc = 0;
+          }
+          envelope(v, cps);
+          const o = ((wave(v, before) - 0x800) * v.env) / (0x800 * 0xff);
+          if (route & (1 << k)) filtered += o;
+          else if (!(k === 2 && voice3off)) direct += o;
+        }
+        // the state-variable filter, in two half steps a sample for stability
+        let hp = 0;
+        for (let r = 0; r < 2; r++) {
+          hp = filtered - low - q * band;
+          band += (f / 2) * hp;
+          low += (f / 2) * band;
+        }
+        const f2 = (mode & 0x10 ? low : 0) + (mode & 0x20 ? band : 0) + (mode & 0x40 ? hp : 0);
+        out[at + s] += ((direct + f2) * volume) / 15 * LEVEL;
+      }
+    }
+
+    return { write, render };
+  }
+
+  return { CLOCK, create };
+});
+
+</script>
+<script>
+// The Cell Block's sound (core/sound.js): an original, brooding chiptune for the raycaster, and its
+// effects. A minor, slow: a pulsing low drone (voice 1, through a dark low-pass that slowly opens and
+// closes), a heartbeat kick and a distant ticking hat (voice 2, which the effects borrow on one SID),
+// and a sparse, uneasy lead that rises and falls over a semitone (voice 3).
+// Am F Am E.
+//
+// Patterns are 32 rows (two bars of sixteenths). Speed 7 makes a row 7 frames: about 107 beats a
+// minute, a 36-second loop. EVENTS says which effects each of the game's events (core/raygame.js)
+// starts.
+(function (root, song) {
+  if (typeof module === 'object' && module.exports) module.exports = song;
+  else (root.APEXSONGS = root.APEXSONGS || {}).cell = song;
+})(typeof self !== 'undefined' ? self : this, {
+  speed: 7,
+  effectsVoice: 1,
+  filter: { res: 12, mode: 'low', min: 0x180, max: 0x480, period: 256 },
+  instruments: {
+    drone: { wave: 'saw', ad: 0x2a, sr: 0xa9, gate: 12, filter: true },
+    pulse: { wave: 'pulse', ad: 0x05, sr: 0x35, pw: 0x300, pwSpeed: 16, gate: 2, filter: true },
+    kick: { ad: 0x00, sr: 0xf5, pw: 0x800, gate: 4,
+      table: [['pulse', 'C-3'], ['tri', 'A-2'], ['tri', 'F-2'], ['tri', 'D-2'], ['tri', 'A-1']] },
+    tick: { ad: 0x00, sr: 0x00, gate: 1, table: [['noise', 'A-7']] },
+    lead: { wave: 'pulse', ad: 0x4a, sr: 0x6a, pw: 0x180, pwSpeed: 12, gate: 10 },
+  },
+  patterns: {
+    // the drone: a long root, then low pulses on the beat
+    l1: 'A-1:drone . . . . . . . . . . . . . . . A-1:pulse . . . A-1 . . . A-1 . . . E-2 . . .',
+    l2: 'F-1:drone . . . . . . . . . . . . . . . F-1:pulse . . . F-1 . . . F-1 . . . C-2 . . .',
+    l3: 'E-1:drone . . . . . . . . . . . . . . . E-1:pulse . . . E-1 . . . G#1 . . . B-1 . . .',
+    // the heartbeat: two beats close together, then the ticking
+    h1: 'C-1:kick . . C-1:kick . . . . C-1:tick . . . C-1:tick . . . C-1:kick . . C-1:kick . . . . C-1:tick . . . C-1:tick . . .',
+    // the lead: long notes that slip a semitone
+    m1: 'E-4:lead . . . . . . . F-4 . . . . . . . E-4 . . . . . . . . . . . C-4 . . .',
+    m2: 'D-4:lead . . . . . . . C-4 . . . . . . . A-3 . . . . . . . . . . . . . . .',
+    m3: 'B-3:lead . . . . . . . C-4 . . . . . . . B-3 . . . . . . . G#3 . . . . . . .',
+    m4: 'A-3:lead . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .',
+    // silence, for the lead's first time round
+    r1: '. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .',
+  },
+  order: [
+    ['l1', 'l2', 'l1', 'l3', 'l1', 'l2', 'l1', 'l3'],
+    ['h1', 'h1', 'h1', 'h1', 'h1', 'h1', 'h1', 'h1'],
+    ['r1', 'r1', 'r1', 'r1', 'm1', 'm2', 'm3', 'm4'],
+  ],
+  // in priority order, lowest first
+  effects: {
+    pickup: { priority: 0, steps: [
+      { wave: 'pulse', freq: 0x2b00, ad: 0x00, sr: 0x89, pw: 0x800, ticks: 3 },
+      { wave: 'pulse', freq: 0x3900, ad: 0x00, sr: 0x89, pw: 0x800, ticks: 3 },
+      { wave: 'pulse', freq: 0x5600, ad: 0x00, sr: 0x89, pw: 0x800, ticks: 12 },
+      { wave: 'pulse', gate: false, freq: 0x5600, ad: 0x00, sr: 0x89, pw: 0x800, ticks: 1 },
+    ] },
+    shot: { priority: 1, steps: [
+      { wave: 'noise', freq: 0x2800, ad: 0x00, sr: 0xf0, ticks: 2 },
+      { wave: 'noise', freq: 0x0c00, slide: -0x60, ad: 0x00, sr: 0xf0, ticks: 6 },
+      { wave: 'noise', gate: false, freq: 0x0800, ad: 0x00, sr: 0xa0, ticks: 4 },
+    ] },
+    die: { priority: 2, steps: [
+      { wave: 'noise', freq: 0x2000, ad: 0x00, sr: 0xf0, ticks: 2 },
+      { wave: 'saw', freq: 0x1600, slide: 0x40, ad: 0x00, sr: 0xd8, ticks: 6 },
+      { wave: 'saw', freq: 0x1800, slide: -0x50, ad: 0x00, sr: 0xd8, ticks: 24 },
+      { wave: 'saw', gate: false, freq: 0x1000, ad: 0x00, sr: 0xd8, ticks: 8 },
+    ] },
+  },
+  EVENTS: { pickup: ['pickup'], shot: ['shot'], die: ['die'] },
+});
+
+</script>
+<script>
+/*
+ * APEX audio for the browser pages: a game's sound, as the C64 makes it (by default as a C64 Ultimate
+ * with two SIDs does: the music on one, the effects on the other). Each tick the page tells it
+ * what the game did (the effects to start, whether the music plays); core/sound.js turns that into the
+ * SID's 25 registers, exactly as the C64's driver writes them, and core/sid.js plays them, in an
+ * AudioWorklet (built from APEXSID.source), or a ScriptProcessor where worklets can't run (pages opened
+ * from a file).
+ *
+ * Browsers start sound only after the player does something, so start() is called from the page's
+ * first key press, click or touch; until then the song still moves on, silently, so it is where it
+ * would be. M (the page's) mutes and unmutes.
+ *
+ *   const audio = APEXAUDIO.create(songDefinition, { sids: 2 })   two SIDs, as on a C64 Ultimate (the
+ *                                                                 default; 1 for a stock C64)
+ *   audio.tick(['shot', ...], musicOn)   once a game tick (50 a second), the effects by name
+ *   audio.start()                         from a user gesture; audio.toggleMute()
+ *
+ * Works in the browser (global APEXAUDIO, needing APEXSOUND and APEXSID).
+ */
+(function (root, factory) {
+  root.APEXAUDIO = factory(root.APEXSOUND, root.APEXSID);
+})(typeof self !== 'undefined' ? self : this, function (S, SID) {
+  'use strict';
+
+  const FPS = 50;
+  // The worklet: a queue of register frames, each played for 1/50 s of samples. A few frames of slack
+  // absorb the page's uneven ticks; too many (the page ran ahead) and the oldest go; none for half a second
+  // (the page stopped, say hidden) and the chip falls silent rather than hold a note.
+  const WORKLET = `
+const APEXSID = ${SID.source};
+class ApexSid extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.chips = [APEXSID.create(sampleRate), APEXSID.create(sampleRate)];
+    this.queue = [];
+    this.left = 0;
+    this.starved = 0;
+    this.port.onmessage = e => { this.queue.push(e.data); if (this.queue.length > 8) this.queue.splice(0, this.queue.length - 3); };
+  }
+  // A frame's registers: the first SID's, then the second's if there are two.
+  write(R) { this.chips[0].write(R); if (R.length > 25) this.chips[1].write(R.slice(25)); }
+  process(inputs, outputs) {
+    const out = outputs[0][0];
+    out.fill(0);
+    for (let i = 0; i < out.length;) {
+      if (this.left <= 0) {
+        if (this.queue.length) { this.write(this.queue.shift()); this.starved = 0; }
+        else if (++this.starved === 25) this.write(new Array(50).fill(0)); // the page stopped: silence
+        this.left += sampleRate / ${FPS};
+      }
+      const n = Math.min(out.length - i, Math.ceil(this.left));
+      for (const chip of this.chips) chip.render(out, i, n);
+      i += n;
+      this.left -= n;
+    }
+    for (let c = 1; c < outputs[0].length; c++) outputs[0][c].set(out);
+    return true;
+  }
+}
+registerProcessor('apex-sid', ApexSid);
+`;
+
+  function create(def, { sids = 2 } = {}) {
+    const c = S.compile(def), p = S.player(c, { sids });
+    let ctx = null, send = null, muted = false;
+
+    // The fallback: the same queue and chip on the page's own thread.
+    function scriptProcessor() {
+      const chips = [SID.create(ctx.sampleRate), SID.create(ctx.sampleRate)], queue = [];
+      const write = R => { chips[0].write(R); if (R.length > 25) chips[1].write(R.slice(25)); };
+      let left = 0, starved = 0;
+      const node = ctx.createScriptProcessor(2048, 0, 1);
+      node.onaudioprocess = e => {
+        const out = e.outputBuffer.getChannelData(0);
+        out.fill(0);
+        for (let i = 0; i < out.length;) {
+          if (left <= 0) {
+            if (queue.length) { write(queue.shift()); starved = 0; } else if (++starved === 25) write(new Array(50).fill(0));
+            left += ctx.sampleRate / FPS;
+          }
+          const n = Math.min(out.length - i, Math.ceil(left));
+          for (const chip of chips) chip.render(out, i, n);
+          i += n;
+          left -= n;
+        }
+      };
+      node.connect(ctx.destination);
+      send = R => { queue.push(R); if (queue.length > 12) queue.splice(0, queue.length - 5); };
+    }
+
+    function start() {
+      if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+      const Ctx = globalThis.AudioContext || globalThis.webkitAudioContext;
+      if (!Ctx) return;
+      ctx = new Ctx();
+      if (ctx.audioWorklet && globalThis.isSecureContext) {
+        const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
+        ctx.audioWorklet.addModule(url).then(() => {
+          const node = new AudioWorkletNode(ctx, 'apex-sid', { numberOfInputs: 0, outputChannelCount: [2] });
+          node.connect(ctx.destination);
+          send = R => node.port.postMessage(R);
+        }).catch(scriptProcessor);
+      } else scriptProcessor();
+    }
+
+    function tick(effects = [], music = true) {
+      const ids = effects.map(n => c.effNames.indexOf(n)).filter(k => k >= 0);
+      const R = S.tick(c, p, ids, music);
+      if (!send) return;
+      if (muted) R[24] &= 0xf0; // the volume to 0
+      send(Array.from(R));
+    }
+
+    return { start, tick, toggleMute: () => { muted = !muted; return muted; }, get muted() { return muted; } };
+  }
+
+  return { create };
+});
+
+</script>
+<script>window.LEVEL_TEXT = "; E1M1 Cell Block\r\n########################\r\n#......#B.....$#.......#\r\n#......#.......#.......#\r\n#..##..#B..#...#..#.#..#\r\n#..##......#..........##\r\n#......#...#...#..#.#..#\r\n#......#.......#.......#\r\n###.####.......####.####\r\n#......####.####.......#\r\n#......#.....$...#.....#\r\n#..E...#.........#..#..#\r\n#..............G...###.#\r\n#....G.#......G..#.....#\r\n#......#.........#..#..#\r\n####.#####.###.###.....#\r\n#.........#...#........#\r\n#.###.###.#...#..#.#.#.#\r\n#.#.....#.........#....#\r\n#.#.....#.#...#....#.#.#\r\n#.........#...#........#\r\n######################.#\r\n#......................#\r\n#.#.#.#.#.#.#.#.#.#.#..#\r\n########################\r\n";</script>
+<script>
+// The APEX raycaster reference, playable: the same game and the same frames the C64 engine draws (its
+// gradient, sprites and status panel), at a fixed 50 ticks a second, inside a C64-sized border, with
+// its sound. The C64 draws about 9 frames a second; this shows every tick.
+(async function () {
+  const text = window.LEVEL_TEXT || await (await fetch('../levels/e1m1.txt')).text();
+  const map = APEXLEVEL.parse(text), VIEW = APEXRAYVIEW, GAME = APEXRAYGAME;
+  let game = GAME.game(map);
+  const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(320, 200);
+  const border = APEXSCII.PALETTE[VIEW.COLOURS.mc.border];
+
+  // The status panel's font: APEXSCII's own text glyphs where the C64 has its ROM font (reversed
+  // from 128 up, as the ROM is).
+  const textGlyphs = APEXSCII.buildDefault('hires', 'ray').glyphs;
+  const rom = new Uint8Array(2048);
+  for (let c = 0; c < 128; c++) {
+    const g = c < 64 ? textGlyphs[c] : new Uint8Array(8);
+    for (let y = 0; y < 8; y++) { rom[c * 8 + y] = g[y]; rom[(c + 128) * 8 + y] = g[y] ^ 0xff; }
+  }
+
+  // The sound (web/audio.js), from the first key press, click or touch; M mutes.
+  const audio = APEXAUDIO.create(APEXSONGS.cell);
+  for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, () => audio.start());
+  addEventListener('keydown', e => { if (e.code === 'KeyM') audio.toggleMute(); });
+
+  // Input: keyboard, touch buttons and the first gamepad, combined into the engine's input bits.
+  const KEYS = { ArrowUp: 1, KeyW: 1, ArrowDown: 2, KeyS: 2, ArrowLeft: 4, KeyA: 4, ArrowRight: 8, KeyD: 8,
+    Space: 16, ControlLeft: 16, ControlRight: 16, KeyF: 16 };
+  let keys = 0, touch = 0;
+  addEventListener('keydown', e => {
+    if (e.code === 'KeyR') game = GAME.game(map);
+    if (KEYS[e.code]) { keys |= KEYS[e.code]; e.preventDefault(); }
+  });
+  addEventListener('keyup', e => { if (KEYS[e.code]) keys &= ~KEYS[e.code]; });
+  addEventListener('blur', () => { keys = 0; touch = 0; });
+  for (const b of document.querySelectorAll('.pad button')) {
+    const bit = +b.dataset.bit;
+    const on = e => { e.preventDefault(); touch |= bit; b.classList.add('on'); };
+    const off = e => { e.preventDefault(); touch &= ~bit; b.classList.remove('on'); };
+    b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off);
+    b.addEventListener('pointercancel', off); b.addEventListener('pointerleave', off);
+  }
+  function pad() {
+    const g = navigator.getGamepads && [...navigator.getGamepads()].find(Boolean);
+    if (!g) return 0;
+    const x = g.axes[0] || 0, y = g.axes[1] || 0, btn = i => g.buttons[i] && g.buttons[i].pressed;
+    return (y < -0.4 || btn(12) ? 1 : 0) | (y > 0.4 || btn(13) ? 2 : 0) | (x < -0.4 || btn(14) ? 4 : 0) |
+      (x > 0.4 || btn(15) ? 8 : 0) | (btn(0) || btn(1) || btn(7) ? 16 : 0);
+  }
+
+  function draw() {
+    const f = VIEW.frame(map, game.p, 'mc', VIEW.statusLines(map, game.p, game.score), GAME.shown(game));
+    image.data.set(f.rgba(rom, true));
+    ctx.fillStyle = border;
+    ctx.fillRect(0, 0, 384, 272);
+    ctx.putImageData(image, 32, 36);
+  }
+
+  // Fixed 50 Hz ticks; the screen shows the latest.
+  const TICK = 20;
+  let last = performance.now(), acc = 0;
+  function loop(now) {
+    acc = Math.min(acc + now - last, 200);
+    last = now;
+    let stepped = false;
+    while (acc >= TICK) {
+      GAME.play(map, game, keys | touch | pad(), VIEW.caster);
+      audio.tick(game.events.flatMap(e => APEXSONGS.cell.EVENTS[e] || []), true);
+      acc -= TICK;
+      stepped = true;
+    }
+    if (stepped) draw();
+    requestAnimationFrame(loop);
+  }
+  draw();
+  requestAnimationFrame(loop);
+})().catch(e => { document.getElementById('help').textContent = 'Could not start: ' + e.message; });
+</script>
+</body>
+</html>

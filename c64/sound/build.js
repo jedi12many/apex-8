@@ -1,6 +1,6 @@
 // Builds the C64 sound player with the kit (c64/kit/build.js) for a song and its effects:
-//   node c64/sound/build.js [song]   writes c64/out/sound.prg (a song from sound/, the Dreadnought's
-//                                    by default; the joystick plays the effects)
+//   node c64/sound/build.js [song]   writes c64/out/sound.prg (the Dreadnought's song) or sound-<song>.prg
+//                                    (another song from sound/); the joystick plays the effects
 // build(dir, { script, song, sids }) returns a test build instead: script, [[input, ticks], ...], where
 // an input starts effect n - 1 for n in bits 0-4 and turns the music off with bit 7, then stops (at
 // script_park); sids 1 or 2 fixes one SID or two (otherwise the driver looks for a second). The VICE
@@ -41,5 +41,6 @@ module.exports = { SONGS, song, songOf, build, runs, reference };
 
 if (require.main === module) {
   const dir = path.join(here, 'build', 'game');
-  writeOut('sound', build(dir, { song: process.argv[2] || 'shmup' }), dir);
+  const song = process.argv[2] || 'shmup';
+  writeOut(song === 'shmup' ? 'sound' : `sound-${song}`, build(dir, { song }), dir, ['CODE'], 'sound');
 }

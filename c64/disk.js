@@ -12,14 +12,16 @@ const fs = require('fs'), os = require('os'), path = require('path'), { spawnSyn
 const OUT = path.join(__dirname, 'out');
 // [key, file on disk, what it is, PRG in c64/out]
 const PROGRAMS = [
-  ['1', 'raycaster', 'RAYCASTER: E1M1', 'apex.prg'],
+  ['1', 'raycaster', 'RAYCASTER: THE CELL BLOCK', 'apex.prg'],
   ['2', 'platformer', 'PLATFORMER: GREEN HILLS', 'side.prg'],
   ['3', 'dungeon', 'DUNGEON: THE CRYPT', 'iso.prg'],
   ['4', 'shooter', 'SHOOTER: THE DREADNOUGHT', 'shmup.prg'],
   ['5', 'shooter brick', 'SHOOTER IN THE BRICK LOOK', 'shmup-brick.prg'],
   ['6', 'music shooter', 'MUSIC: THE DREADNOUGHT', 'sound.prg'],
   ['7', 'music crypt', 'MUSIC: THE DROWNED CRYPT', 'sound-crypt.prg'],
-  ['8', 'apex-8', 'THE APEX-8 SPLASH', 'picture.prg'],
+  ['8', 'music hills', 'MUSIC: GREEN HILLS', 'sound-hills.prg'],
+  ['9', 'music cell', 'MUSIC: THE CELL BLOCK', 'sound-cell.prg'],
+  ['0', 'apex-8', 'THE APEX-8 SPLASH', 'picture.prg'],
 ];
 
 // The menu, in BASIC (petcat's text form: {clr} and the like are control codes).

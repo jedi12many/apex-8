@@ -74,7 +74,7 @@ SHEN:    .res 2
 SHEXP:   .res 2
 SCRATCH: .res 64
 
-.segment "CODE"
+.segment "HICODE"
 ; ------------------------------------------------------------------ project
 project:
     jsr heading
@@ -94,6 +94,10 @@ project:
 :   stx ob
     lda #0
     sta OV,x
+    lda OBJ_ON,x            ; (gone: not shown)
+    bne :+
+    jmp @next
+:
     sec
     lda OBJXLO,x
     sbc px
@@ -411,9 +415,10 @@ cut_all:
     jmp @gather
 @sorted:
     lda #0
-    sta nspr
-    ldx buf                 ; nothing showing yet
+    ldx buf                 ; nothing showing yet but the pistol: sprite 0, expanded both ways
     sta SHMSB,x
+    lda #1
+    sta nspr
     sta SHEXP,x
     ldy #0
 @each:
@@ -438,8 +443,8 @@ cut_all:
     adc #SPR_A / 64
     sta SCREEN_A + $3f8,x
     dex
-    bpl :-
-    rts
+    bne :-
+    jmp gun
 @ptrb:
     ldx #7
 :   txa
@@ -447,8 +452,8 @@ cut_all:
     adc #SPR_A / 64 + 8
     sta SCREEN_B + $3f8,x
     dex
-    bpl :-
-    rts
+    bne :-
+    jmp gun
 
 ; One object (index in A): its size and image, the column mask, then its tiles. If they don't all
 ; fit in the sprites left, the object is dropped whole.
@@ -874,10 +879,14 @@ cut_tile:
     adc #50
     sta SHY,y
     ldx ob
-    lda OBJT,x
+    lda OBJ_HIT,x           ; white while a shot guard falls
+    beq :+
+    lda #1
+    bne :++
+:   lda OBJT,x
     tax
     lda TYPE_COL,x
-    sta SHC,y
+:   sta SHC,y
     lda oey
     cmp #2
     bne :+

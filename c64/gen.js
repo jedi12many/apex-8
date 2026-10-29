@@ -10,11 +10,10 @@ const APEXRAY = require('../core/raycast.js');
 const VIEW = require('./view.js');
 const SPRITES = require('./sprites.js');
 
+const GAME = require('../core/raygame.js');
+
 const LEVEL_STRIDE = 32;          // map rows are padded to 32 tiles, so row offsets are a shift
-const MOVE_SPEED = 6;             // 8.8 tiles per 50 Hz tick
-const HEADING_STEP = 4;           // the player's angle is always a multiple of this
-const WALL_RADIUS = 96;           // the player keeps 3/8 of a tile from walls on each axis
-const OBJ_RADIUS = 128;           // and half a tile from an object's centre, on one axis at least
+const { MOVE_SPEED, HEADING_STEP, WALL_RADIUS, OBJ_RADIUS } = GAME; // the game's (core/raygame.js)
 
 const hex = v => '$' + (v & 0xff).toString(16).padStart(2, '0');
 const bytes = (label, arr, per = 16) => {
@@ -23,6 +22,7 @@ const bytes = (label, arr, per = 16) => {
   return out.join('\n');
 };
 
+// testPose: a test build's pose, with flash (the pistol firing) and hit (the object shown white).
 function gen(map, outDir, testPose) {
   fs.mkdirSync(outDir, { recursive: true });
   const C = VIEW.caster, o = C.opts, rays = o.rays, SCALE = o.scale * 256;
@@ -61,6 +61,7 @@ function gen(map, outDir, testPose) {
   const PANEL = ref.screen.slice(VIEW.VIEW_ROWS * 40), PANELC = ref.color.slice(VIEW.VIEW_ROWS * 40);
   const line = VIEW.statusLines(map, map.start)[3], at = s => 1 + line.indexOf(s);
   const pos = { x: at('X ') + 2, y: at('Y ') + 2, h: at('HEADING ') + 8 };
+  const scoreAt = 1 + VIEW.statusLines(map, map.start)[4].indexOf('SCORE ') + 6;
   const digits = s => Array.from(s, ch => APEXSCII.asciiToScreen(ch));
   const tenths = f => Math.round(+(f / 256).toFixed(1) * 10);
   const HEAD = Array.from({ length: 256 }, (_, i) => digits(String(Math.round((i * HEADING_STEP * 360) / 1024) % 360).padStart(3, '0')));
@@ -98,8 +99,16 @@ function gen(map, outDir, testPose) {
     `COL_BG = ${C_.bg}`, `COL_MC1 = ${C_.mc1}`, `COL_MC2 = ${C_.mc2}`, `COL_WALLB = ${C_.wallB}`, `COL_BORDER = ${C_.border}`,
     `LEVEL_H = ${map.h}`,
     `START_X = ${map.start.x}`, `START_Y = ${map.start.y}`, `START_A = ${map.start.a}`,
-    `STATUS_ROW = ${VIEW.VIEW_ROWS + 3}`, `POS_X = ${pos.x}`, `POS_Y = ${pos.y}`, `POS_H = ${pos.h}`,
-    ...(testPose ? [`TEST = 1`, `TEST_X = ${testPose.x}`, `TEST_Y = ${testPose.y}`, `TEST_A = ${testPose.a}`] : []),
+    `STATUS_ROW = ${VIEW.VIEW_ROWS + 3}`, `POS_X = ${pos.x}`, `POS_Y = ${pos.y}`, `POS_H = ${pos.h}`, `POS_S = ${scoreAt}`,
+    ...(testPose ? [`TEST = 1`, `TEST_X = ${testPose.x}`, `TEST_Y = ${testPose.y}`, `TEST_A = ${testPose.a}`,
+      ...(testPose.flash ? ['TEST_FLASH = 1'] : []), ...(testPose.hit !== undefined ? [`TEST_HIT = ${testPose.hit}`] : [])] : []),
+    // the game (core/raygame.js)
+    `PICK_RADIUS = ${GAME.PICK_RADIUS}`, `COOL = ${GAME.COOL}`, `FLASH = ${GAME.FLASH}`, `HIT = ${GAME.HIT}`,
+    `TREASURE_BCD = $${String(GAME.TREASURE).padStart(4, '0')}`, `GUARD_BCD = $${String(GAME.GUARD).padStart(4, '0')}`,
+    `GUARD_H = ${SPRITES.TYPES.guard.height}`,
+    ...Object.keys(SPRITES.TYPES).map((n, k) => `T_${n.toUpperCase()} = ${k}`),
+    `GUN_X = ${SPRITES.gunPlace(VIEW.VIEW_ROWS * 8).x + 24}`, `GUN_Y = ${SPRITES.gunPlace(VIEW.VIEW_ROWS * 8).y + 50}`,
+    `GUN_IDLE = ${SPRITES.GUN_COLOR.idle}`, `GUN_FLASH = ${SPRITES.GUN_COLOR.flash}`,
     '.segment "TABLES"',
     bytes('SEC0LO', SEC0.map(v => v & 255)), bytes('SEC0HI', SEC0.map(v => v >> 8)),
     bytes('SEC1LO', SEC1.map(v => v & 255)), bytes('SEC1HI', SEC1.map(v => v >> 8)),
@@ -111,11 +120,12 @@ function gen(map, outDir, testPose) {
     bytes('TE_LO', TE.map(v => v & 255)), bytes('TE_HI', TE.map(v => v >> 8)),
     bytes('DEC0', Array.from({ length: 33 }, (_, n) => digits(String(n).padStart(2, '0'))[0])),
     bytes('DEC1', Array.from({ length: 33 }, (_, n) => digits(String(n).padStart(2, '0'))[1])),
-    bytes('LEVEL', LEVEL, LEVEL_STRIDE),
     `NOBJ = ${objects.length}`, `WALL_RADIUS = ${WALL_RADIUS}`, `OBJ_RADIUS = ${OBJ_RADIUS}`, `NSIZES = ${SPRITES.SIZES.length}`,
     `FOCAL = ${Math.round(((rays / 2) * 256) / Math.tan((o.fov * Math.PI) / 360))}`, `SCALE = ${SCALE}`,
     `SPR_MC1 = ${SPRITES.SHARED.mc1}`, `SPR_MC2 = ${SPRITES.SHARED.mc2}`,
     '.segment "HIGH"',
+    // (below $8000: a ray keeps the address of the tile it hit with bit 7 of its high byte as a flag)
+    bytes('LEVEL', LEVEL, LEVEL_STRIDE),
     bytes('MOVX', MOVX.map(v => v & 255)), bytes('MOVY', MOVY.map(v => v & 255)),
     bytes('PANEL', PANEL, 40), bytes('PANELC', PANELC, 40),
     bytes('TENTHD', Array.from({ length: 256 }, (_, f) => digits(String(tenths(f) % 10))[0])),
@@ -133,6 +143,7 @@ function gen(map, outDir, testPose) {
     ...sw('COS', Array.from({ length: 256 }, (_, i) => APEXRAY.cos(i * HEADING_STEP))),
     ...sw('SIN', Array.from({ length: 256 }, (_, i) => APEXRAY.sin(i * HEADING_STEP))),
     bytes('IMAGES', images),
+    bytes('GUN0', SPRITES.gunData(false).slice(0, 63)), bytes('GUN1', SPRITES.gunData(true).slice(0, 63)),
     bytes('USINLO', SINQ.map(v => v & 255)), bytes('USINHI', SINQ.map(v => v >> 8)),
     bytes('USINMLO', SINM.map(v => v & 255)), bytes('USINMHI', SINM.map(v => v >> 8)),
     ...draw(),

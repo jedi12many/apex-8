@@ -19,7 +19,7 @@ if (!viceDir) { console.error('usage: node test/c64-bench.js <VICE folder> [--nt
 (async () => {
   const { exe } = findVice(viceDir);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-bench-'));
-  build(null, dir, { bench: FRAMES, walk });
+  build(null, dir, { bench: FRAMES, walk, defines: args.includes('--nosound') ? { SND_SYNC: 1 } : {} });
   const labels = readLabels(path.join(dir, 'apex.lbl'));
   const cycles = await cyclesBetween(exe, path.join(dir, 'apex.prg'), labels.main, labels.bench_done, { ntsc });
   fs.rmSync(dir, { recursive: true, force: true });

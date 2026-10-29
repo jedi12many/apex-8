@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>APEX Cell Block</title>
+<style>
+  /* One look on purpose: a C64 screen in a dark room, whatever the viewer's theme. */
+  :root { --bg: #15131c; --fg: #e4e1ee; --dim: #9893ad; --key: #2c2838; --key-on: #4a4460; color-scheme: dark; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; box-sizing: border-box; min-height: 100vh; touch-action: manipulation; }
+  canvas { width: min(100%, 960px); aspect-ratio: 384 / 272; image-rendering: pixelated; background: #000; }
+  .help { color: var(--dim); text-align: center; max-width: 960px; }
+  .pad { display: none; width: min(100%, 960px); justify-content: space-between; align-items: center; gap: 12px; user-select: none; -webkit-user-select: none; }
+  .pad div { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 64px); gap: 8px; }
+  .pad button { width: 64px; height: 64px; border-radius: 50%; border: 0; background: var(--key); color: var(--fg); font-size: 24px; }
+  .pad button.fire { width: 88px; height: 88px; font-size: 16px; font-weight: 600; }
+  .pad button.on { background: var(--key-on); }
+  .pad button:focus-visible { outline: 2px solid var(--fg); }
+  @media (pointer: coarse) { .pad { display: flex; } }
+</style>
+</head>
+<body>
+<canvas id="screen" width="384" height="272"></canvas>
+<div class="pad">
+  <div>
+    <span></span><button data-bit="1" aria-label="forward">▲</button><span></span>
+    <button data-bit="4" aria-label="turn left">◀</button><button data-bit="2" aria-label="back">▼</button><button data-bit="8" aria-label="turn right">▶</button>
+  </div>
+  <button class="fire" data-bit="16" aria-label="fire">FIRE</button>
+</div>
+<p class="help" id="help">Up / Down or W / S to walk · Left / Right or A / D to turn · Space, Ctrl or F to fire · shoot the guards, pick up the treasure · R to restart · M mutes the sound · gamepad works too</p>
+<script src="../apexscii/apexscii.js"></script>
+<script src="../core/raycast.js"></script>
+<script src="../core/level.js"></script>
+<script src="../core/raygame.js"></script>
+<script src="../c64/sprites.js"></script>
+<script src="../c64/view.js"></script>
+<script src="../core/sound.js"></script>
+<script src="../core/sid.js"></script>
+<script src="../sound/cell.js"></script>
+<script src="../web/audio.js"></script>
+<script>
+// The APEX raycaster reference, playable: the same game and the same frames the C64 engine draws (its
+// gradient, sprites and status panel), at a fixed 50 ticks a second, inside a C64-sized border, with
+// its sound. The C64 draws about 9 frames a second; this shows every tick.
+(async function () {
+  const text = window.LEVEL_TEXT || await (await fetch('../levels/e1m1.txt')).text();
+  const map = APEXLEVEL.parse(text), VIEW = APEXRAYVIEW, GAME = APEXRAYGAME;
+  let game = GAME.game(map);
+  const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(320, 200);
+  const border = APEXSCII.PALETTE[VIEW.COLOURS.mc.border];
+
+  // The status panel's font: APEXSCII's own text glyphs where the C64 has its ROM font (reversed
+  // from 128 up, as the ROM is).
+  const textGlyphs = APEXSCII.buildDefault('hires', 'ray').glyphs;
+  const rom = new Uint8Array(2048);
+  for (let c = 0; c < 128; c++) {
+    const g = c < 64 ? textGlyphs[c] : new Uint8Array(8);
+    for (let y = 0; y < 8; y++) { rom[c * 8 + y] = g[y]; rom[(c + 128) * 8 + y] = g[y] ^ 0xff; }
+  }
+
+  // The sound (web/audio.js), from the first key press, click or touch; M mutes.
+  const audio = APEXAUDIO.create(APEXSONGS.cell);
+  for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, () => audio.start());
+  addEventListener('keydown', e => { if (e.code === 'KeyM') audio.toggleMute(); });
+
+  // Input: keyboard, touch buttons and the first gamepad, combined into the engine's input bits.
+  const KEYS = { ArrowUp: 1, KeyW: 1, ArrowDown: 2, KeyS: 2, ArrowLeft: 4, KeyA: 4, ArrowRight: 8, KeyD: 8,
+    Space: 16, ControlLeft: 16, ControlRight: 16, KeyF: 16 };
+  let keys = 0, touch = 0;
+  addEventListener('keydown', e => {
+    if (e.code === 'KeyR') game = GAME.game(map);
+    if (KEYS[e.code]) { keys |= KEYS[e.code]; e.preventDefault(); }
+  });
+  addEventListener('keyup', e => { if (KEYS[e.code]) keys &= ~KEYS[e.code]; });
+  addEventListener('blur', () => { keys = 0; touch = 0; });
+  for (const b of document.querySelectorAll('.pad button')) {
+    const bit = +b.dataset.bit;
+    const on = e => { e.preventDefault(); touch |= bit; b.classList.add('on'); };
+    const off = e => { e.preventDefault(); touch &= ~bit; b.classList.remove('on'); };
+    b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off);
+    b.addEventListener('pointercancel', off); b.addEventListener('pointerleave', off);
+  }
+  function pad() {
+    const g = navigator.getGamepads && [...navigator.getGamepads()].find(Boolean);
+    if (!g) return 0;
+    const x = g.axes[0] || 0, y = g.axes[1] || 0, btn = i => g.buttons[i] && g.buttons[i].pressed;
+    return (y < -0.4 || btn(12) ? 1 : 0) | (y > 0.4 || btn(13) ? 2 : 0) | (x < -0.4 || btn(14) ? 4 : 0) |
+      (x > 0.4 || btn(15) ? 8 : 0) | (btn(0) || btn(1) || btn(7) ? 16 : 0);
+  }
+
+  function draw() {
+    const f = VIEW.frame(map, game.p, 'mc', VIEW.statusLines(map, game.p, game.score), GAME.shown(game));
+    image.data.set(f.rgba(rom, true));
+    ctx.fillStyle = border;
+    ctx.fillRect(0, 0, 384, 272);
+    ctx.putImageData(image, 32, 36);
+  }
+
+  // Fixed 50 Hz ticks; the screen shows the latest.
+  const TICK = 20;
+  let last = performance.now(), acc = 0;
+  function loop(now) {
+    acc = Math.min(acc + now - last, 200);
+    last = now;
+    let stepped = false;
+    while (acc >= TICK) {
+      GAME.play(map, game, keys | touch | pad(), VIEW.caster);
+      audio.tick(game.events.flatMap(e => APEXSONGS.cell.EVENTS[e] || []), true);
+      acc -= TICK;
+      stepped = true;
+    }
+    if (stepped) draw();
+    requestAnimationFrame(loop);
+  }
+  draw();
+  requestAnimationFrame(loop);
+})().catch(e => { document.getElementById('help').textContent = 'Could not start: ' + e.message; });
+</script>
+</body>
+</html>

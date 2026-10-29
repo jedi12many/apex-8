@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APEX-8 Demos</title>
+<meta name="description" content="Five Commodore 64 game engines, playable in the browser: the same frames and sound the C64 produces.">
+<style>
+  /* One look on purpose: a C64 screen in a dark room, whatever the viewer's theme. */
+  :root { --bg: #15131c; --panel: #1e1b28; --line: #2e2a3c; --fg: #e4e1ee; --dim: #9893ad; --accent: #c9d487; --link: #9fb4ff; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 24px; margin-bottom: 32px; }
+  header img { width: min(100%, 288px); image-rendering: pixelated; }
+  header div { flex: 1 1 320px; }
+  h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0.02em; }
+  h2 { font-size: 20px; margin: 40px 0 12px; }
+  p { margin: 0 0 12px; }
+  .dim { color: var(--dim); }
+  a { color: var(--link); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+  .demo { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+  .demo img { display: block; width: 100%; aspect-ratio: 8 / 5; image-rendering: pixelated; background: #000; }
+  .demo .body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .demo h3 { margin: 0; font-size: 18px; }
+  .kind { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); }
+  .keys { font-size: 13px; color: var(--dim); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: auto; padding-top: 6px; }
+  .play { display: inline-block; padding: 8px 18px; border-radius: 6px; background: var(--accent); color: #15131c; font-weight: 600; text-decoration: none; }
+  .play:focus-visible, a:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+  .actions a:not(.play) { font-size: 13px; }
+  .c64 { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .c64 ol, .c64 ul { margin: 0 0 12px; padding-left: 22px; }
+  code { font: 13px ui-monospace, monospace; background: #0d0c12; padding: 1px 5px; border-radius: 4px; }
+  footer { margin-top: 40px; font-size: 13px; color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <img src="img/apex8.png" alt="The APEX-8 badge: a snowy mountain in front of a setting sun, over the word APEX-8" width="384" height="272">
+  <div>
+    <h1>APEX-8 demos</h1>
+    <p>Five game engines for the Commodore 64. Each has a JavaScript reference that defines every frame and every SID tick, and a 6502 engine checked against it pixel for pixel in VICE.</p>
+    <p class="dim">These pages play the references, so they look and sound as the C64 does (the C64's own frame rate aside). Click or press a key to start the sound; M mutes it. Gamepads work too.</p>
+  </div>
+</header>
+
+<section class="grid" aria-label="Demos">
+  <article class="demo">
+    <img src="img/ray.png" alt="A brick corridor in first person, a guard falling white as the pistol fires" width="640" height="400" loading="lazy">
+    <div class="body">
+      <span class="kind">Raycaster</span>
+      <h3>The Cell Block</h3>
+      <p>A first-person maze in APEXSCII's raycast characters, with sprite guards, barrels and treasure. Shoot the guards, pick up the treasure.</p>
+      <p class="keys">W / S or Up / Down walk · A / D or Left / Right turn · Space, Ctrl or F fire</p>
+      <div class="actions"><a class="play" href="ray.html">Play</a><a href="../c64/out/apex.prg" download>apex.prg</a></div>
+    </div>
+  </article>
+  <article class="demo">
+    <img src="img/side.png" alt="A green platform level with parallax mountains, coins and a beetle" width="640" height="400" loading="lazy">
+    <div class="body">
+      <span class="kind">Platformer</span>
+      <h3>Green Hills</h3>
+      <p>Smooth parallax scrolling in three bands. Collect the coins, stomp the beetles and reach the flag.</p>
+      <p class="keys">A / D or arrows run · Space, Up, W or Z jump (hold for higher)</p>
+      <div class="actions"><a class="play" href="side.html">Play</a><a href="../c64/out/side.prg" download>side.prg</a></div>
+    </div>
+  </article>
+  <article class="demo">
+    <img src="img/shmup.png" alt="A ship flying over a grey dreadnought's hull, enemy saucers in a line" width="640" height="400" loading="lazy">
+    <div class="body">
+      <span class="kind">Shoot-'em-up</span>
+      <h3>The Dreadnought</h3>
+      <p>A vertical scroller over a huge ship, with waves of enemies. Uses an REU and a second SID when there is one.</p>
+      <p class="keys">Arrows or W / A / S / D fly · Space, Ctrl or K fire (hold for autofire)</p>
+      <div class="actions"><a class="play" href="shmup.html">Play</a><a href="../c64/out/shmup.prg" download>shmup.prg</a><a href="../c64/out/shmup-brick.prg" download>brick look</a></div>
+    </div>
+  </article>
+  <article class="demo">
+    <img src="img/crypt.png" alt="An isometric crypt of grey blocks and mossy floors, a figure in a hat" width="640" height="400" loading="lazy">
+    <div class="body">
+      <span class="kind">Isometric adventure</span>
+      <h3>The Drowned Crypt</h3>
+      <p>The isometric engine as a game: explore the flooded crypt, aim and fire, with music and effects.</p>
+      <p class="keys">Arrows or W / A / S / D walk (two for diagonals) · hold Space to aim and fire</p>
+      <div class="actions"><a class="play" href="crypt.html">Play</a></div>
+    </div>
+  </article>
+  <article class="demo">
+    <img src="img/iso.png" alt="An isometric dungeon room lit in yellow, walls around it" width="640" height="400" loading="lazy">
+    <div class="body">
+      <span class="kind">Isometric engine</span>
+      <h3>The Crypt</h3>
+      <p>The isometric dungeon engine on its own: walk its rooms and corridors.</p>
+      <p class="keys">Arrows or W / A / S / D walk (two for diagonals)</p>
+      <div class="actions"><a class="play" href="iso.html">Play</a><a href="../c64/out/iso.prg" download>iso.prg</a></div>
+    </div>
+  </article>
+</section>
+
+<h2>On a real C64 or a C64 Ultimate</h2>
+<div class="c64">
+  <p>Every engine is on one 1581 disk image, behind a menu: <a href="../c64/out/apex-8.d81" download><strong>apex-8.d81</strong></a>. Each program is also linked above on its own.</p>
+  <ol>
+    <li>Mount the image as drive 8 (on a C64 Ultimate: browse to it and choose Mount, or Run).</li>
+    <li><code>LOAD"*",8</code> then <code>RUN</code>. Press a number to load a demo; reset for the menu.</li>
+  </ol>
+  <ul class="dim">
+    <li>Joystick in port 2. The keys above work on the C64's keyboard too.</li>
+    <li>A second SID at $D420 plays the sound effects, so the music keeps all three voices. The shooter also uses an REU when there is one. Without them everything still runs.</li>
+  </ul>
+</div>
+
+<footer>
+  <p><a href="https://github.com/jedi12many/apex-8">APEX-8 on GitHub</a> · the code is MIT-licensed; the APEX-8 name and badge have their own rules (BRAND.md).</p>
+</footer>
+</main>
+</body>
+</html>

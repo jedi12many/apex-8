@@ -1,0 +1,2711 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>APEX Drowned Crypt</title>
+<style>
+  /* One look on purpose: a C64 screen in a dark room, whatever the viewer's theme. */
+  :root { --bg: #15131c; --fg: #e4e1ee; --dim: #9893ad; --key: #2c2838; --key-on: #4a4460; color-scheme: dark; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; box-sizing: border-box; min-height: 100vh; touch-action: manipulation; }
+  canvas { width: min(100%, 960px); aspect-ratio: 384 / 272; image-rendering: pixelated; background: #000; }
+  .help { color: var(--dim); text-align: center; max-width: 960px; }
+  .pad { display: none; width: 144px; height: 144px; border-radius: 50%; background: var(--key); position: relative; user-select: none; -webkit-user-select: none; touch-action: none; }
+  .pad .knob { position: absolute; left: 50%; top: 50%; width: 48px; height: 48px; margin: -24px 0 0 -24px; border-radius: 50%; background: var(--key-on); }
+  .controls { display: flex; gap: 32px; align-items: center; }
+  .fire { display: none; width: 88px; height: 88px; border-radius: 50%; background: var(--key-on); color: var(--fg); font-weight: 600; align-items: center; justify-content: center; user-select: none; -webkit-user-select: none; touch-action: none; }
+  @media (pointer: coarse) { .pad { display: block; } .fire { display: flex; } }
+</style>
+</head>
+<body>
+<canvas id="screen" width="384" height="272"></canvas>
+<div class="controls"><div class="pad" id="pad" aria-label="move"><div class="knob" id="knob"></div></div><div class="fire" id="fire" aria-label="fire">FIRE</div></div>
+<p class="help" id="help">Arrow keys or W / A / S / D to walk (two at once for diagonals) · hold Space to stand, aim and fire · R back to the title · M mutes the sound · gamepad works too</p>
+<script>
+/*
+ * APEXSCII — PETSCII-style character sets for the Commodore 64, one per perspective:
+ * isometric 2:1, military 45°, top-down 3/4, side oblique, first-person dungeon and raycast,
+ * each in hi-res (8x8) and multicolor (4x8).
+ *
+ * Every set keeps PETSCII text at screen codes $00-$3F, then two shade sets (smooth and brick),
+ * line art and block elements; the rest of the 256 slots are free. buildDefault(mode, persp)
+ * returns the glyphs, their names and the layout regions.
+ *
+ * Also here: the C64 screen decoder, runnable .prg / .asm writers and specimen sheets.
+ * Works in the browser (window.APEXSCII) and in Node (require).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSCII = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- text font
+  const TEXT_NAMES = '@ABCDEFGHIJKLMNOPQRSTUVWXYZ[£]↑← !"#$%&\'()*+,-./0123456789:;<=>?';
+  const FONT_SRC = [
+    '..####.. .##..##. .##.###. .##.###. .##..... .##...#. ..####..', // @
+    '...##... ..####.. .##..##. .######. .##..##. .##..##. .##..##.', // A
+    '.#####.. .##..##. .##..##. .#####.. .##..##. .##..##. .#####..',
+    '..####.. .##..##. .##..... .##..... .##..... .##..##. ..####..',
+    '.####... .##.##.. .##..##. .##..##. .##..##. .##.##.. .####...',
+    '.######. .##..... .##..... .####... .##..... .##..... .######.',
+    '.######. .##..... .##..... .####... .##..... .##..... .##.....',
+    '..####.. .##..##. .##..... .##.###. .##..##. .##..##. ..####..',
+    '.##..##. .##..##. .##..##. .######. .##..##. .##..##. .##..##.',
+    '..####.. ...##... ...##... ...##... ...##... ...##... ..####..',
+    '...####. ....##.. ....##.. ....##.. ....##.. .##.##.. ..###...',
+    '.##..##. .##.##.. .####... .###.... .####... .##.##.. .##..##.',
+    '.##..... .##..... .##..... .##..... .##..... .##..... .######.',
+    '.##...## .###.### .####### .##.#.## .##...## .##...## .##...##',
+    '.##..##. .###.##. .######. .######. .##.###. .##..##. .##..##.',
+    '..####.. .##..##. .##..##. .##..##. .##..##. .##..##. ..####..',
+    '.#####.. .##..##. .##..##. .#####.. .##..... .##..... .##.....',
+    '..####.. .##..##. .##..##. .##..##. .##..##. ..####.. ....###.',
+    '.#####.. .##..##. .##..##. .#####.. .####... .##.##.. .##..##.',
+    '..####.. .##..##. .##..... ..####.. .....##. .##..##. ..####..',
+    '.######. ...##... ...##... ...##... ...##... ...##... ...##...',
+    '.##..##. .##..##. .##..##. .##..##. .##..##. .##..##. ..####..',
+    '.##..##. .##..##. .##..##. .##..##. .##..##. ..####.. ...##...',
+    '.##...## .##...## .##...## .##.#.## .####### .###.### .##...##',
+    '.##..##. .##..##. ..####.. ...##... ..####.. .##..##. .##..##.',
+    '.##..##. .##..##. .##..##. ..####.. ...##... ...##... ...##...',
+    '.######. .....##. ....##.. ...##... ..##.... .##..... .######.', // Z
+    '..####.. ..##.... ..##.... ..##.... ..##.... ..##.... ..####..', // [
+    '....##.. ...##.#. ..##.... .#####.. ..##.... .##...#. ######..', // £
+    '..####.. ....##.. ....##.. ....##.. ....##.. ....##.. ..####..', // ]
+    '...##... ..####.. .######. ...##... ...##... ...##... ...##...', // ↑
+    '........ ..#..... .##..... ######## .##..... ..#..... ........', // ←
+    '........',                                                        // space
+    '...##... ...##... ...##... ...##... ........ ........ ...##...', // !
+    '.##..##. .##..##. .##..##.',                                      // "
+    '.##..##. .##..##. ######## .##..##. ######## .##..##. .##..##.', // #
+    '...##... ..#####. .##..... ..####.. .....##. .#####.. ...##...', // $
+    '.##...#. .##..##. ....##.. ...##... ..##.... .##..##. .#...##.', // %
+    '..####.. .##..##. ..####.. ..###... .##..### .##..##. ..#####.', // &
+    '.....##. ....##.. ...##...',                                      // '
+    '....##.. ...##... ..##.... ..##.... ..##.... ...##... ....##..', // (
+    '..##.... ...##... ....##.. ....##.. ....##.. ...##... ..##....', // )
+    '........ .##..##. ..####.. ######## ..####.. .##..##. ........', // *
+    '........ ...##... ...##... .######. ...##... ...##... ........', // +
+    '........ ........ ........ ........ ........ ...##... ...##... ..##....', // ,
+    '........ ........ ........ .######.',                             // -
+    '........ ........ ........ ........ ........ ...##... ...##...', // .
+    '........ ......## .....##. ....##.. ...##... ..##.... .##.....', // /
+    '..####.. .##..##. .##.###. .###.##. .##..##. .##..##. ..####..', // 0
+    '...##... ..###... ...##... ...##... ...##... ...##... .######.',
+    '..####.. .##..##. .....##. ....##.. ..##.... .##..... .######.',
+    '..####.. .##..##. .....##. ...###.. .....##. .##..##. ..####..',
+    '.....##. ....###. ...####. .##..##. .####### .....##. .....##.',
+    '.######. .##..... .#####.. .....##. .....##. .##..##. ..####..',
+    '..####.. .##..##. .##..... .#####.. .##..##. .##..##. ..####..',
+    '.######. .##..##. ....##.. ...##... ...##... ...##... ...##...',
+    '..####.. .##..##. .##..##. ..####.. .##..##. .##..##. ..####..',
+    '..####.. .##..##. .##..##. ..#####. .....##. .##..##. ..####..', // 9
+    '........ ........ ...##... ........ ........ ...##... ........', // :
+    '........ ........ ...##... ........ ........ ...##... ...##... ..##....', // ;
+    '....###. ...###.. ..###... .###.... ..###... ...###.. ....###.', // <
+    '........ ........ .######. ........ .######.',                   // =
+    '.###.... ..###... ...###.. ....###. ...###.. ..###... .###....', // >
+    '..####.. .##..##. .....##. ....##.. ...##... ........ ...##...', // ?
+  ];
+
+  function parseGlyph(src) {
+    const rows = src.trim().split(/\s+/);
+    if (rows.length > 8) throw new Error('glyph has >8 rows: ' + src);
+    const g = new Uint8Array(8);
+    rows.forEach((r, y) => {
+      if (r.length !== 8) throw new Error('row not 8 wide: "' + r + '"');
+      for (let x = 0; x < 8; x++) if (r[x] === '#') g[y] |= 0x80 >> x;
+    });
+    return g;
+  }
+
+  // ---------------------------------------------------------- shade patterns
+  // Patterns are periodic in 8x8 so a glyph looks identical wherever it lands.
+  function brickWall(x, y) {
+    x &= 7; y &= 7;
+    if ((y & 3) === 3) return false;
+    return x !== (y < 4 ? 0 : 4);
+  }
+  const SETS = {
+    smooth: {
+      E: () => false,
+      T: () => true,
+      L: (x, y) => ((x + y) & 1) === 0,
+      R: (x, y) => (x & 1) === 0 && (y & 1) === 0,
+    },
+    brick: {
+      E: () => false,
+      T: (x, y) => !(((x & 3) === 0 && (y & 3) === 0) || ((x & 3) === 2 && (y & 3) === 2)),
+      L: brickWall,
+      R: (x, y) => brickWall(x, y) && ((x + y) & 1) === 0,
+    },
+  };
+  // Multicolor patterns work on 4x8 fat pixels: fn(fx, y) -> 2-bit value.
+  //   00 = $D021 background, 01 = $D022 (MC1), 10 = $D023 (MC2), 11 = the cell's colour RAM (0-7).
+  // The top face takes the cell colour, so materials share glyphs and differ only by colour;
+  // the left/right faces use the two shared shades.
+  function brickWallMC(fx, y) {
+    y &= 7;
+    if ((y & 3) === 3) return false;
+    return (fx & 3) !== (y < 4 ? 0 : 2);
+  }
+  const MC_SETS = {
+    smooth: { E: () => 0, T: () => 3, L: () => 1, R: () => 2 },
+    brick: {
+      E: () => 0,
+      T: (fx, y) => ((y & 3) === 0 && ((fx + (y >> 2)) & 1) === 0) ? 2 : 1, // light paving, dark joints
+      L: (fx, y) => brickWallMC(fx, y) ? 3 : 1,                             // bricks in cell colour, light mortar
+      R: (fx, y) => brickWallMC(fx, y) ? (((fx + y) & 1) ? 3 : 2) : 0,      // shaded bricks, dark mortar
+    },
+  };
+  // Dungeon faces: ceiling, ground, front wall, side wall, door (vertical planks).
+  Object.assign(SETS.smooth, { C: () => false, G: SETS.smooth.R, W: SETS.smooth.T, S: SETS.smooth.L, D: x => (x & 3) !== 3 });
+  Object.assign(SETS.brick, { C: () => false, G: SETS.brick.T, W: SETS.brick.L, S: SETS.brick.R, D: x => (x & 3) !== 3 });
+  Object.assign(MC_SETS.smooth, { C: () => 0, G: () => 2, W: () => 3, S: () => 1, D: fx => (fx & 1) ? 2 : 3 });
+  Object.assign(MC_SETS.brick, { C: () => 0, G: MC_SETS.brick.T, W: MC_SETS.brick.L, S: MC_SETS.brick.R, D: fx => (fx & 1) ? 2 : 3 });
+
+  // ------------------------------------------------------------ theme textures
+  // A theme repaints the two shade sets of every perspective with its own textures; glyph roles and
+  // screen codes stay the same, so maps and renderers work with any theme. A texture is 8 rows of
+  // 8 pixels ('#' on) for hi-res, or 8 rows of 4 fat pixels ('0'-'3') for multicolor, tiled every
+  // 8 pixels. Faces: T top, L lit side, R shaded side; dungeon C ceiling and D door. The dungeon's
+  // floor, front wall and side wall default to T, L and R.
+  const tex = rows => (x, y) => rows[y & 7][x & 7] === '#';
+  const texMC = rows => (fx, y) => +rows[y & 7][fx & 3];
+  const shaded = f => (x, y) => f(x, y) && ((x + y) & 1) === 0; // a darker side: every other pixel
+  function defineSet(name, hi, mc) {
+    const full = (s, none, door) => Object.assign({ E: none, C: none, G: s.T, W: s.L, S: s.R, D: door }, s);
+    SETS[name] = full(hi, () => false, x => (x & 3) !== 3);
+    MC_SETS[name] = full(mc, () => 0, fx => (fx & 1) ? 2 : 3);
+  }
+  const IRON_DOOR = tex(['########', '###.###.', '###.###.', '###.###.', '###.###.', '########', '###.###.', '###.###.']);
+  const IRON_DOOR_MC = texMC(['1111', '3303', '3303', '3303', '3303', '1111', '3303', '3303']);
+  const COBWEB = tex(['#.......', '.#......', '..#.....', '...#....', '........', '........', '......#.', '........']);
+  const COBWEB_MC = texMC(['1000', '0100', '0000', '0010', '0000', '0000', '0001', '0000']);
+
+  const cryptL = tex(['#######.', '#.######', '#######.', '........', '###.####', '###.##.#', '###.####', '........']);
+  defineSet('crypt-stone', {
+    T: tex(['#######.', '#######.', '#.#####.', '........', '###.####', '###.####', '###.##.#', '........']),
+    L: cryptL, R: shaded(cryptL), C: COBWEB, D: IRON_DOOR,
+  }, {
+    T: texMC(['3330', '3330', '3130', '0000', '3033', '3033', '3031', '0000']),
+    L: texMC(['1110', '1210', '1110', '0000', '1011', '1011', '1012', '0000']),
+    R: texMC(['2220', '2020', '2220', '0000', '2022', '2022', '2020', '0000']), C: COBWEB_MC, D: IRON_DOOR_MC,
+  });
+  const mossL = tex(['#.#####.', '#.###.#.', '#####.#.', '........', '###.#.##', '###.#.##', '###.####', '........']);
+  defineSet('crypt-moss', {
+    T: tex(['#.#####.', '#######.', '###.##..', '........', '###.##.#', '#.#.####', '###.####', '........']),
+    L: mossL, R: shaded(mossL), C: COBWEB, D: IRON_DOOR,
+  }, {
+    T: texMC(['3130', '3330', '3310', '0000', '3031', '3133', '3033', '0000']),
+    L: texMC(['1210', '1210', '1110', '0000', '1021', '1021', '1011', '0000']),
+    R: texMC(['2020', '2020', '2220', '0000', '2022', '2022', '2022', '0000']), C: COBWEB_MC, D: IRON_DOOR_MC,
+  });
+
+  const CANOPY = tex(['#..#....', '.#....#.', '....#..#', '#.#.....', '.....#..', '..#....#', '#...#...', '.#....#.']);
+  const CANOPY_MC = texMC(['1020', '0102', '2010', '0201', '1020', '0102', '2010', '0201']);
+  const PLANK_DOOR = tex(['########', '###.###.', '###.###.', '###.###.', '###.###.', '###.###.', '###.###.', '########']);
+  const PLANK_DOOR_MC = texMC(['2222', '3303', '3303', '3303', '3303', '3303', '3303', '2222']);
+  const dirt = tex(['#.#.#.#.', '.#.###.#', '#.#####.', '.#.###.#', '#.#.#.#.', '.#.#.#.#', '###.#.#.', '##.#.#.#']);
+  defineSet('forest-grass', {
+    T: tex(['########', '##.#####', '#.#.####', '########', '######.#', '#####.#.', '########', '########']),
+    L: dirt, R: shaded(dirt), C: CANOPY, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '3233', '3333', '3332', '3333', '3323', '3333', '2333']),
+    L: texMC(['1121', '1111', '2111', '1112', '1111', '1211', '1111', '1121']),
+    R: texMC(['2202', '2222', '0222', '2220', '2222', '2022', '2222', '2202']), C: CANOPY_MC, D: PLANK_DOOR_MC,
+  });
+  const bark = tex(['#.##.###', '#.##.###', '#.###.##', '#.###.##', '##.#.###', '##.#.###', '#.##.#.#', '#.##.###']);
+  defineSet('forest-wood', {
+    T: tex(['#######.', '#######.', '........', '###.####', '###.####', '........', '#####.##', '........']),
+    L: bark, R: shaded(bark), C: CANOPY, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3330', '3330', '0000', '3033', '3033', '0000', '3303', '0000']),
+    L: texMC(['3131', '3131', '3113', '3113', '1313', '1313', '3131', '3131']),
+    R: texMC(['2020', '2020', '2002', '2002', '0202', '0202', '2020', '2020']), C: CANOPY_MC, D: PLANK_DOOR_MC,
+  });
+
+  const BEAMS = tex(['########', '........', '........', '........', '########', '........', '........', '........']);
+  const BEAMS_MC = texMC(['2222', '0000', '0000', '0000', '2222', '0000', '0000', '0000']);
+  const timber = (x, y) => !((y & 7) === 0 || (x & 7) === 0 || (x & 7) === (y & 7)); // half-timbered panels
+  const timberMC = (fx, y) => ((y & 7) === 0 || (fx & 3) === 0 || (fx & 3) === (y & 7) >> 1 ? 2 : 1);
+  defineSet('town-cobble', {
+    T: tex(['###.###.', '###.###.', '###.###.', '........', '#.###.##', '#.###.##', '#.###.##', '........']),
+    L: timber, R: shaded(timber), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    // Cobbles in the shared shade (MC1) with a fat-pixel accent of the material's own colour.
+    T: texMC(['3101', '1101', '1101', '0000', '0310', '0110', '0110', '0000']),
+    L: timberMC, R: (fx, y) => (timberMC(fx, y) === 2 ? 2 : ((fx + y) & 1 ? 1 : 0)), C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+  defineSet('town-roof', {
+    T: tex(['.######.', '########', '########', '#.#.#.#.', '###..###', '########', '########', '#.#.#.#.']),
+    L: SETS.brick.L, R: SETS.brick.R, C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['0330', '3333', '3333', '1313', '3003', '3333', '3333', '1313']),
+    L: MC_SETS.brick.L, R: MC_SETS.brick.R, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+
+  // Toy bricks: studded plates on top (a stud a cell, lit on its upper left, shaded on its lower
+  // right), smooth 1x1 brick sides with a glint, and flat tiles with a groove for the second set.
+  const brickL = tex(['#######.', '#.#####.', '#######.', '#######.', '#######.', '#######.', '#######.', '........']);
+  const BRICK_L_MC = texMC(['3332', '3132', '3332', '3332', '3332', '3332', '3332', '0000']);
+  const BRICK_R_MC = texMC(['3230', '2320', '3230', '2320', '3230', '2320', '3230', '0000']);
+  defineSet('brick-stud', {
+    T: tex(['########', '##....##', '#.####.#', '#.####.#', '#.####.#', '#.####.#', '##....##', '########']),
+    L: brickL, R: shaded(brickL), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '1133', '1323', '1323', '1323', '3223', '3333', '3333']),
+    L: BRICK_L_MC, R: BRICK_R_MC, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+  defineSet('brick-tile', {
+    T: tex(['#######.', '#######.', '#######.', '#######.', '#######.', '#######.', '#######.', '........']),
+    L: brickL, R: shaded(brickL), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '3333', '3333', '3333', '3333', '3333', '3333', '2222']),
+    L: BRICK_L_MC, R: BRICK_R_MC, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+
+  // Animated textures: frames of a top-face texture, for a renderer to cycle through. They aren't in
+  // any theme's layout; on the C64 the few glyphs they produce are rewritten each frame. Water ripples
+  // drift right by one fat pixel per frame (four frames loop); its sides are the smooth ones.
+  const ANIMATIONS = { water: [] };
+  for (let f = 0; f < 4; f++) {
+    const crest = (x, y) => (y & 3) === 1 && ((x + 2 * f + ((y >> 2) & 1) * 4) & 7) < 3;
+    const crestMC = (fx, y) => (y & 3) === 1 && ((fx + f + ((y >> 2) & 1) * 2) & 3) < 2;
+    defineSet(`water-${f}`, { T: (x, y) => !crest(x, y), L: SETS.smooth.L, R: SETS.smooth.R },
+      { T: (fx, y) => (crestMC(fx, y) ? 1 : 3), L: MC_SETS.smooth.L, R: MC_SETS.smooth.R });
+    ANIMATIONS.water.push(`water-${f}`);
+  }
+
+  // Each theme names the pattern sets that fill the two shade-set regions of every perspective.
+  const THEMES = {
+    classic: { name: 'Classic', sets: ['smooth', 'brick'] },
+    crypt: { name: 'Crypt', sets: ['crypt-stone', 'crypt-moss'] },
+    forest: { name: 'Forest', sets: ['forest-grass', 'forest-wood'] },
+    town: { name: 'Town', sets: ['town-cobble', 'town-roof'] },
+    brick: { name: 'Brick', sets: ['brick-stud', 'brick-tile'] },
+  };
+  const FACE_NAMES = { E: 'empty', T: 'top', L: 'left', R: 'right' };
+
+  // 45° boundaries, corner to corner across a cell: military, side oblique and dungeon views.
+  const B45 = [
+    { id: '/', name: '/ 45°', row: x => 7 - x },
+    { id: '\\', name: '\\ 45°', row: x => x },
+  ];
+
+  // Every perspective shares the text block at $00-$3F, then its own shade sets.
+  //   faces: what the pair glyphs combine; key: which pattern each face uses; solids: plain faces.
+  // The top-down 3/4 view has no slopes at all, so it carries outline variants instead.
+  const PERSPECTIVES = {
+    iso: { name: 'Isometric 2:1' },
+    military: {
+      name: 'Military 45°', faces: ['E', 'T', 'L', 'R'], solids: ['T', 'L', 'R'], bounds: B45,
+      key: { E: 'E', T: 'T', L: 'L', R: 'R' }, faceNames: FACE_NAMES,
+    },
+    oblique: {
+      name: 'Top-down 3/4', faces: [], solids: [], bounds: [], edges: true,
+      key: { T: 'T', F: 'L' }, faceNames: { T: 'top', F: 'front' },
+    },
+    side: {
+      name: 'Side oblique', faces: ['E', 'T', 'F', 'R'], solids: ['T', 'F', 'R'], bounds: [B45[0]],
+      key: { E: 'E', T: 'T', F: 'L', R: 'R' }, faceNames: { E: 'empty', T: 'top', F: 'front', R: 'side' },
+    },
+    dungeon: {
+      name: 'First-person dungeon', faces: ['C', 'G', 'W', 'S'], solids: ['C', 'G', 'W', 'S', 'D'], bounds: B45,
+      key: { C: 'C', G: 'G', W: 'W', S: 'S', D: 'D' },
+      faceNames: { C: 'ceiling', G: 'floor', W: 'front wall', S: 'side wall', D: 'door' },
+    },
+    ray: { name: 'Raycast' },
+  };
+
+  // Raycast view: every screen column is two 4-pixel ray columns, and each ray column is in one of
+  // nine states: 0 empty, 1-4 wall shade A 2/4/6/8 pixels high, 5-8 shade B the same. The "top" glyphs
+  // are where a wall rises out of the ceiling (wall at the bottom of the cell), the "bottom" glyphs where
+  // it meets the floor (wall at the top). Screen code = base + 9 * left state + right state, so a full
+  // wall is top or bottom with both states 4 (shade A) or 8 (shade B).
+  // Multicolor: ceiling 00 ($D021), floor 01 ($D022), wall A 10 ($D023), wall B 11 (colour RAM). Walls
+  // are the VIC's foreground bit pairs, so sprites behind walls can use background priority, and
+  // colour RAM never changes from frame to frame. Hi-res: wall A solid, wall B checkered, floor dotted.
+  const RAY = { STATES: 9, top: 0x40, bottom: 0x40 + 81 };
+  RAY.state = (shade, h) => (h <= 0 ? 0 : (shade ? 4 : 0) + Math.min(4, h >> 1)); // h in pixels, rounded down to even
+  RAY.height = s => (s ? ((s - 1) & 3) * 2 + 2 : 0);
+  RAY.shade = s => (s > 4 ? 1 : 0);
+  const RAY_STATE_NAMES = ['empty', 'A2', 'A4', 'A6', 'A8', 'B2', 'B4', 'B6', 'B8'];
+
+  // The four 2:1 slope boundaries; row(x) is the first row of the "below" region.
+  const BOUNDS = [
+    { id: '/u', name: '/ upper', row: x => 3 - (x >> 1) },
+    { id: '/l', name: '/ lower', row: x => 7 - (x >> 1) },
+    { id: '\\u', name: '\\ upper', row: x => x >> 1 },
+    { id: '\\l', name: '\\ lower', row: x => 4 + (x >> 1) },
+  ];
+  const FACES = ['E', 'T', 'L', 'R'];
+  const PAIRS = [];
+  for (const a of FACES) for (const b of FACES) if (a !== b) PAIRS.push([a, b]);
+
+  function glyphFrom(fn) {
+    const g = new Uint8Array(8);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) if (fn(x, y)) g[y] |= 0x80 >> x;
+    return g;
+  }
+  function glyphFromMC(fn) {
+    const g = new Uint8Array(8);
+    for (let y = 0; y < 8; y++) for (let fx = 0; fx < 4; fx++) g[y] |= (fn(fx, y) & 3) << (6 - 2 * fx);
+    return g;
+  }
+
+  // ----------------------------------------------------------- default set
+  const REGIONS = [
+    { from: 0x00, to: 0x3f, name: 'text' },
+    { from: 0x40, to: 0x72, name: 'smooth' },
+    { from: 0x73, to: 0xa5, name: 'brick' },
+    { from: 0xa6, to: 0xad, name: 'lines' },
+    { from: 0xae, to: 0xb5, name: 'blocks' },
+    { from: 0xb6, to: 0xff, name: 'free' },
+  ];
+
+  // In multicolor mode the shade sets and free slots are fat-pixel glyphs; text, lines and
+  // blocks stay hi-res (they are shown with colour RAM 0-7, which keeps a cell hi-res).
+  const LAYOUTS = {};
+  const layout = persp => LAYOUTS[persp] || (LAYOUTS[persp] = buildDefault('hires', persp).regions);
+  function isMCSlot(i, persp = 'iso') {
+    const r = layout(persp).find(r => i >= r.from && i <= r.to);
+    return !['text', 'lines', 'blocks'].includes(r.name);
+  }
+
+  // theme picks the textures (see THEMES); the layout and glyph roles are the same for every theme.
+  // style.outline draws a dark seam where two different faces meet (see pairFn).
+  function buildDefault(mode = 'hires', persp = 'iso', theme = 'classic', style = {}) {
+    const sets = THEMES[theme].sets, outline = !!style.outline;
+    return persp === 'iso' ? buildIso(mode, sets, outline) : persp === 'ray' ? buildRay(mode) : buildPerspective(mode, persp, sets, outline);
+  }
+
+  // The raycast set has flat shading only, so it is the same in every theme and style (see RAY).
+  function buildRay(mode) {
+    const mc = mode === 'mc';
+    const glyphs = [], names = [], regions = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0, start = 0;
+    const add = (g, name) => { glyphs[i] = g; names[i++] = name; };
+    const region = name => { regions.push({ from: start, to: i - 1, name }); start = i; };
+    FONT_SRC.forEach((src, k) => add(parseGlyph(src), 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k])));
+    region('text');
+    const px = mc
+      ? { ceiling: () => 0, floor: () => 1, wall: [() => 2, () => 3] }
+      : { ceiling: () => false, floor: (x, y) => (x & 3) === 1 && (y & 3) === 2, wall: [() => true, (x, y) => ((x + y) & 1) === 0] };
+    const make = mc ? glyphFromMC : glyphFrom, half = mc ? x => x >> 1 : x => x >> 2;
+    for (const end of ['top', 'bottom']) {
+      for (let a = 0; a < 9; a++) for (let b = 0; b < 9; b++) {
+        add(make((x, y) => {
+          const s = half(x) ? b : a, h = RAY.height(s);
+          const isWall = end === 'top' ? y >= 8 - h : y < h;
+          return isWall ? px.wall[RAY.shade(s)](x, y) : (end === 'top' ? px.ceiling : px.floor)(x, y);
+        }), `${mc ? 'mc ' : ''}ray ${end} · ${RAY_STATE_NAMES[a]} | ${RAY_STATE_NAMES[b]}`);
+      }
+      region('ray ' + end);
+    }
+    EDGE_BLOCK_GLYPHS.slice(0, 4).forEach(([n, fn]) => add(glyphFrom(fn), 'line · ' + n));
+    region('lines');
+    EDGE_BLOCK_GLYPHS.slice(4).forEach(([n, fn]) => add(glyphFrom(fn), 'block · ' + n));
+    region('blocks');
+    i = 256; region('free');
+    return { glyphs, names, regions };
+  }
+
+  const EDGE_BLOCK_GLYPHS = [
+    ['left edge', (x) => x === 0], ['right edge', (x) => x === 7],
+    ['top edge', (x, y) => y === 0], ['bottom edge', (x, y) => y === 7],
+    ['upper half', (x, y) => y < 4], ['lower half', (x, y) => y >= 4],
+    ['left half', (x) => x < 4], ['right half', (x) => x >= 4],
+    ['quad TL', (x, y) => x < 4 && y < 4], ['quad TR', (x, y) => x >= 4 && y < 4],
+    ['quad BL', (x, y) => x < 4 && y >= 4], ['quad BR', (x, y) => x >= 4 && y >= 4],
+  ];
+
+  // A pair glyph: face pa above the boundary, pc below it. With a seam, the first row of the lower face
+  // is left dark (0 in either mode) — except in a cell's top row, so renderers can apply the same rule
+  // to every pixel without knowing where boundaries fall.
+  const pairFn = (row, b, pa, pc, seam) => (x, y) => {
+    const r = row(b, x);
+    return seam && y === r && y > 0 ? 0 : (y < r ? pa : pc)(x, y);
+  };
+
+  function buildPerspective(mode, persp, sets, outline) {
+    const P = PERSPECTIVES[persp], mc = mode === 'mc';
+    const glyphs = [], names = [], regions = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0, start = 0;
+    const add = (g, name) => { glyphs[i] = g; names[i++] = name; };
+    const region = name => { regions.push({ from: start, to: i - 1, name }); start = i; };
+    FONT_SRC.forEach((src, k) => add(parseGlyph(src), 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k])));
+    region('text');
+    const pairs = [];
+    for (const a of P.faces) for (const b of P.faces) if (a !== b) pairs.push([a, b]);
+    for (const setName of sets) {
+      const pat = f => (mc ? MC_SETS : SETS)[setName][P.key[f]], make = mc ? glyphFromMC : glyphFrom;
+      const row = mc ? (b, fx) => b.row(fx * 2) : (b, x) => b.row(x);
+      const label = (mc ? 'mc ' : '') + (outline ? 'outlined ' : '') + setName, fn = P.faceNames;
+      for (const f of P.solids) add(make(pat(f)), `${label} · ${fn[f]} face`);
+      for (const b of P.bounds) for (const [a, c] of pairs) {
+        add(make(pairFn(row, b, pat(a), pat(c), outline && a !== 'E' && c !== 'E')), `${label} · ${b.name} · ${fn[a]} over ${fn[c]}`);
+      }
+      if (P.edges) {
+        // Outlines where a block drops away: top faces with any of N/E/S/W, front faces with W/E.
+        const maxX = mc ? 3 : 7, off = mc ? 0 : false;
+        for (let e = 0; e < 16; e++) {
+          const on = [e & 1 && 'N', e & 2 && 'E', e & 4 && 'S', e & 8 && 'W'].filter(Boolean);
+          add(make((x, y) => ((e & 1) && y === 0) || ((e & 4) && y === 7) || ((e & 8) && x === 0) || ((e & 2) && x === maxX)
+            ? off : pat('T')(x, y)), `${label} · top · ${on.length ? 'edges ' + on.join('') : 'no edges'}`);
+        }
+        for (let e = 0; e < 4; e++) {
+          add(make((x, y) => ((e & 1) && x === 0) || ((e & 2) && x === maxX) ? off : pat('F')(x, y)),
+            `${label} · front · ${['no edges', 'edge W', 'edge E', 'edges WE'][e]}`);
+        }
+      }
+      region(setName);
+    }
+    for (const b of P.bounds) add(glyphFrom((x, y) => y === b.row(x)), `line · ${b.name}`);
+    EDGE_BLOCK_GLYPHS.slice(0, 4).forEach(([n, fn]) => add(glyphFrom(fn), 'line · ' + n));
+    region('lines');
+    EDGE_BLOCK_GLYPHS.slice(4).forEach(([n, fn]) => add(glyphFrom(fn), 'block · ' + n));
+    region('blocks');
+    i = 256; region('free');
+    return { glyphs, names, regions };
+  }
+
+  function buildIso(mode, sets, outline) {
+    const mc = mode === 'mc';
+    const glyphs = [], names = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0;
+    FONT_SRC.forEach((src, k) => {
+      glyphs[i] = parseGlyph(src);
+      names[i++] = 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k]);
+    });
+    for (const setName of sets) {
+      const set = (mc ? MC_SETS : SETS)[setName], make = mc ? glyphFromMC : glyphFrom;
+      const row = mc ? (b, fx) => b.row(fx * 2) : (b, x) => b.row(x);
+      const label = (mc ? 'mc ' : '') + (outline ? 'outlined ' : '') + setName;
+      for (const f of ['T', 'L', 'R']) {
+        glyphs[i] = make(set[f]);
+        names[i++] = `${label} · ${FACE_NAMES[f]} face`;
+      }
+      for (const b of BOUNDS) for (const [a, c] of PAIRS) {
+        glyphs[i] = make(pairFn(row, b, set[a], set[c], outline && a !== 'E' && c !== 'E'));
+        names[i++] = `${label} · ${b.name} · ${FACE_NAMES[a]} over ${FACE_NAMES[c]}`;
+      }
+    }
+    for (const b of BOUNDS) {
+      glyphs[i] = glyphFrom((x, y) => y === b.row(x));
+      names[i++] = `line · ${b.name}`;
+    }
+    [['left edge', (x) => x === 0], ['right edge', (x) => x === 7],
+     ['top edge', (x, y) => y === 0], ['bottom edge', (x, y) => y === 7],
+     ['upper half', (x, y) => y < 4], ['lower half', (x, y) => y >= 4],
+     ['left half', (x) => x < 4], ['right half', (x) => x >= 4],
+     ['quad TL', (x, y) => x < 4 && y < 4], ['quad TR', (x, y) => x >= 4 && y < 4],
+     ['quad BL', (x, y) => x < 4 && y >= 4], ['quad BR', (x, y) => x >= 4 && y >= 4],
+    ].forEach(([n, fn], k) => {
+      glyphs[i] = glyphFrom(fn);
+      names[i++] = (k < 4 ? 'line · ' : 'block · ') + n;
+    });
+    if (i !== 0xb6) throw new Error('layout drift: ended at ' + i.toString(16));
+    const regions = REGIONS.map(r => ({ ...r, name: r.name === 'smooth' ? sets[0] : r.name === 'brick' ? sets[1] : r.name }));
+    return { glyphs, names, regions };
+  }
+
+  // --------------------------------------------------------------- palette
+  const PALETTE = ['#000000', '#ffffff', '#68372b', '#70a4b2', '#6f3d86', '#588d43', '#352879', '#b8c76f',
+                   '#6f4f25', '#433900', '#9a6759', '#444444', '#6c6c6c', '#9ad284', '#6c5eb5', '#959595'];
+  const COLOR_NAMES = ['black', 'white', 'red', 'cyan', 'purple', 'green', 'blue', 'yellow',
+                       'orange', 'brown', 'light red', 'dark grey', 'grey', 'light green', 'light blue', 'light grey'];
+
+  // --------------------------------------------------------------- screens
+  const W = 320, H = 200;
+
+  function asciiToScreen(ch) {
+    const c = ch.toUpperCase().charCodeAt(0);
+    if (c >= 65 && c <= 90) return c - 64;
+    if (ch === '@') return 0;
+    if (ch === '[') return 27;
+    if (ch === ']') return 29;
+    if (c >= 32 && c <= 63) return c;
+    return 32;
+  }
+
+  // Decode a 40x25 screen the way the VIC does: in MC mode, colour RAM bit 3 makes a cell multicolor.
+  // opts: { mode, bg, mc1, mc2, romRows }. The bottom `romRows` rows come from the ROM font (see
+  // screenPrg): pass the 4K chargen ROM as `rom` for an exact picture; otherwise APEXSCII's own text
+  // glyphs stand in (inverted for reverse codes).
+  function screenRGB(chars, screen, color, opts, rom) {
+    const pal = PALETTE.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
+    const out = new Uint8ClampedArray(W * H * 4), mc = opts.mode === 'mc', firstRom = 25 - (opts.romRows || 0);
+    const romGlyph = code => {
+      if (rom) return rom.subarray(code * 8, code * 8 + 8);
+      const t = (code & 0x7f) < 0x40 ? chars[code & 0x3f] : new Uint8Array(8);
+      return code & 0x80 ? t.map(b => b ^ 0xff) : t;
+    };
+    for (let cy = 0; cy < 25; cy++) for (let cx = 0; cx < 40; cx++) {
+      const k = cy * 40 + cx, cr = color[k];
+      const g = cy >= firstRom ? romGlyph(screen[k]) : chars[screen[k]];
+      const multi = mc && (cr & 8);
+      const cols = multi ? [opts.bg, opts.mc1, opts.mc2, cr & 7] : [opts.bg, cr];
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+        const v = multi ? (g[y] >> (6 - 2 * (x >> 1))) & 3 : (g[y] >> (7 - x)) & 1;
+        const c = pal[cols[v]], p = ((cy * 8 + y) * W + cx * 8 + x) * 4;
+        out[p] = c[0]; out[p + 1] = c[1]; out[p + 2] = c[2]; out[p + 3] = 255;
+      }
+    }
+    return out;
+  }
+
+  // --------------------------------------------------------------- exports
+  function flatten(chars) {
+    const out = new Uint8Array(2048);
+    chars.forEach((g, i) => out.set(g, i * 8));
+    return out;
+  }
+  function charsetPrg(chars) {
+    const out = new Uint8Array(2050);
+    out[0] = 0x00; out[1] = 0x38; out.set(flatten(chars), 2);
+    return out;
+  }
+
+  // Self-contained runnable PRG for a 40x25 screen: BASIC "10 SYS2064", copies screen/colour/charset
+  // into place, points the VIC at $3800 and parks. Memory: $0A00 screen, $0E00 colour, $1200 charset.
+  // opts: { mode, bg, border, mc1, mc2, romRows }. Multicolor also sets $D022/$D023 and $D016 bit 4.
+  //
+  // With romRows > 0, a two-stage raster IRQ swaps $D018 every frame: APEXSCII ($1E) above, the ROM
+  // uppercase/graphics font ($14, VIC sees ROM at $1000) for the bottom rows. The swap is polled to
+  // the very start of the first ROM row's raster line, before the VIC fetches that line's glyphs.
+  // ROM rows should use colour RAM 0-7, so they stay hi-res in MC mode.
+  function screenPrg(chars, screen, color, opts) {
+    const { bg, border } = opts, ORG = 0x0810;
+    const SCR = 0x0a00, COL = 0x0e00, CHR = 0x1200, START = 0x0801, END = 0x1a00;
+    const split = (opts.romRows || 0) > 0;
+    const L = 51 + 8 * (25 - (opts.romRows || 0)); // first raster line of the ROM rows (PAL and NTSC)
+    const lo = v => v & 0xff, hi = v => v >> 8;
+    const labels = {};
+    // Two passes: the first records label addresses, the second fills in forward references.
+    const emit = () => {
+      const c = [], pc = () => ORG + c.length, mark = n => { labels[n] = pc(); };
+      const at = n => labels[n] || 0, rel = n => (at(n) - (pc() + 2)) & 0xff;
+      const setVec = n => c.push(0xa9, lo(at(n)), 0x8d, 0x14, 0x03, 0xa9, hi(at(n)), 0x8d, 0x15, 0x03); // $0314/5 = n
+      c.push(
+        0xa9, border & 15, 0x8d, 0x20, 0xd0,   // LDA #border : STA $D020
+        0xa9, bg & 15, 0x8d, 0x21, 0xd0,       // LDA #bg     : STA $D021
+        0xa9, 0x80, 0x8d, 0x91, 0x02);         // LDA #$80    : STA $0291 (lock shift+C= charset switch)
+      if (opts.mode === 'mc') c.push(
+        0xa9, opts.mc1 & 15, 0x8d, 0x22, 0xd0, // LDA #mc1    : STA $D022
+        0xa9, opts.mc2 & 15, 0x8d, 0x23, 0xd0, // LDA #mc2    : STA $D023
+        0xa9, 0xd8, 0x8d, 0x16, 0xd0);         // LDA #$D8    : STA $D016 (multicolor on)
+      c.push(0xa2, 0x00);                      // LDX #0
+      mark('copy');
+      for (let p = 0; p < 4; p++) c.push(0xbd, 0x00, hi(SCR) + p, 0x9d, 0x00, 0x04 + p); // LDA src,X : STA dst,X
+      for (let p = 0; p < 4; p++) c.push(0xbd, 0x00, hi(COL) + p, 0x9d, 0x00, 0xd8 + p);
+      for (let p = 0; p < 8; p++) c.push(0xbd, 0x00, hi(CHR) + p, 0x9d, 0x00, 0x38 + p);
+      c.push(0xe8);                                    // INX
+      c.push(0xd0, rel('copy'));                       // BNE copy
+      c.push(0xa9, 0x1e, 0x8d, 0x18, 0xd0);            // LDA #$1E : STA $D018
+      if (split) {
+        c.push(0x78);                                  // SEI
+        c.push(0xa9, 0x7f, 0x8d, 0x0d, 0xdc);          // LDA #$7F : STA $DC0D (CIA timer IRQs off)
+        c.push(0xad, 0x0d, 0xdc);                      // LDA $DC0D (ack)
+        c.push(0xa9, 0x01, 0x8d, 0x1a, 0xd0);          // LDA #1 : STA $D01A (raster IRQ on)
+        c.push(0xad, 0x11, 0xd0, 0x29, 0x7f, 0x8d, 0x11, 0xd0); // clear raster bit 8
+        c.push(0xa9, L - 2, 0x8d, 0x12, 0xd0);         // first IRQ two lines above the split
+        setVec('split');
+        c.push(0x58);                                  // CLI
+      }
+      mark('park');
+      c.push(0x4c, lo(at('park')), hi(at('park')));    // JMP park
+      if (split) {
+        mark('split');
+        c.push(0xa9, L, 0xa2, 0x14);                   // LDA #L : LDX #$14
+        mark('wait');
+        c.push(0xcd, 0x12, 0xd0);                      // CMP $D012
+        c.push(0xd0, rel('wait'));                     // BNE wait
+        c.push(0x8e, 0x18, 0xd0);                      // STX $D018 (ROM font from here down)
+        c.push(0xa9, 0x00, 0x8d, 0x12, 0xd0);          // next IRQ at line 0
+        setVec('top');
+        c.push(0xa9, 0xff, 0x8d, 0x19, 0xd0);          // ack VIC IRQ
+        c.push(0x4c, 0x81, 0xea);                      // JMP $EA81 (restore regs, RTI)
+        mark('top');
+        c.push(0xa9, 0x1e, 0x8d, 0x18, 0xd0);          // APEXSCII above the split
+        c.push(0xa9, L - 2, 0x8d, 0x12, 0xd0);
+        setVec('split');
+        c.push(0xa9, 0xff, 0x8d, 0x19, 0xd0);
+        c.push(0x4c, 0x31, 0xea);                      // JMP $EA31 (KERNAL keyboard/jiffy once a frame)
+      }
+      return c;
+    };
+    emit();
+    const code = emit();
+    if (ORG + code.length > SCR) throw new Error('PRG code overruns screen data');
+    const mem = new Uint8Array(END - START);
+    const put = (addr, bytes) => mem.set(bytes, addr - START);
+    put(0x0801, [0x0b, 0x08, 0x0a, 0x00, 0x9e, 0x32, 0x30, 0x36, 0x34, 0x00, 0x00, 0x00]);
+    put(ORG, code);
+    put(SCR, screen);
+    put(COL, color.map(c => c & 15));
+    put(CHR, flatten(chars));
+    const out = new Uint8Array(mem.length + 2);
+    out[0] = 0x01; out[1] = 0x08; out.set(mem, 2);
+    return out;
+  }
+
+  const hex = (v, w = 2) => '$' + v.toString(16).toUpperCase().padStart(w, '0');
+  function charsetAsm(chars, names) {
+    const lines = ['; APEXSCII character set — 256 glyphs x 8 bytes', '; load/copy to a 2K boundary, e.g. $3800 (VIC $D018 = $1E)', 'apexscii:'];
+    chars.forEach((g, i) => lines.push(`    .byte ${Array.from(g, b => hex(b)).join(',')}  ; ${hex(i)} ${names[i] || ''}`));
+    return lines.join('\n') + '\n';
+  }
+  function screenAsm(screen, color, label = 'screen') {
+    const out = ['; APEXSCII screen — 40x25 screen codes then colour RAM values', `${label}_codes:`];
+    for (let r = 0; r < 25; r++) out.push('    .byte ' + Array.from(screen.slice(r * 40, r * 40 + 40), b => hex(b)).join(','));
+    out.push(`${label}_color:`);
+    for (let r = 0; r < 25; r++) out.push('    .byte ' + Array.from(color.slice(r * 40, r * 40 + 40), b => hex(b)).join(','));
+    return out.join('\n') + '\n';
+  }
+
+  // -------------------------------------------------------------- specimens
+  // A specimen sheet shows a whole set on the C64: the 256 glyphs as a 16x16 grid with hex labels
+  // (columns spaced for legibility), the layout regions underneath, and a status row in the ROM
+  // font, so the raster split is exercised too. Text stays below colour 8, so it is hi-res in MC.
+  function specimen(persp = 'iso', mode = 'hires', theme = 'classic', style = {}) {
+    const { glyphs, regions } = buildDefault(mode, persp, theme, style), mc = mode === 'mc';
+    const ink = mc ? { title: 7, sub: 1, label: 3, legend: 1 } : { title: 7, sub: 15, label: 12, legend: 15 };
+    const screen = new Uint8Array(1000).fill(0x20), color = new Uint8Array(1000).fill(1);
+    const text = (row, col, s, c, rev) => {
+      for (let k = 0; k < s.length && col + k < 40; k++) {
+        screen[row * 40 + col + k] = asciiToScreen(s[k]) | (rev ? 0x80 : 0);
+        color[row * 40 + col + k] = c;
+      }
+    };
+    const centre = (row, s, c, rev) => text(row, (40 - s.length) >> 1, s, c, rev);
+    const HEX = '0123456789ABCDEF';
+    centre(0, 'APEXSCII ' + PERSPECTIVES[persp].name.toUpperCase().replace('°', ''), ink.title);
+    centre(1, (theme === 'classic' ? '' : THEMES[theme].name.toUpperCase() + '  ') + (style.outline ? 'OUTLINED  ' : '') +
+      (mc ? 'MULTICOLOR 4X8' : 'HI-RES 8X8'), ink.sub);
+    for (let k = 0; k < 16; k++) text(3, 7 + 2 * k, HEX[k], ink.label);
+    for (let r = 0; r < 16; r++) {
+      text(4 + r, 3, HEX[r] + '0', ink.label);
+      for (let k = 0; k < 16; k++) {
+        const code = r * 16 + k, at = (4 + r) * 40 + 7 + 2 * k, region = regions.find(g => code >= g.from && code <= g.to).name;
+        screen[at] = code;
+        // MC slots use green as the cell colour; hi-res glyphs: white text, green sets, grey line art.
+        const hires = region === 'text' ? 1 : region === 'lines' || region === 'blocks' ? (mc ? 7 : 15) : 13;
+        color[at] = mc && isMCSlot(code, persp) ? 8 | 5 : hires;
+      }
+    }
+    // Region legend, wrapped over two rows.
+    const items = regions.map(g => `${g.name.toUpperCase()} ${g.from.toString(16).toUpperCase().padStart(2, '0')}-${g.to.toString(16).toUpperCase()}`);
+    const lines = [''];
+    for (const it of items) {
+      const cur = lines[lines.length - 1];
+      if ((cur ? cur.length + 2 : 0) + it.length > 38) lines.push(it); else lines[lines.length - 1] = cur ? cur + '  ' + it : it;
+    }
+    lines.slice(0, 3).forEach((l, i) => centre(21 + i, l, ink.legend)); // rows 21-23; the ROM row is 24
+    const tag = ' ROM FONT ', rest = ' STATUS ROW', start = (40 - tag.length - rest.length) >> 1;
+    text(24, start, tag, 7, true);
+    text(24, start + tag.length, rest, 7);
+    return { chars: glyphs, screen, color, opts: { mode, bg: 0, border: 0, mc1: 12, mc2: 11, romRows: 1 } };
+  }
+  const specimenPrg = (persp, mode, theme, style) => { const s = specimen(persp, mode, theme, style); return screenPrg(s.chars, s.screen, s.color, s.opts); };
+
+  return {
+    W, H, PALETTE, COLOR_NAMES, REGIONS, PERSPECTIVES, THEMES, ANIMATIONS, SETS, MC_SETS, BOUNDS, B45, PAIRS, FACE_NAMES, RAY,
+    glyphFrom, glyphFromMC, buildDefault, layout, isMCSlot, asciiToScreen,
+    screenRGB, screenPrg, screenAsm, flatten, charsetPrg, charsetAsm, hex, specimen, specimenPrg,
+  };
+});
+
+</script>
+<script>
+/*
+ * APEX isometric dungeon: the reference for dungeon maps and the hero's movement. Integer maths only,
+ * so a 6502 port that follows the same steps lands on exactly the same position every frame.
+ *
+ *   - the map is square tiles: 0 void, 1 floor, 2 wall; outside the map is void. A tile can also carry
+ *     a decoration (a crack in the floor, a torch on a wall), which only changes how it looks
+ *   - positions are 8.8 fixed point in tiles (256 = one tile); x runs down-right on the screen,
+ *     y down-left (isometric 2:1: a tile is a 32x16 pixel diamond)
+ *   - one tick per 50 Hz frame; input is the joystick's bits: 1 up, 2 down, 4 left, 8 right
+ *   - the hero walks the 8 screen directions at one speed, and only on floor
+ *
+ * parse(text) reads a map; hero(map) makes a hero at its start; tick(map, h, input) moves it one
+ * frame; screen(h) is where it stands in screen pixels.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXISO = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const TILE = 256;
+  const VOID = 0, FLOOR = 1, WALL = 2;
+  // The hero's square on the floor: RADIUS each way from its position.
+  const RADIUS = 64;
+  // A step per frame for each joystick direction (by its bits). Screen left and right move along both
+  // axes, 2 pixels a frame; screen up and down 1 pixel a frame; the diagonals along one axis. All are
+  // about 22/256 of a tile.
+  const STEP = 16, DIAG = 22;
+  const DIRS = [];
+  DIRS[1] = [-STEP, -STEP]; DIRS[2] = [STEP, STEP]; DIRS[4] = [-STEP, STEP]; DIRS[8] = [STEP, -STEP];
+  DIRS[5] = [-DIAG, 0]; DIRS[9] = [0, -DIAG]; DIRS[6] = [0, DIAG]; DIRS[10] = [DIAG, 0];
+
+  // Map text: one character per tile, '#' wall, 't' wall with a torch, '.' floor, ',' cracked floor,
+  // 'P' the start (floor); anything else is void. Lines starting with ';' are comments; the first
+  // names the map.
+  function parse(text) {
+    const lines = text.replace(/\r/g, '').split('\n');
+    const name = (lines.find(l => l.startsWith(';')) || '; dungeon').slice(1).trim();
+    const rows = lines.filter(l => !l.startsWith(';') && l.length);
+    const h = rows.length, w = Math.max(...rows.map(r => r.length));
+    const tiles = new Uint8Array(w * h), deco = new Uint8Array(w * h);
+    let start = null;
+    rows.forEach((r, y) => {
+      for (let x = 0; x < w; x++) {
+        const ch = r[x] || ' ';
+        tiles[y * w + x] = '#t'.includes(ch) ? WALL : '.,P'.includes(ch) ? FLOOR : VOID;
+        deco[y * w + x] = 't,'.includes(ch) ? 1 : 0;
+        if (ch === 'P') start = { x, y };
+      }
+    });
+    if (!start) throw new Error('map has no P');
+    return { name, w, h, tiles, deco, start };
+  }
+
+  const inside = (M, tx, ty) => tx >= 0 && ty >= 0 && tx < M.w && ty < M.h;
+  const tileAt = (M, tx, ty) => (inside(M, tx, ty) ? M.tiles[ty * M.w + tx] : VOID);
+  const decoAt = (M, tx, ty) => (inside(M, tx, ty) ? M.deco[ty * M.w + tx] : 0);
+  // Is the hero's square at (x, y) all on floor?
+  function clear(M, x, y) {
+    for (const ty of [(y - RADIUS) >> 8, (y + RADIUS - 1) >> 8])
+      for (const tx of [(x - RADIUS) >> 8, (x + RADIUS - 1) >> 8]) if (tileAt(M, tx, ty) !== FLOOR) return false;
+    return true;
+  }
+
+  function hero(M) {
+    return { x: M.start.x * TILE + TILE / 2, y: M.start.y * TILE + TILE / 2, facing: 1, frame: 0, moving: false };
+  }
+
+  // One frame: step along x, then along y, each only if the square stays on floor.
+  function tick(M, h, input) {
+    const d = DIRS[input & 15];
+    const x0 = h.x, y0 = h.y;
+    if (d) {
+      if (clear(M, h.x + d[0], h.y)) h.x += d[0];
+      if (clear(M, h.x, h.y + d[1])) h.y += d[1];
+      const sdx = d[0] - d[1]; // screen x direction
+      if (sdx) h.facing = sdx > 0 ? 1 : -1;
+    }
+    h.moving = h.x !== x0 || h.y !== y0;
+    h.frame = h.moving ? (h.frame + 1) & 15 : 0;
+    return h;
+  }
+
+  // Where the hero stands on the screen's isometric plane, in whole pixels.
+  const screen = h => ({ x: (h.x - h.y) >> 4, y: (h.x + h.y) >> 5 });
+
+  return { TILE, VOID, FLOOR, WALL, RADIUS, DIRS, parse, tileAt, decoAt, clear, hero, tick, screen };
+});
+
+</script>
+<script>
+/*
+ * The C64 isometric dungeon view: what the screen shows each frame, exactly as the engine is to show it.
+ *
+ * Multicolor characters, 38 columns by 24 rows, scrolled in both directions by the VIC's fine scroll so
+ * the hero stays at the centre (a hardware sprite that never moves). Tiles are 32x16 pixel diamonds;
+ * walls are cubes 16 pixels high. Every character of the screen shows the part of the dungeon under
+ * it, and with tiles on a 2:1 grid that part depends on at most 4 tiles: which 4 depends on where the
+ * character sits on the grid (its phase, 0-3), and the character is a table lookup by phase and those
+ * tiles' looks (void, floor, cracked floor, wall, wall with a torch). Textures are laid out on each
+ * tile (flagstones, brick courses along the walls), so the phase also fixes which part of a tile a
+ * character shows. Only the cases a map uses get characters, at most 128.
+ *
+ * Light, in two parts that never change while the dungeon scrolls under them:
+ *   - colour RAM gives bit pair 11 (the lit stone) its colour in rings around the hero: yellow, red, black
+ *   - each character comes twice: as itself, and half-lit (its lit stone thinned by a dither). The
+ *     screen codes' bit 7 picks the half-lit one, again in rings, fixed on the screen
+ * Together they make five steps from full light to dark, blended by ordered dithering. The other bit
+ * pairs are fixed colours: $D021 black (void, floor joints), $D022 white (torch flames, which glow in
+ * the dark), $D023 dark grey (mortar, so walls stay faintly visible in the dark).
+ *
+ * Works in Node and in the browser (global APEXISOVIEW, needing APEXSCII and APEXISO).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('../../apexscii/apexscii.js'), require('../../core/iso.js'));
+  else root.APEXISOVIEW = factory(root.APEXSCII, root.APEXISO);
+})(typeof self !== 'undefined' ? self : this, function (APEXSCII, ISO) {
+  'use strict';
+
+  const WALL_H = 16; // a wall's height in pixels
+  const COLS = 38, ROWS = 24; // what the 38-column, 24-row screen shows
+  // The visible window: X 7-310, Y 4-195 of the 320x200 display. The hero's feet are always at HERO.
+  const HERO = { x: 158, y: 112 };
+  const COLORS = { border: 0, bg: 0, mc1: 1, mc2: 11 }; // $D020, $D021 void and joints, $D022 flames, $D023 mortar
+  // The light's steps, brightest first: [colour RAM, half-lit]. A character's step is its distance
+  // from the light (vertical distance counts double: the floor is squashed 2:1), past FULL, in steps
+  // of STEP pixels, dithered with a 2x2 ordered pattern.
+  const LIGHT = { center: { x: HERO.x, y: HERO.y - 10 }, full: 52, step: 20, steps: [[7, 0], [7, 1], [2, 0], [2, 1], [0, 0]] };
+
+  // ------------------------------------------------------------------ geometry
+  // A tile's look: 0 void, 1 floor, 2 cracked floor, 3 wall, 4 wall with a torch.
+  const lookAt = (M, tx, ty) => {
+    const k = ISO.tileAt(M, tx, ty), d = ISO.decoAt(M, tx, ty);
+    return k === ISO.FLOOR ? 1 + d : k === ISO.WALL ? 3 + d : 0;
+  };
+  // Screen-plane pixel (sx, sy) -> world (in tiles): sx = 16 (wx - wy), sy = 8 (wx + wy).
+  const inv = (sx, sy) => [(sx / 16 + sy / 8) / 2, (sy / 8 - sx / 16) / 2];
+  // What's at a screen-plane point: the nearest wall face, else the floor. { f: E void, G floor,
+  // T wall top, L wall's lit side, R wall's shaded side; t: the tile; look; where on the tile: a, b
+  // across a floor or top, along and h (height) up a side }
+  function surface(look, sx, sy) {
+    const [wx, wy] = inv(sx, sy), bx = Math.floor(wx), by = Math.floor(wy);
+    let best = null, depth = -Infinity;
+    for (let ty = by - 1; ty <= by + 3; ty++) for (let tx = bx - 1; tx <= bx + 3; tx++) {
+      const lk = look(tx, ty);
+      if (lk < 3 || tx + ty <= depth) continue;
+      const t = tx + ',' + ty, [ux, uy] = inv(sx, sy + WALL_H);
+      let s = null;
+      if (Math.floor(ux) === tx && Math.floor(uy) === ty) s = { f: 'T', a: ux - tx, b: uy - ty };
+      else {
+        const u = sx / 16 + ty + 1, hu = 8 * (u + ty + 1) - sy; // on the lower-left edge's face?
+        if (u >= tx && u < tx + 1 && hu > 0 && hu <= WALL_H) s = { f: 'L', along: u - tx, h: hu };
+        const v = tx + 1 - sx / 16, hv = 8 * (tx + 1 + v) - sy; // the lower-right edge's?
+        if (!s && v >= ty && v < ty + 1 && hv > 0 && hv <= WALL_H) s = { f: 'R', along: ty + 1 - v, h: hv };
+      }
+      if (s) { best = Object.assign(s, { t, look: lk }); depth = tx + ty; }
+    }
+    if (best) return best;
+    const lk = look(bx, by);
+    return lk ? { f: 'G', t: bx + ',' + by, look: lk, a: wx - bx, b: wy - by } : { f: 'E', t: bx + ',' + by, look: 0 };
+  }
+
+  // A screen-plane character (cx, cy) covers pixels 8cx.. x 8cy..; its phase and anchor tile.
+  const phaseOf = (cx, cy) => (cx + 2 * cy) & 3;
+  const anchorOf = (cx, cy) => [(2 * (cx + 2 * cy) + 3) >> 3, (2 * (2 * cy - cx) + 1) >> 3];
+  // The character's fat pixel samples.
+  const sample = (cx, cy, f, y) => [8 * cx + 2 * f + 1, 8 * cy + y + 0.5];
+
+  // REL[phase]: the four tiles (from the anchor) that can show in a character of that phase, found by
+  // changing one tile at a time; the first two can show as floor or void too, the last two only as walls.
+  const REL = [0, 1, 2, 3].map(p => {
+    const [ax, ay] = anchorOf(p, 0), floors = [], walls = [];
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+      const kinds = new Set();
+      for (const k of [0, 1, 3]) {
+        const look = (x, y) => (x === ax + dx && y === ay + dy ? k : 1);
+        let s = '';
+        for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) s += surface(look, ...sample(p, 0, f, y)).f;
+        kinds.add(s);
+      }
+      if (kinds.size === 3) floors.push([dx, dy]);
+      else if (kinds.size === 2) walls.push([dx, dy]);
+    }
+    if (floors.length !== 2 || walls.length !== 2) throw new Error(`phase ${p}: expected 2 floor and 2 wall tiles`);
+    return [...floors, ...walls];
+  });
+  // A character's pattern: the looks of its REL tiles, l0 + 5 l1 + 25 w2 + 75 w3 (0-224), where w is
+  // 0 not a wall, 1 wall, 2 wall with a torch.
+  const PATTERNS = 225;
+  const wallOf = lk => (lk >= 3 ? lk - 2 : 0);
+  function patternOf(M, cx, cy) {
+    const p = phaseOf(cx, cy), [ax, ay] = anchorOf(cx, cy), r = REL[p];
+    const lk = i => lookAt(M, ax + r[i][0], ay + r[i][1]);
+    return lk(0) + 5 * lk(1) + 25 * wallOf(lk(2)) + 75 * wallOf(lk(3));
+  }
+
+  // ------------------------------------------------------------------ textures
+  // Fat pixels: 0 black, 1 flame ($D022), 2 mortar ($D023), 3 lit stone (colour RAM). Each surface
+  // is split into regions (a floor tile, a wall's bricks in two courses along its sides) and a joint
+  // or mortar line is drawn where a region meets the one above it, or beside it on a wall.
+  function region(s) {
+    switch (s.f) {
+      case 'G': case 'T': return s.f + s.t;
+      case 'L': case 'R': {
+        const course = Math.floor((s.h - 0.5) / 8);
+        return `${s.f}${s.t}:${course}:${Math.floor(2 * s.along + (course & 1) / 2)}`;
+      }
+      default: return 'E';
+    }
+  }
+  function shade(s, f, y, left, up) {
+    const id = region(s), meets = n => n && region(n) !== id;
+    if (s.f === 'E') return 0;
+    if (s.f === 'G') {
+      if (up && up.f === 'G' && meets(up)) return 0; // a joint between tiles
+      if (up && (up.f === 'L' || up.f === 'R')) return 0; // the shadow at a wall's foot
+      if (s.look === 2 && Math.abs(s.a - 0.5 - (s.b - 0.5) * 0.6) < 0.05 && s.b > 0.15 && s.b < 0.85) return 0; // a crack
+      if (s.look === 2 && s.a > 0.6 && s.b < 0.35) return (f + y) & 1 ? 0 : 3; // and broken stone
+      return 3;
+    }
+    if (s.f === 'T') return [left, up].some(meets) || (f + y) & 1 ? 2 : 3; // half mortar: darker than the floor
+    // a wall's side: a torch, else bricks
+    if (s.look === 4) {
+      const c = Math.abs(s.along - 0.5) * 16; // pixels from the middle
+      if (c < 2 && s.h >= 7 && s.h < 12) return 1;
+      if (c < 1 && s.h >= 12 && s.h < 13) return 1;
+      if (c < 2 && s.h >= 4 && s.h < 7) return 0;
+    }
+    if ([left, up].some(n => n && n.f === s.f && n.t === s.t && meets(n))) return 2;
+    return s.f === 'R' && y & 1 ? 0 : 3;
+  }
+  // Drawn tiles instead: a map can bring art (M.art), fat pixel grids for each look of tile, placed
+  // on the screen plane with each tile, so every character is cut from the drawn tiles under it.
+  //   floor, cracked: 16 x 16, the floor diamond, its top corner at the middle of the first row
+  //   wall, torch: { top: 16 x 16 (the same diamond, a wall's height up), left, right: 8 x 16 (the
+  //   faces, column across from the left as seen, row down from the top edge) }
+  // Rows are strings of '0'-'3' (other characters: 0). A floor pixel just below a wall's side is in
+  // its shadow (0), as with the textures.
+  function artShade(art, s, sx, sy, up) {
+    if (s.f === 'E') return 0;
+    if (s.f === 'G' && up && (up.f === 'L' || up.f === 'R')) return 0;
+    const [tx, ty] = s.t.split(',').map(Number);
+    const px = v => (v >= '0' && v <= '3' ? +v : 0);
+    const diamond = (rows, lift) => {
+      const c = Math.floor((sx - 16 * (tx - ty) + 16) / 2), r = Math.floor(sy - 8 * (tx + ty) + lift);
+      return px((rows[r] || '')[c]);
+    };
+    if (s.f === 'G') return diamond(art[s.look === 2 ? 'cracked' : 'floor'], 0);
+    const w = art[s.look === 4 ? 'torch' : 'wall'];
+    if (s.f === 'T') return diamond(w.top, WALL_H);
+    const c = Math.min(7, Math.floor(s.along * 8)), r = Math.min(15, Math.floor(WALL_H - s.h));
+    return px((s.f === 'L' ? w.left : w.right)[r][c]);
+  }
+
+  // Half-lit: lit stone thinned to a checkerboard of fat pixels.
+  const halfLit = (v, f, y) => (v === 3 && (f + y) & 1 ? 0 : v);
+
+  // The character for a phase and pattern: 8 bytes, as itself and half-lit.
+  function draw(p, n, art) {
+    const [ax, ay] = anchorOf(p, 0), lk = [n % 5, Math.floor(n / 5) % 5];
+    const w = [Math.floor(n / 25) % 3, Math.floor(n / 75)].map(v => (v ? v + 2 : 1));
+    const looks = [...lk, ...w];
+    const look = (x, y) => { for (let i = 0; i < 4; i++) if (x === ax + REL[p][i][0] && y === ay + REL[p][i][1]) return looks[i]; return 1; };
+    const s = [];
+    for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) s.push(surface(look, ...sample(p, 0, f, y)));
+    const v = [];
+    for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) {
+      const here = s[y * 4 + f], left = f ? s[y * 4 + f - 1] : null, up = y ? s[(y - 1) * 4 + f] : null;
+      v.push(art ? artShade(art, here, ...sample(p, 0, f, y), up) : shade(here, f, y, left, up));
+    }
+    const bytes = half => Array.from({ length: 8 }, (_, y) => {
+      let b = 0;
+      for (let f = 0; f < 4; f++) b |= (half ? halfLit(v[y * 4 + f], f, y) : v[y * 4 + f]) << (6 - 2 * f);
+      return b;
+    });
+    return { full: bytes(false), half: bytes(true) };
+  }
+
+  // ------------------------------------------------------------------ a map's characters
+  // Characters 0-127 are the patterns the map uses (sharing any that look the same); 128-255 are the
+  // same, half-lit. codes[phase * 225 + pattern] is a pattern's character, -1 where the map never
+  // shows it.
+  const prepared = new WeakMap();
+  function prepare(M) {
+    if (prepared.has(M)) return prepared.get(M);
+    const used = new Set();
+    // every character the map can show, with a margin for the walls' height
+    for (let cy = -2; cy <= M.w + M.h + 4; cy++) for (let cx = -2 * M.h - 4; cx <= 2 * M.w + 4; cx++)
+      used.add(phaseOf(cx, cy) * PATTERNS + patternOf(M, cx, cy));
+    for (let p = 0; p < 4; p++) used.add(p * PATTERNS); // all void
+    const chars = Array.from({ length: 256 }, () => new Uint8Array(8)), codes = new Int16Array(4 * PATTERNS).fill(-1);
+    const byLook = new Map();
+    for (const i of [...used].sort((a, b) => a - b)) {
+      const g = draw(Math.floor(i / PATTERNS), i % PATTERNS, M.art), key = g.full.join(',');
+      if (!byLook.has(key)) {
+        const code = byLook.size;
+        if (code >= 128) throw new Error(`${M.name}: more than 128 characters`);
+        chars[code] = Uint8Array.from(g.full);
+        chars[code + 128] = Uint8Array.from(g.half);
+        byLook.set(key, code);
+      }
+      codes[i] = byLook.get(key);
+    }
+    const P = {
+      chars, codes, count: byLook.size,
+      codeAt: (cx, cy) => {
+        const c = codes[phaseOf(cx, cy) * PATTERNS + patternOf(M, cx, cy)];
+        if (c < 0) throw new Error(`no character for ${cx},${cy}`);
+        return c;
+      },
+    };
+    prepared.set(M, P);
+    return P;
+  }
+
+  // ------------------------------------------------------------------ the light
+  // Per character of the 40 x 25 screen: LIGHT_RAM its colour RAM, LIGHT_HALF 1 for half-lit.
+  const LIGHT_RAM = new Uint8Array(1000), LIGHT_HALF = new Uint8Array(1000);
+  const ORDER = [[0, 0.5], [0.75, 0.25]];
+  for (let r = 0; r < 25; r++) for (let c = 0; c < 40; c++) {
+    const dx = 8 * c + 8 - LIGHT.center.x, dy = 2 * (8 * r + 4 - LIGHT.center.y), d = Math.hypot(dx, dy);
+    const step = Math.max(0, Math.min(LIGHT.steps.length - 1, Math.floor((d - LIGHT.full) / LIGHT.step + 1 - ORDER[r & 1][c & 1])));
+    [LIGHT_RAM[r * 40 + c], LIGHT_HALF[r * 40 + c]] = LIGHT.steps[step];
+  }
+
+  // ------------------------------------------------------------------ scrolling
+  // The camera is the screen-plane pixel at the display's top left. The VIC shows screen matrix
+  // column c from X = 8c + xs and row r from Y = 8r + ys - 3 (xs, ys: the fine scroll registers), so
+  // the matrix starts at screen-plane character (cX, cY).
+  function scroll(h) {
+    const s = ISO.screen(h), camX = s.x - HERO.x, camY = s.y - HERO.y;
+    const xs = -camX & 7, ys = (3 - camY) & 7;
+    return { camX, camY, xs, ys, cX: (camX + xs) >> 3, cY: (camY + ys - 3) >> 3 };
+  }
+
+  // ------------------------------------------------------------------ the hero's sprite
+  // 12 fat pixels by 21 rows, facing right: a armour (sprite colour), c cloak ($D025), w steel and
+  // skin ($D026).
+  const SPRITE = { mc1: 2, mc2: 1, color: 15 };
+  const BODY = [
+    '....aaaa....', '...aaaaaa...', '...awwwwa...', '...aaaaaa...', '....aaaa....', '..cccaaccc..',
+    '.ccaaaaaacc.', '.caaaaaaaac.', '.caawaaaaacw', '.caaaaaaaacw', '..cawaaaa.cw', '..ccaaaacc.w',
+    '...aaaaaa..w', '...ccccccc..',
+  ];
+  const LEGS = {
+    stand: ['...aa..aa...', '...aa..aa...', '...aa..aa...', '...aa..aa...', '...aa..aa...', '..www..www..', '............'],
+    walk1: ['...aa...aa..', '..aa....aa..', '..aa.....aa.', '.aa......aa.', '.www.....www', '............', '............'],
+    walk2: ['....aaaa....', '....aaa.....', '.....aa.....', '.....aa.....', '....www.....', '............', '............'],
+  };
+  const FRAMES = {};
+  for (const [name, legs] of Object.entries(LEGS)) {
+    const rows = [...BODY, ...legs].map(r => Array.from(r, ch => ({ c: 1, a: 2, w: 3 }[ch] || 0)));
+    while (rows[rows.length - 1].every(v => !v)) rows.pop();
+    while (rows.length < 21) rows.unshift(new Array(12).fill(0));
+    FRAMES[name] = rows.slice(-21);
+  }
+  const spriteFrame = h => (!h.moving ? 'stand' : (h.frame >> 2) & 1 ? 'walk2' : 'walk1');
+
+  // ------------------------------------------------------------------ a frame
+  const PAL = APEXSCII.PALETTE.map(hx => [1, 3, 5].map(i => parseInt(hx.substr(i, 2), 16)));
+  // The dungeon around the hero h, lit, through put(x, y, rgb); returns the scroll.
+  function background(M, h, put) {
+    const P = prepare(M), sc = scroll(h);
+    for (let r = 0; r < 25; r++) for (let c = 0; c < 39; c++) {
+      const g = P.chars[P.codeAt(sc.cX + c, sc.cY + r) | (LIGHT_HALF[r * 40 + c] << 7)];
+      const cols = [COLORS.bg, COLORS.mc1, COLORS.mc2, LIGHT_RAM[r * 40 + c]];
+      for (let y = 0; y < 8; y++) {
+        const Y = 8 * r + y + sc.ys - 3;
+        if (Y < 0 || Y >= 200) continue;
+        for (let x = 0; x < 8; x++) {
+          const X = 8 * c + x + sc.xs;
+          if (X < 320) put(X, Y, PAL[cols[(g[y] >> (6 - 2 * (x >> 1))) & 3]]);
+        }
+      }
+    }
+    return sc;
+  }
+  // What the screen shows: { pixels (320x200 RGBA, the border drawn), scroll }.
+  function frame(M, h) {
+    const out = new Uint8ClampedArray(320 * 200 * 4);
+    const put = (x, y, c) => { const i = (y * 320 + x) * 4; out[i] = c[0]; out[i + 1] = c[1]; out[i + 2] = c[2]; out[i + 3] = 255; };
+    const sc = background(M, h, put);
+    // the hero: feet at HERO, centred across
+    const f = FRAMES[spriteFrame(h)], scols = [null, SPRITE.mc1, SPRITE.color, SPRITE.mc2];
+    for (let r = 0; r < 21; r++) for (let c = 0; c < 12; c++) {
+      const v = f[r][h.facing < 0 ? 11 - c : c];
+      if (v) for (const dx of [0, 1]) put(HERO.x - 12 + 2 * c + dx, HERO.y - 20 + r, PAL[scols[v]]);
+    }
+    for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++) if (x < 7 || x >= 311 || y < 4 || y >= 196) put(x, y, PAL[COLORS.border]);
+    return { pixels: out, scroll: sc };
+  }
+
+  return { WALL_H, COLS, ROWS, HERO, COLORS, LIGHT, LIGHT_RAM, LIGHT_HALF, REL, PATTERNS, lookAt,
+    phaseOf, anchorOf, patternOf, surface, prepare, scroll, SPRITE, FRAMES, spriteFrame, PAL, background, frame };
+});
+
+</script>
+<script>
+/*
+ * APEX Drowned Crypt: the reference for a small isometric action game on the dungeon engine (core/iso.js),
+ * a demo of what the engine can make. An investigator with a pistol clears a drowned crypt of the
+ * creatures that sleep in it. Integer maths only, so a 6502 port that follows the same steps gets
+ * exactly the same game every frame.
+ *
+ *   - the map is an iso map (core/iso.js) whose floor can also carry creatures: 'd' a drowned one,
+ *     's' a spawn
+ *   - one tick per 50 Hz frame; input is the joystick's bits: 1 up, 2 down, 4 left, 8 right, 16 fire
+ *   - the hero walks as in core/iso.js. Holding fire plants its feet: the joystick then turns it, in
+ *     the same 8 directions, and it fires the way it faces. A bullet flies straight until it hits a
+ *     wall, a creature, or its range. Up to SLOTS.bullets at a time, one every COOL ticks while fire
+ *     is held
+ *   - a creature wakes when the hero comes within WAKE of it (each axis), and from then on comes for
+ *     the hero, the drowned at a shamble and the spawn in lurches. Touching the hero costs it a heart
+ *     (then INVULN ticks of safety); shot, a creature flashes, and after its last hit it dies
+ *   - the boss, the Mother of the Deep ('B' on the map), sleeps under the floor. When the hero comes
+ *     within BOSS.wake it rises out of it (BOSS.rise ticks), then never moves but blocks the way, and
+ *     attacks: every BOSS.spitEvery ticks its maw gapes (BOSS.openFor ticks) and it spits a glob
+ *     straight at the hero (one of 16 directions, AIM); and every BOSS.graspEvery ticks the floor
+ *     cracks where the hero stands, and after BOSS.warn ticks a tentacle bursts up there for
+ *     BOSS.strike ticks. Shot BOSS.hp times (once risen) it sinks back into its pit
+ *   - every creature and the boss dead wins; no hearts left loses; either shows its message for END_FOR ticks, then
+ *     the title. Fire (pressed, not held) on the title starts a game
+ *
+ * parse(text) reads a map; game(M) makes a game on its title; tick(M, g, input) plays one frame and
+ * lists what happened in g.events (for the sound); music(g) is whether the music plays: not while the
+ * boss is up.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./iso.js'));
+  else root.APEXCRYPT = factory(root.APEXISO);
+})(typeof self !== 'undefined' ? self : this, function (ISO) {
+  'use strict';
+
+  const TITLE = 0, PLAY = 1, WIN = 2, OVER = 3;
+  const DROWNED = 1, SPAWN = 2;
+  const HEARTS = 3, INVULN = 100, END_FOR = 250;
+  const SLOTS = { bullets: 3, spits: 2 };
+  const COOL = 10;                         // ticks between shots while fire is held
+  const BULLET = { speed: 4, life: 24 };   // speed: times the hero's step for the same direction
+  const WAKE = 5 * ISO.TILE;
+  const HP = [0, 3, 2], SCORE = [0, 100, 50];
+  const RADIUS = 64;                       // a creature's square on the floor, as the hero's
+  const DYING = 16;
+  // How close (each axis, 8.8 tiles) a bullet must come to a creature to hit it, and a creature to
+  // the hero to hurt it.
+  const HIT = 96, TOUCH = 112;
+  // The boss. Its states: asleep, rising, fighting, sinking, gone.
+  const SLEEP = 0, RISE = 1, FIGHT = 2, SINK = 3, GONE = 4;
+  const BOSS = {
+    wake: 4 * ISO.TILE, rise: 64, sink: 64, hp: 24, score: 1000,
+    block: 176,                            // the hero can't come closer than this (each axis)
+    hit: 208,                              // a bullet this close (each axis) hits it
+    spitEvery: 72, openFor: 16, spit: { speed: 40, life: 90, hit: 80 },
+    graspEvery: 96, warn: 32, strike: 24, grasp: 112,
+    moanEvery: 150, moanAt: 110,           // a moan (for the sound) every moanEvery ticks, at moanAt
+  };
+  // AIM[d]: a step of the spit's speed in each of 16 directions, d 0 = +x, counting toward +y.
+  const AIM = Array.from({ length: 16 }, (_, d) => [Math.round(Math.cos(d * Math.PI / 8) * BOSS.spit.speed),
+    Math.round(Math.sin(d * Math.PI / 8) * BOSS.spit.speed)]);
+  // The direction from (dx, dy) as 0-15, by comparing |dy| with |dx| at the sectors' bounding slopes
+  // (about 1/5, 2/3, 3/2 and 5).
+  function aim(dx, dy) {
+    const ax = Math.abs(dx), ay = Math.abs(dy);
+    const k = 5 * ay <= ax ? 0 : 3 * ay <= 2 * ax ? 1 : 2 * ay <= 3 * ax ? 2 : ay <= 5 * ax ? 3 : 4;
+    return (dx >= 0 ? (dy >= 0 ? k : 16 - k) : (dy >= 0 ? 8 - k : 8 + k)) & 15;
+  }
+
+  function parse(text) {
+    const spawns = [];
+    let boss = null;
+    const lines = text.replace(/\r/g, '').split('\n');
+    let y = 0;
+    const plain = lines.map(l => {
+      if (l.startsWith(';') || !l.length) return l;
+      const row = [...l].map((ch, x) => {
+        if (ch === 'd' || ch === 's') { spawns.push({ x, y, kind: ch === 'd' ? DROWNED : SPAWN }); return '.'; }
+        if (ch === 'B') { boss = { x, y }; return '.'; }
+        return ch;
+      }).join('');
+      y++;
+      return row;
+    });
+    return Object.assign(ISO.parse(plain.join('\n')), { spawns, boss });
+  }
+
+  const centre = t => t * ISO.TILE + ISO.TILE / 2;
+  function creatures(M) {
+    return M.spawns.map(s => ({ kind: s.kind, x: centre(s.x), y: centre(s.y), hp: HP[s.kind], awake: false,
+      t: 0, flash: 0, dying: 0, facing: 1, moving: false }));
+  }
+  function bossOf(M) {
+    return M.boss ? { state: SLEEP, x: centre(M.boss.x), y: centre(M.boss.y), t: 0, hp: BOSS.hp, flash: 0 } : { state: GONE, t: 0 };
+  }
+  function game(M) {
+    return {
+      mode: TITLE, t: 0, held: false, end: 0, score: 0, hi: 0, events: [],
+      hero: Object.assign(ISO.hero(M), { hearts: HEARTS, invuln: 0, aim: 8, cool: 0 }),
+      bullets: Array.from({ length: SLOTS.bullets }, () => ({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0 })),
+      creatures: creatures(M),
+      boss: bossOf(M),
+      spits: Array.from({ length: SLOTS.spits }, () => ({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0 })),
+      grasp: { on: false, x: 0, y: 0, t: 0 },
+    };
+  }
+
+  // Is a creature's square at (x, y) all on floor?
+  function clear(M, x, y) {
+    for (const ty of [(y - RADIUS) >> 8, (y + RADIUS - 1) >> 8])
+      for (const tx of [(x - RADIUS) >> 8, (x + RADIUS - 1) >> 8]) if (ISO.tileAt(M, tx, ty) !== ISO.FLOOR) return false;
+    return true;
+  }
+  const toward = (from, to, speed) => Math.max(-speed, Math.min(speed, to - from));
+
+  function tick(M, g, input) {
+    const h = g.hero;
+    g.t = (g.t + 1) & 0xffff;
+    g.events = [];
+    const firing = !!(input & 16), pressed = firing && !g.held;
+    g.held = firing;
+
+    if (g.mode === TITLE) {
+      if (pressed) {
+        Object.assign(g, { mode: PLAY, score: 0, hero: Object.assign(ISO.hero(M), { hearts: HEARTS, invuln: 0, aim: 8, cool: 0 }), creatures: creatures(M), boss: bossOf(M) });
+        for (const b of [...g.bullets, ...g.spits]) b.on = false;
+        g.grasp.on = false;
+        g.events.push('start');
+      }
+      return g;
+    }
+    if (g.mode !== PLAY) {
+      ISO.tick(M, h, 0);
+      if (--g.end === 0) { g.mode = TITLE; g.hi = Math.max(g.hi, g.score); }
+      return g;
+    }
+
+    // the hero walks, or with fire held stands and turns; it fires the way it faces. The risen boss
+    // is in the way.
+    const B = g.boss, hx = h.x, hy = h.y;
+    ISO.tick(M, h, firing ? 0 : input & 15);
+    if (B.state !== SLEEP && B.state !== GONE && Math.abs(h.x - B.x) < BOSS.block && Math.abs(h.y - B.y) < BOSS.block) { h.x = hx; h.y = hy; }
+    if (ISO.DIRS[input & 15]) {
+      h.aim = input & 15;
+      const d = ISO.DIRS[h.aim], sdx = d[0] - d[1];
+      if (sdx) h.facing = sdx > 0 ? 1 : -1;
+    }
+    if (h.invuln) h.invuln--;
+    if (h.cool) h.cool--;
+    if (firing && !h.cool) {
+      const b = g.bullets.find(o => !o.on);
+      if (b) {
+        const d = ISO.DIRS[h.aim];
+        Object.assign(b, { on: true, x: h.x, y: h.y, vx: BULLET.speed * d[0], vy: BULLET.speed * d[1], life: BULLET.life });
+        h.cool = COOL;
+        g.events.push('shot');
+      }
+    }
+
+    // the bullets fly until a wall or their range
+    for (const b of g.bullets) {
+      if (!b.on) continue;
+      b.x += b.vx; b.y += b.vy;
+      if (--b.life === 0 || ISO.tileAt(M, b.x >> 8, b.y >> 8) !== ISO.FLOOR) b.on = false;
+    }
+
+    // the creatures
+    for (const c of g.creatures) {
+      if (!c.hp && !c.dying) continue;
+      c.t = (c.t + 1) & 0xff;
+      if (c.flash) c.flash--;
+      if (c.dying) { c.dying--; continue; }
+      if (!c.awake && Math.abs(h.x - c.x) < WAKE && Math.abs(h.y - c.y) < WAKE) { c.awake = true; c.t = 0; g.events.push('wake'); }
+      if (!c.awake) continue;
+      const speed = c.kind === DROWNED ? 6 : (c.t & 31) < 8 ? 20 : 0;
+      const x0 = c.x, y0 = c.y, dx = toward(c.x, h.x, speed), dy = toward(c.y, h.y, speed);
+      if (dx && clear(M, c.x + dx, c.y)) c.x += dx;
+      if (dy && clear(M, c.x, c.y + dy)) c.y += dy;
+      const sdx = (c.x - x0) - (c.y - y0);
+      if (sdx) c.facing = sdx > 0 ? 1 : -1;
+      c.moving = c.x !== x0 || c.y !== y0;
+    }
+
+    // the boss
+    if (B.state !== GONE) {
+      B.t++;
+      if (B.flash) B.flash--;
+      if (B.state === SLEEP) {
+        B.t = 0;
+        if (Math.abs(h.x - B.x) < BOSS.wake && Math.abs(h.y - B.y) < BOSS.wake) { B.state = RISE; g.events.push('rise'); }
+      } else if (B.state === RISE && B.t === BOSS.rise) { B.state = FIGHT; B.t = 0; }
+      else if (B.state === SINK && B.t === BOSS.sink) B.state = GONE;
+      else if (B.state === FIGHT) {
+        if (B.t % BOSS.spitEvery === 0) {
+          const sp = g.spits.find(o => !o.on);
+          if (sp) {
+            const [vx, vy] = AIM[aim(h.x - B.x, h.y - B.y)];
+            Object.assign(sp, { on: true, x: B.x, y: B.y, vx, vy, life: BOSS.spit.life });
+            g.events.push('spit');
+          }
+        }
+        if (B.t % BOSS.moanEvery === BOSS.moanAt) g.events.push('moan');
+        if (B.t % BOSS.graspEvery === BOSS.graspEvery / 2 && !g.grasp.on) {
+          Object.assign(g.grasp, { on: true, x: h.x, y: h.y, t: 0 });
+          g.events.push('crack');
+        }
+      }
+    }
+    // its spit flies until a wall or its range; its tentacle cracks the floor, then strikes
+    for (const sp of g.spits) {
+      if (!sp.on) continue;
+      sp.x += sp.vx; sp.y += sp.vy;
+      if (--sp.life === 0 || ISO.tileAt(M, sp.x >> 8, sp.y >> 8) !== ISO.FLOOR) sp.on = false;
+    }
+    const gr = g.grasp;
+    if (gr.on) {
+      if (++gr.t === BOSS.warn) g.events.push('grasp');
+      if (gr.t === BOSS.warn + BOSS.strike || B.state !== FIGHT) gr.on = false;
+    }
+
+    // bullets hit the boss, once risen
+    for (const b of g.bullets) {
+      if (!b.on || B.state !== FIGHT || Math.abs(b.x - B.x) >= BOSS.hit || Math.abs(b.y - B.y) >= BOSS.hit) continue;
+      b.on = false;
+      if (--B.hp) { B.flash = 4; g.events.push('hit'); }
+      else { B.state = SINK; B.t = 0; g.score += BOSS.score; g.events.push('bossDies'); }
+    }
+    // bullets hit creatures
+    for (const b of g.bullets) {
+      if (!b.on) continue;
+      for (const c of g.creatures) {
+        if (!c.hp || Math.abs(b.x - c.x) >= HIT || Math.abs(b.y - c.y) >= HIT) continue;
+        b.on = false;
+        c.awake = true;
+        if (--c.hp) { c.flash = 4; g.events.push('hit'); }
+        else { c.dying = DYING; g.score += SCORE[c.kind]; g.events.push('kill'); }
+        break;
+      }
+    }
+
+    // creatures, spit and the tentacle hurt the hero
+    let hurt = g.creatures.some(c => c.hp && Math.abs(h.x - c.x) < TOUCH && Math.abs(h.y - c.y) < TOUCH);
+    for (const sp of g.spits) if (sp.on && Math.abs(h.x - sp.x) < BOSS.spit.hit && Math.abs(h.y - sp.y) < BOSS.spit.hit) { sp.on = false; hurt = true; }
+    if (gr.on && gr.t >= BOSS.warn && Math.abs(h.x - gr.x) < BOSS.grasp && Math.abs(h.y - gr.y) < BOSS.grasp) hurt = true;
+    if (!h.invuln && hurt) {
+      h.invuln = INVULN;
+      g.events.push('hurt');
+      if (--h.hearts === 0) { g.mode = OVER; g.end = END_FOR; g.events.push('dead'); }
+    }
+    if (g.mode === PLAY && g.creatures.every(c => !c.hp && !c.dying) && B.state === GONE) { g.mode = WIN; g.end = END_FOR; g.events.push('win'); }
+    return g;
+  }
+
+  const music = g => g.boss.state === SLEEP || g.boss.state === GONE;
+
+  return { music, TITLE, PLAY, WIN, OVER, DROWNED, SPAWN, HEARTS, INVULN, END_FOR, SLOTS, COOL, BULLET, WAKE, HP, SCORE,
+    RADIUS, DYING, HIT, TOUCH, SLEEP, RISE, FIGHT, SINK, GONE, BOSS, AIM, aim, parse, game, tick };
+});
+
+</script>
+<script>
+// The APEX-8 badge, the engine's mark for title screens, drawn for the C64's multicolor modes after
+// apex8-source.png: a striped sun setting behind a snow-capped mountain, lit on its left, over APEX-8
+// in bold white with a blue shadow, the 8 in yellow and light red. 40 fat pixels by 48 rows (10 x 6 cells) on
+// black, its colours kept to 3 a 4 x 8 cell (black aside) so it drops into a multicolor bitmap or
+// character set as it is: the sun's bands change colour on cell rows, the snow stays above row 16 and
+// the mountain's dark side below it.
+//
+// badge() returns { w, h, px }: px[y * w + x] a C64 colour (0 black).
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEX8 = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const W = 40, H = 48, MID = 40; // MID: the middle, in real pixels
+  const BLACK = 0, WHITE = 1, RED = 2, BLUE = 6, YELLOW = 7, LIGHT_RED = 10, LIGHT_BLUE = 14;
+  // Bold 5 x 5 letters (the dash 3 wide), each row drawn twice.
+  const GLYPHS = {
+    A: ['01110', '11011', '11111', '11011', '11011'], P: ['11110', '11011', '11110', '11000', '11000'],
+    E: ['11111', '11000', '11110', '11000', '11111'], X: ['11011', '11011', '01110', '11011', '11011'],
+    '-': ['000', '000', '111', '000', '000'], 8: ['01110', '11011', '01110', '11011', '01110'],
+  };
+  const TEXT = [['A', 4], ['P', 10], ['E', 16], ['X', 22], ['-', 28], ['8', 32]], TEXT_TOP = 34;
+
+  function badge() {
+    const px = new Uint8Array(W * H);
+    const set = (x, y, c) => { if (x >= 0 && x < W && y >= 0 && y < H) px[y * W + x] = c; };
+    // the mountain (in real pixels, a fat pixel 2 wide): its apex at the middle of row 3, its foot
+    // on row 31
+    const mountain = (X, y) => y >= 3 && y <= 31 && Math.abs(X - MID) < (y - 3) * 1.3;
+    for (let y = 0; y < 32; y++) for (let x = 0; x < W; x++) {
+      const X = 2 * x + 1;
+      if (mountain(X, y)) {
+        const edge = !mountain(X - 2, y) || !mountain(X + 2, y) || !mountain(X, y - 1);
+        let c;
+        const snowLine = 12 + ((x >> 1) & 1 ? 2 : 0) + (x & 4 ? 1 : 0);
+        if (y < Math.min(15, snowLine)) c = WHITE;
+        else if (X < MID || y < 16) c = (y >= 16 && ((X + 2 * y) % 13 === 0 || (X + 2 * y) % 13 === 1)) ? BLUE : LIGHT_BLUE;
+        else c = (X - 2 * y) % 11 === 0 && y > 18 ? LIGHT_BLUE : BLUE;
+        set(x, y, edge ? BLACK : c);
+        continue;
+      }
+      // the sun behind it: a half disc in bands, striped with black lower down
+      const d = Math.hypot(X - MID, (y + 0.5 - 26) * 1.2);
+      if (d < 31 && y < 26 && !(y >= 9 && y % 4 === 3)) set(x, y, y < 8 ? YELLOW : y < 16 ? LIGHT_RED : RED);
+    }
+    // APEX-8, shadowed down and right in blue
+    for (const [ch, left] of TEXT) {
+      const rows = GLYPHS[ch];
+      for (const pass of [0, 1]) rows.forEach((r, y) => [...r].forEach((v, x) => {
+        if (v !== '1') return;
+        for (const dy of [0, 1]) {
+          const X = left + x + (pass ? 0 : 1), Y = TEXT_TOP + 2 * y + dy + (pass ? 0 : 1);
+          const c = pass === 0 ? BLUE : ch === '8' ? (y < 2 || (y === 2 && dy === 0) ? YELLOW : LIGHT_RED) : ch === '-' ? LIGHT_BLUE : WHITE;
+          set(X, Y, c);
+        }
+      }));
+    }
+    // every cell within the multicolor limit
+    for (let cy = 0; cy < H / 8; cy++) for (let cx = 0; cx < W / 4; cx++) {
+      const used = new Set();
+      for (let y = 8 * cy; y < 8 * cy + 8; y++) for (let x = 4 * cx; x < 4 * cx + 4; x++) if (px[y * W + x]) used.add(px[y * W + x]);
+      if (used.size > 3) throw new Error(`APEX-8 badge: cell ${cx},${cy} has ${used.size} colours`);
+    }
+    return { w: W, h: H, px };
+  }
+
+  return { W, H, badge };
+});
+
+</script>
+<script>
+/*
+ * The Drowned Crypt's drawn tiles, for the iso view's drawn-tile mode (artShade in c64/iso/view.js):
+ * fat pixel grids, one character per fat pixel:
+ *   0 black ($D021: joints, deep shadow)    1 white ($D022: flames, wet glints)
+ *   2 dark grey ($D023: mortar, slime)      3 lit stone (colour RAM: the torchlight's colour)
+ *   . outside the shape (never shows)
+ * floor and cracked are the floor diamond; wall and torch a wall block's top diamond and its two faces
+ * (left lit, right in shade), each face 8 fat pixels across and 16 rows down from its top edge. The
+ * light thins lit stone (3) away from the hero, so stone drawn in 3 fades into the dark while mortar
+ * (2) and flames (1) stay.
+ *
+ * Works in Node and in the browser (global APEXCRYPTTILES).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXCRYPTTILES = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const floor = [
+    '................',
+    '.......33.......',
+    '......3333......',
+    '.....333333.....',
+    '....33333333....',
+    '...3333233333...',
+    '..333333333333..',
+    '.33333333333333.',
+    '.33333333332333.',
+    '..233333333330..',
+    '...2333333330...',
+    '....23333330....',
+    '.....233330.....',
+    '......2330......',
+    '.......20.......',
+    '................',
+  ];
+  // the same slab, split by a crack, with a puddle glinting in it
+  const cracked = [
+    '................',
+    '.......33.......',
+    '......3333......',
+    '.....333333.....',
+    '....33330333....',
+    '...3333303333...',
+    '..333330333333..',
+    '.33333302333333.',
+    '.33322330333333.',
+    '..222123303330..',
+    '...2212330330...',
+    '....22333030....',
+    '.....233330.....',
+    '......2330......',
+    '.......20.......',
+    '................',
+  ];
+  // a capstone in dark stone, its far edges catching the light
+  const top = [
+    '................',
+    '.......33.......',
+    '......3223......',
+    '.....322223.....',
+    '....32222223....',
+    '...3222232222...',
+    '..322222222222..',
+    '.32222222222222.',
+    '.22222222222222.',
+    '..222222322222..',
+    '...2222222222...',
+    '....22222222....',
+    '.....222222.....',
+    '......2222......',
+    '.......22.......',
+    '................',
+  ];
+  // two courses of blocks, black joints, slime dripping down the upper one
+  const left = [
+    '33333333',
+    '33302333',
+    '33302333',
+    '33302333',
+    '32302333',
+    '33302323',
+    '33302333',
+    '00000000',
+    '33333333',
+    '02333333',
+    '02333233',
+    '02333333',
+    '02323333',
+    '02333333',
+    '02333333',
+    '00000000',
+  ];
+  // the shaded face: the same blocks in dark grey, a little lit stone on their top edges
+  const shade = rows => rows.map((r, k) => Array.from(r, (v, c) => (v !== '3' ? v : k === 0 || k === 8 ? ((c & 1) ? '2' : '3') : '2')).join(''));
+  const right = shade(left);
+  // a torch in an iron bracket on each face
+  const withTorch = rows => rows.map((r, k) => {
+    const put = { 1: '...1....', 2: '..11....', 3: '..111...', 4: '..11....', 5: '..00....', 6: '..00....', 7: '.2002...' }[k];
+    return put ? Array.from(r, (v, c) => (put[c] === '.' ? v : put[c])).join('') : r;
+  });
+
+  return {
+    floor, cracked,
+    wall: { top, left, right },
+    torch: { top, left: withTorch(left), right: withTorch(right) },
+  };
+});
+
+</script>
+<script>
+/*
+ * The Drowned Crypt's sprites: multicolor, 12 fat pixels by 21 rows, one character per fat pixel:
+ *   . clear    k black ($D025: outlines, shadow)    s light red ($D026: skin, eyes, gums)
+ *   a the sprite's own colour (the hero's coat, a creature's hide)
+ * Shorter images sit at the bottom of the sprite (their feet on its last row). Drawn facing right, or
+ * facing the viewer; the view mirrors them to face left.
+ *
+ * Works in Node and in the browser (global APEXCRYPTSPRITES).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXCRYPTSPRITES = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const COLORS = { mc1: 0, mc2: 10 }; // black, light red
+
+  // ------------------------------------------------------------------ the investigator
+  // A hat with a black band, a raincoat to the ankles, black shoes; the pistol in the right hand. The
+  // coat's hem swings as he walks, flaring out behind from the side.
+  const HAT = ['....kkkk....', '...kaaaak...', '...kaaaak...', '..kkkkkkkk..', '.kaaaaaaaak.', '..kkkkkkkk..'];
+  const SIDE = [
+    ...HAT,
+    '...kssssk...', '...kssksk...', '....kssk....', '...kkaakk...', '..kaaaaakkkk', '..kaaaassk..', '..kaaaaak...',
+    '..kaaaaak...',
+  ];
+  const FRONT = [
+    ...HAT,
+    '...kssssk...', '...kksskk...', '....kssk....', '..kkaaaakk..', '.kaaaaaaaak.', '.kaaaaaaaak.', '.ksaaaaaask.',
+    '.kskaaaakkk.',
+  ];
+  const BACK = [
+    ...HAT,
+    '...kkkkkk...', '...kkkkkk...', '....kkkk....', '..kkaaaakk..', '.kaaaaaaaak.', '.kaaaaaaaak.', '.ksaaaaaask.',
+    '.kkaaaaaask.',
+  ];
+  // The coat below the waist and the shoes under its hem, for each view and step.
+  const COAT = {
+    side: {
+      stand: ['..kaaaaak...', '..kaaaaak...', '..kaaaaak...', '..kaaaaaak..', '..kaaaaaak..', '..kkkkkkkk..', '...kk.kk....'],
+      walk1: ['..kaaaaak...', '..kaaaaak...', '.kaaaaaak...', '.kaaaaaaak..', 'kaaaaaaaak..', 'kkkkkkkkkk..', '.kk....kk...'],
+      walk2: ['..kaaaaak...', '..kaaaaak...', '..kaaaaak...', '.kaaaaaak...', '.kaaaaaaak..', '.kkkkkkkkk..', '....kkk.....'],
+    },
+    front: {
+      stand: ['..kaaaaaak..', '..kaaaaaak..', '..kaakkaak..', '..kaakkaak..', '.kaaakkaaak.', '.kkkk..kkkk.', '..kk....kk..'],
+      walk1: ['..kaaaaaak..', '..kaaaaaak..', '..kaakkaak..', '.kaaak.kaak.', '.kaaak..kaak', '.kkkk...kkkk', '.kk......kk.'],
+      walk2: ['..kaaaaaak..', '..kaaaaaak..', '..kaakkaak..', '..kaakkaak..', '..kaakkaak..', '..kkkkkkkk..', '....kkkk....'],
+    },
+    back: {
+      stand: ['..kaaaaaak..', '..kaaaaaak..', '..kaaaaaak..', '..kaaaaaak..', '.kaaakkaaak.', '.kkkkkkkkkk.', '..kk....kk..'],
+      walk1: ['..kaaaaaak..', '..kaaaaaak..', '..kaaaaaak..', '.kaaaaaaak..', '.kaaak.kaaak', '.kkkk..kkkkk', '.kk......kk.'],
+      walk2: ['..kaaaaaak..', '..kaaaaaak..', '..kaaaaaak..', '..kaaaaaak..', '..kaakkaak..', '..kkkkkkkk..', '....kkkk....'],
+    },
+  };
+  const DEAD = ['............', '............', '..kkkk......', '.kaaaakkkkkk', 'kaaaaaaaaaak', 'kkssaaaaaaaa', 'kaaaaaaaaaak', '.kkkkkkkkkkk'];
+
+  // ------------------------------------------------------------------ the drowned
+  // A hunched fish-man facing the viewer: wide-set staring eyes in a broad head, a gaping mouth,
+  // long arms ending in webbed claws.
+  const DROWNED_HEAD = [
+    '...kkkkkk...', '..kaaaaaak..', '.kaaaaaaaak.', 'kassaaaassak', 'kaskaaaaksak', '.kaaaaaaaak.', '.kakkkkkkak.',
+    '.kaksssskak.', '..kakkkkak..', '..kkaaaakk..',
+  ];
+  const DROWNED = [
+    [...DROWNED_HEAD, '.kaaaaaaaak.', 'kaakaaaakaak', 'kaakaaaakaak', 'kak.kaak.kak', 'kak.kaak.kak', 'kkk.kaak.kkk',
+      '...kaaaak...', '...kakkak...', '..kaak.kak..', '..kaak.kaak.', '..kkkk.kkkk.'],
+    [...DROWNED_HEAD, '.kaaaaaaaak.', 'kaakaaaakaak', '.kakaaaakak.', '.kakaaaakak.', '..kkaaaakak.', '..kkaaaakkk.',
+      '...kaaaak...', '...kakkak...', '...kak.kaak.', '..kaak..kak.', '..kkkk..kkkk'],
+  ];
+
+  // ------------------------------------------------------------------ the spawn
+  // A swollen sac around one great eye, on a nest of tentacles that writhe.
+  const SPAWN_BODY = [
+    '....kkkk....', '..kkaaaakk..', '.kaaaaaaaak.', '.kaakkkkaak.', 'kaaksssskaak', 'kaksskksskak', 'kaaksssskaak',
+    '.kaakkkkaak.', '.kaaaaaaaak.', '..kaaaaaak..',
+  ];
+  const SPAWN = [
+    [...SPAWN_BODY, '.kakakkakak.', 'kak.kaak.kak', 'ka.kak.kak.k', 'ka.ka..ka.ak', '.ka.ak.ka.k.', '.ka.ak..ka..',
+      '..k..ak.ak..', '.....k...k..'],
+    [...SPAWN_BODY, '.kakakkakak.', 'kak.kaak.kak', 'k.kak.kak.ak', 'ka.ak..ak.ak', '.ka.ka.ak.k.', '..ka.ka.ak..',
+      '..ak..k..k..', '..k.........'],
+  ];
+
+  // ------------------------------------------------------------------ the Mother of the Deep
+  // The boss: 36 fat pixels by 42 rows, cut into 3 x 2 sprites. Drawn from shapes on the real pixel
+  // grid (72 x 42, a fat pixel 2 wide), back to front, then outlined in black where a shape meets
+  // nothing: thick tentacles curling up from the pit behind; a domed head, wrinkled and shaded from
+  // the upper left, ringed with small eyes above two great slit-eyed ones; a beard of face-tentacles
+  // with suckers over its maw (parted, and the maw gaping, when it spits); clawed hands gripping the
+  // broken rim of the pit it rose from. step (0, 1) sways the tentacles.
+  const BW = 36, BH = 42, RIM = 37;
+  // A quadratic curve's points, every half pixel.
+  const curve = (a, b, c) => {
+    const pts = [];
+    for (let i = 0; i <= 80; i++) {
+      const t = i / 80, u = 1 - t;
+      pts.push([u * u * a[0] + 2 * u * t * b[0] + t * t * c[0], u * u * a[1] + 2 * u * t * b[1] + t * t * c[1], t]);
+    }
+    return pts;
+  };
+  // How far (x, y) is inside a thick curve (width w0 at its start to w1 at its end): > 0 inside, and
+  // the curve's t there.
+  function onCurve(pts, w0, w1, x, y) {
+    let best = -Infinity, bt = 0;
+    for (const [px, py, t] of pts) {
+      const d = (w0 + (w1 - w0) * t) / 2 - Math.hypot((x - px) / 1.15, y - py);
+      if (d > best) { best = d; bt = t; }
+    }
+    return [best, bt];
+  }
+  function bossBody(open, step) {
+    const g = Array.from({ length: BH }, () => new Array(BW).fill('.'));
+    const sway = step ? 1 : -1;
+    for (let r = 0; r < BH; r++) for (let c = 0; c < BW; c++) {
+      const x = 2 * c + 1, y = r + 0.5, side = x < 36 ? -1 : 1, mx = 36 + Math.abs(x - 36); // mx: mirrored to the right half
+      let v = '.';
+      // the great tentacles behind, curling up and out from the pit (each side its own phase)
+      const ph = side < 0 ? sway : -sway;
+      const big = curve([52, 38], [70 + 2 * ph, 22], [60 - 3 * ph, 4 + ph]);
+      const [bd, bt] = onCurve(big, 10, 4, mx, y);
+      if (bd > 0) v = bd < 0.9 ? 'k' : bt > 0.2 && Math.round(bt * 40) % 6 === 0 && bd > 1.6 ? 's' : 'a';
+      // the body: a domed head over a body that widens to the pit
+      const head = ((x - 36) / 21) ** 2 + ((y - 15) / 14) ** 2 < 1;
+      const lower = y > 17 && y < RIM && Math.abs(x - 36) < 15 + (y - 17) * 0.55;
+      if (head || lower) {
+        v = 'a';
+        const shade = (x - 36) / 22 + (y - 12) / 26; // lit upper left, dark lower right
+        if (shade > 0.75 && (c + r) & 1) v = 'k';
+        if (shade > 1.05) v = 'k';
+        // wrinkles across the dome
+        if (y < 11 && Math.abs(Math.hypot((x - 36) / 1.6, y - 26) - 19) < 0.5 && c & 1) v = 'k';
+        // small eyes on the brow, then the two great ones with slit pupils
+        if ([[24, 7], [31, 4], [41, 4], [48, 7]].some(([ex, ey]) => Math.abs(x - ex) < 2 && Math.abs(y - ey) < 1)) v = 's';
+        const ex = 36 + 9 * side, eIn = ((x - ex) / 6.5) ** 2 + ((y - 14.5) / 3.4) ** 2;
+        if (eIn < 1) v = Math.abs(x - ex) < 1 && Math.abs(y - 14.5) < 2.5 ? 'k' : 's';
+        else if (eIn < 1.6 && y < 13) v = 'k'; // the brow over each eye
+      }
+      // the beard: six face-tentacles hanging over the maw, swaying
+      for (let k = 0; k < 6; k++) {
+        const bx = 23 + 5.2 * k, part = open && (k === 2 || k === 3) ? (k === 2 ? -5 : 5) : 0;
+        const tip = bx + part + ((k & 1 ? 1 : -1) * sway * 2), strand = curve([bx, 19], [bx + part, 27], [tip, 34]);
+        const [sd, st] = onCurve(strand, 4.5, 2, x, y);
+        if (sd > 0) v = sd < 0.8 ? 'k' : sd > 1.2 && Math.round(st * 16) % 4 === 2 ? 's' : 'a';
+      }
+      // the maw, gaping when it spits: black inside, a ring of teeth
+      if (open) {
+        const m = ((x - 36) / 9) ** 2 + ((y - 26) / 6) ** 2;
+        if (m < 1) v = m > 0.55 && Math.round(x / 2) % 2 === 0 ? 's' : 'k';
+      }
+      // clawed hands gripping the rim
+      const hx = 36 + 21 * side;
+      if (((x - hx) / 7) ** 2 + ((y - 34) / 3) ** 2 < 1) v = 'a';
+      if (y >= 35.5 && y < 39 && [-4, 0, 4].some(f => Math.abs(x - hx - f) < 1.2)) v = y > 38 ? 'k' : 'a';
+      g[r][c] = v;
+    }
+    // outline: a shape's pixel next to nothing (left, right, above, below) turns black
+    const out = g.map(row => row.slice());
+    for (let r = 0; r < BH; r++) for (let c = 0; c < BW; c++) {
+      if (g[r][c] === '.' || g[r][c] === 'k') continue;
+      const empty = (rr, cc) => rr < 0 || rr >= BH || cc < 0 || cc >= BW || g[rr][cc] === '.';
+      if (empty(r - 1, c) || empty(r + 1, c) || empty(r, c - 1) || empty(r, c + 1)) out[r][c] = 'k';
+    }
+    return out;
+  }
+  // The pit's broken rim: a black hole in the floor with shards round it.
+  const PIT = (() => {
+    const g = Array.from({ length: BH }, () => new Array(BW).fill('.'));
+    for (let r = RIM; r < BH; r++) for (let c = 0; c < BW; c++) {
+      const x = 2 * c + 1, y = r + 0.5, e = ((x - 36) / 33) ** 2 + ((y - 39.5) / 3) ** 2;
+      if (e < 1 || (e < 1.35 && (c * 7 + r * 3) % 5 < 2)) g[r][c] = 'k';
+    }
+    return g;
+  })();
+  // The boss risen `sunk` rows short of the full height: the body slid down and hidden below the rim
+  // (row RIM on), the pit always there, under the claws.
+  function bossImage(open, step, sunk = 0) {
+    const body = bossBody(open, step);
+    return Array.from({ length: BH }, (_, r) => {
+      const row = [];
+      for (let c = 0; c < BW; c++) {
+        const b = r - sunk >= 0 ? body[r - sunk][c] : '.';
+        row.push(r < RIM ? b : sunk === 0 && b !== '.' && /a|s/.test(b) && r < RIM + 3 ? b : PIT[r][c] !== '.' ? PIT[r][c] : sunk === 0 ? b : '.');
+      }
+      return row.join('');
+    });
+  }
+  // A 36 x 42 image as its 6 sprites, part 0-5 (left to right, then the lower row).
+  const parts = rows => [0, 1].flatMap(b => [0, 1, 2].map(c => rows.slice(21 * b, 21 * b + 21).map(r => r.slice(12 * c, 12 * c + 12))));
+  const BOSS = {
+    idle0: bossImage(false, 0), idle1: bossImage(false, 1), spit: bossImage(true, 0),
+    rise0: bossImage(false, 0, RIM), rise1: bossImage(false, 1, 27), rise2: bossImage(false, 0, 17), rise3: bossImage(false, 1, 8),
+  };
+  // Its spit, and the tentacle that bursts from the floor under the hero: the floor cracking first,
+  // then the tentacle rising and lashing.
+  const SPIT = ['....kkk.....', '...kaaak....', '..kaaasak...', '..kaaaaak...', '...kaaak....', '....kkk.....'];
+  const GRASP = [
+    ['............', '............', '....k..k....', '..k.kkk.k...', '...kk.kk.k..', '.k..kkk.....'],
+    ['.....kk.....', '....kaak....', '....kask....', '...kaak.....', '...kaak.....', '..kkaakk.k..', '.k.kkkkkk...',
+      '..k.kkk.k...'],
+    ['...kk.......', '..kaak......', '..ksak......', '...kaak.....', '....kaak....', '....kask....', '....kaak....',
+      '...kaak.....', '...kasak....', '...kaak.....', '..kaaak.....', '..kaaak.....', '.kkaaakkk...', 'k.kkkkkk.k..',
+      '..k.kkk.k...'],
+  ];
+
+  // ------------------------------------------------------------------ the rest
+  const SPLAT = [
+    ['....k..k....', '..k.kaak.k..', '.kaakaaakak.', 'kaaaaaaaaaak', '.kkaaakaakk.'],
+    ['.k........k.', '..ka.kk.ak..', 'kaaakaakaaak', 'kaaaaaaaaaak', '.kkkkkkkkkk.'],
+  ];
+  const BULLET = ['.....ss.....', '.....aa.....'];
+
+  // In the dark only the eyes show: the eye pixels (s) of a frame's first rows, glowing, nothing else.
+  const eyes = (rows, upTo) => rows.map((r, y) => (y < upTo ? r.replace(/[^s]/g, '.') : '............'));
+
+  const IMAGES = {};
+  for (const [view, top] of [['side', SIDE], ['front', FRONT], ['back', BACK]])
+    for (const [step, coat] of Object.entries(COAT[view])) IMAGES[`hero_${view}_${step}`] = [...top, ...coat];
+  IMAGES.hero_dead = DEAD;
+  DROWNED.forEach((r, k) => { IMAGES['drowned' + k] = r; });
+  SPAWN.forEach((r, k) => { IMAGES['spawn' + k] = r; });
+  IMAGES.drowned_eyes = eyes(DROWNED[0], 5);
+  IMAGES.spawn_eyes = eyes(SPAWN[0], 8);
+  SPLAT.forEach((r, k) => { IMAGES['splat' + k] = r; });
+  IMAGES.bullet = BULLET;
+  for (const [pose, rows] of Object.entries(BOSS)) parts(rows).forEach((p, k) => { IMAGES[`boss_${pose}_${k}`] = p; });
+  IMAGES.spit = SPIT;
+  GRASP.forEach((r, k) => { IMAGES['grasp' + k] = r; });
+
+  // Each image as 21 rows of 12 values (0 clear, 1 black, 2 own colour, 3 light red).
+  const FRAMES = {};
+  for (const [name, rows] of Object.entries(IMAGES)) {
+    if (rows.length > 21 || rows.some(r => r.length !== 12)) throw new Error(`sprite ${name}: rows must be 12 wide, 21 at most`);
+    const out = rows.map(r => Array.from(r, ch => ({ k: 1, a: 2, s: 3 }[ch] || 0)));
+    while (out.length < 21) out.unshift(new Array(12).fill(0));
+    FRAMES[name] = out;
+  }
+  return { COLORS, IMAGES, FRAMES, BOSS };
+});
+
+</script>
+<script>
+/*
+ * The C64 Crypt view: what the screen shows each frame of the game (core/crypt.js), exactly as the
+ * engine is to show it. The dungeon is the iso view's (c64/iso/view.js), cut from the drawn tiles in
+ * tiles.js (withTiles(M) gives a map them), scrolled so the hero stays at its centre; over it go the game's sprites, a status bar and the game's messages.
+ *
+ * Sprites (sprites.js) are multicolor, 12 fat pixels by 21 rows, sharing black ($D025) for outlines and
+ * light red ($D026) for skin and eyes; each has its own colour. The hero is an investigator in a hat and coat with a pistol, seen from the side,
+ * the front or the back as it aims; the drowned are hunched
+ * fish-men, the spawn tentacled eyes; the boss is six sprites (sprites.js). A creature out of the torchlight shows dimmed, and in the dark
+ * only its eyes, glowing.
+ *
+ * More sprites than the VIC's eight: as in the shooter, the objects are sorted by Y and the n-th one
+ * shown gets a hardware sprite, here 7 - (n mod 8), so that the lower on the screen (nearer) an object
+ * is, the more it is in front. An object starting less than GAP lines below the last one on its hardware
+ * sprite is left out that frame. multiplex() is the rule.
+ *
+ * The status bar is the last 8 lines: hearts at the left, the score at the right, and while the boss is
+ * up its strength in the middle. The title shows the engine's APEX-8 badge in its bottom left corner.
+ *
+ * Works in Node and in the browser (global APEXCRYPTVIEW, needing APEXSCII, APEXISO, APEXISOVIEW,
+ * APEXCRYPT, APEXCRYPTTILES, APEXCRYPTSPRITES and APEX8).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('../../core/iso.js'), require('../iso/view.js'), require('../../core/crypt.js'), require('./tiles.js'), require('./sprites.js'), require('../../art/brand/apex8.js'));
+  else root.APEXCRYPTVIEW = factory(root.APEXISO, root.APEXISOVIEW, root.APEXCRYPT, root.APEXCRYPTTILES, root.APEXCRYPTSPRITES, root.APEX8);
+})(typeof self !== 'undefined' ? self : this, function (ISO, IV, G, TILES, SP, APEX8) {
+  'use strict';
+
+  const SPRITE = SP.COLORS;
+  // Own colours. A creature out of the light is dim; hit, it flashes white.
+  const COLOR = { hero: 15, drowned: 5, spawn: 4, boss: 3, spit: 13, dim: 11, flash: 1, bullet: 7 };
+  const GAP = 24;
+  const BAR_LINE = 188;
+
+  // ------------------------------------------------------------------ sprites (sprites.js)
+  const FRAMES = SP.FRAMES, FRAME_NAMES = Object.keys(FRAMES);
+  // Which view of the hero shows for its aim: up the screen (1, 5, 9) its back, down (2, 6, 10) its front.
+  const heroView = aim => ([1, 5, 9].includes(aim) ? 'back' : [2, 6, 10].includes(aim) ? 'front' : 'side');
+
+  // ------------------------------------------------------------------ light on the creatures
+  // A creature's step of light, from where its feet are on the screen, as the iso view lights the
+  // dungeon (without the dither): 0-1 lit, 2-3 dim, 4 dark.
+  function lightStep(x, y) {
+    const L = IV.LIGHT, d = Math.hypot(x - L.center.x, 2 * (y - L.center.y));
+    return Math.max(0, Math.min(L.steps.length - 1, Math.floor((d - L.full) / L.step + 0.5)));
+  }
+
+  // ------------------------------------------------------------------ the objects
+  // Where a point on the floor shows on the screen, with the hero's feet at IV.HERO.
+  const onScreen = (h, o) => { const s = ISO.screen(o), c = ISO.screen(h); return { x: s.x - c.x + IV.HERO.x, y: s.y - c.y + IV.HERO.y }; };
+  // What the game shows as sprites, in order: the hero, its bullets, the creatures.
+  // [{ x, y (the sprite's top left), frame, color, flip }]
+  function objects(g) {
+    const out = [], h = g.hero;
+    const feet = (o, frame, color, flip = false, lift = 0) => { const s = onScreen(h, o); out.push({ x: s.x - 12, y: s.y - 20 - lift, frame, color, flip }); };
+    if (g.mode === G.OVER) feet(h, 'hero_dead', COLOR.hero, h.facing < 0);
+    else if (!(h.invuln & 4)) feet(h, `hero_${heroView(h.aim)}_${IV.spriteFrame(h)}`, COLOR.hero, h.facing < 0);
+    for (const b of g.bullets) if (b.on) feet(b, 'bullet', COLOR.bullet, false, 10);
+    for (const c of g.creatures) {
+      if (!c.hp && !c.dying) continue;
+      const name = c.kind === G.DROWNED ? 'drowned' : 'spawn', s = onScreen(h, c);
+      if (c.dying) { feet(c, c.dying > G.DYING / 2 ? 'splat0' : 'splat1', COLOR[name]); continue; }
+      const step = lightStep(s.x, s.y - 10);
+      if (step >= 4) { feet(c, name + '_eyes', COLOR[name], c.facing < 0); continue; }
+      const frame = name + (c.awake ? (c.t >> 3) & 1 : 0);
+      feet(c, frame, c.flash ? COLOR.flash : step >= 2 ? COLOR.dim : COLOR[name], c.facing < 0);
+    }
+    // the boss, six sprites with its feet (the middle of its pit) at its place
+    const B = g.boss;
+    if (B.state === G.RISE || B.state === G.FIGHT || B.state === G.SINK) {
+      const s = onScreen(h, B), step = lightStep(s.x, s.y - 20);
+      const pose = bossPose(B), color = B.flash ? COLOR.flash : step >= 2 ? COLOR.dim : COLOR.boss;
+      for (let k = 0; k < 6; k++) out.push({ x: s.x - 36 + 24 * (k % 3), y: s.y - 39 + 21 * Math.floor(k / 3), frame: `boss_${pose}_${k}`, color, flip: false });
+    }
+    for (const sp of g.spits) if (sp.on) feet(sp, 'spit', COLOR.spit, false, 8);
+    // its tentacle: the floor cracking (blinking), then bursting up and lashing
+    const gr = g.grasp;
+    if (gr.on && (gr.t >= G.BOSS.warn || gr.t & 4)) feet(gr, gr.t < G.BOSS.warn ? 'grasp0' : gr.t < G.BOSS.warn + 8 ? 'grasp1' : 'grasp2', COLOR.boss);
+    return out;
+  }
+  // The boss's pose: rising out of its pit (rise0-3), sinking back, its maw gaping round each spit,
+  // else its tentacles swaying.
+  function bossPose(B) {
+    const R = G.BOSS;
+    if (B.state === G.RISE) return 'rise' + (B.t >> 4);
+    if (B.state === G.SINK) return 'rise' + (3 - (B.t >> 4));
+    if ((B.t + R.openFor) % R.spitEvery < R.openFor + 4 && B.t >= R.spitEvery - R.openFor) return 'spit';
+    return 'idle' + ((B.t >> 4) & 1);
+  }
+
+  // The multiplexer's rule (see the top): which hardware sprite shows each object, in front first.
+  function multiplex(objs) {
+    const order = objs.map((o, i) => [o, i]).filter(([o]) => o.y > -21 && o.y < 200 && o.x > -24 && o.x < 344)
+      .sort((a, b) => a[0].y - b[0].y || a[1] - b[1]);
+    const lastY = new Array(8).fill(-1000), shown = [];
+    let n = 0;
+    for (const [o] of order) {
+      const hw = 7 - (n & 7);
+      if (o.y < lastY[hw] + GAP) continue;
+      lastY[hw] = o.y;
+      shown.push({ ...o, hw });
+      n++;
+    }
+    return shown.sort((a, b) => a.hw - b.hw);
+  }
+
+  // ------------------------------------------------------------------ text
+  const FONT = {
+    '0': '111 101 101 101 111', '1': '010 110 010 010 111', '2': '111 001 111 100 111', '3': '111 001 111 001 111',
+    '4': '101 101 111 001 001', '5': '111 100 111 001 111', '6': '111 100 111 101 111', '7': '111 001 010 010 010',
+    '8': '111 101 111 101 111', '9': '111 101 111 001 111', A: '010 101 111 101 101', C: '011 100 100 100 011',
+    D: '110 101 101 101 110', E: '111 100 110 100 111', F: '111 100 110 100 100', H: '101 101 111 101 101',
+    I: '111 010 010 010 111', L: '100 100 100 100 111', N: '110 101 101 101 101', O: '010 101 101 101 010',
+    P: '110 101 110 100 100', R: '110 101 110 101 101', S: '011 100 010 001 110', T: '111 010 010 010 010',
+    U: '101 101 101 101 111', V: '101 101 101 101 010', W: '101 101 111 111 101', Y: '101 101 010 010 010',
+    ' ': '000 000 000 000 000', '*': '000 101 111 111 010', '|': '010 010 010 010 010',
+  };
+  // The messages: [text, top line, colour, scale]. PRESS FIRE blinks.
+  const TEXT = {
+    title: [['THE DROWNED', 24, 5, 2], ['CRYPT', 40, 5, 2], ['PRESS FIRE', 164, 1, 1]],
+    win: [['THE DEEP', 70, 7, 2], ['SLEEPS', 86, 7, 2]],
+    over: [['DEVOURED', 78, 2, 2]],
+  };
+  const digits = (v, n) => String(v).padStart(n, '0').slice(-n);
+
+  // ------------------------------------------------------------------ a frame
+  const PAL = IV.PAL;
+  const BADGE = APEX8.badge(), BADGE_AT = { x: 16, y: 132 };
+  // A map with the crypt's drawn tiles (set once, before the iso view prepares its characters).
+  const withTiles = M => Object.assign(M, { art: M.art || TILES });
+  // A title picture (a multicolor bitmap as Koala Painter keeps it: the bitmap, the screen's colours,
+  // colour RAM, the background), if a page gives one: on the title the screen shows it instead of the
+  // dungeon.
+  let titlePixels = null;
+  function setTitle(kla) {
+    const k = kla[0] === 0x00 && kla[1] === 0x60 && kla.length === 10003 ? kla.subarray(2) : kla;
+    titlePixels = new Uint8ClampedArray(320 * 200 * 4);
+    for (let y = 0; y < 200; y++) for (let x = 0; x < 160; x++) {
+      const cell = (y >> 3) * 40 + (x >> 2), v = (k[cell * 8 + (y & 7)] >> (6 - 2 * (x & 3))) & 3;
+      const c = PAL[[k[10000], k[8000 + cell] >> 4, k[8000 + cell] & 15, k[9000 + cell] & 15][v]];
+      for (const dx of [0, 1]) titlePixels.set([...c, 255], (y * 320 + 2 * x + dx) * 4);
+    }
+  }
+  function frame(M, g) {
+    withTiles(M);
+    const out = new Uint8ClampedArray(320 * 200 * 4);
+    const put = (x, y, c) => { if (x < 0 || x >= 320 || y < 0 || y >= 200) return; const i = (y * 320 + x) * 4; out[i] = c[0]; out[i + 1] = c[1]; out[i + 2] = c[2]; out[i + 3] = 255; };
+    if (g.mode === G.TITLE && titlePixels) {
+      out.set(titlePixels);
+      for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++) if (x < 7 || x >= 311 || y < 4 || y >= 196) put(x, y, PAL[IV.COLORS.border]);
+      return { pixels: out, scroll: null, sprites: [] };
+    }
+    const sc = IV.background(M, g.hero, put);
+    const sprites = multiplex(objects(g));
+    for (const s of [...sprites].reverse()) {
+      const f = FRAMES[s.frame], cols = [null, SPRITE.mc1, s.color, SPRITE.mc2];
+      for (let r = 0; r < 21; r++) for (let c = 0; c < 12; c++) {
+        const v = f[r][s.flip ? 11 - c : c];
+        if (v) for (const dx of [0, 1]) put(s.x + 2 * c + dx, s.y + r, PAL[cols[v]]);
+      }
+    }
+    // text: 3x5 letters a fat pixel each (scale tall), with a shadow down and right
+    const write = (text, top, color, scale) => {
+      const w = text.length * 4 * 2 - 2, left = 160 - (w >> 1);
+      for (const [dx, dy, c] of [[2, 1, 0], [0, 0, color]]) [...text].forEach((ch, k) => {
+        const rows = FONT[ch].split(' ');
+        for (let y = 0; y < 5 * scale; y++) for (let x = 0; x < 3; x++) if (rows[Math.floor(y / scale)][x] === '1')
+          for (const px of [0, 1]) put(left + 8 * k + 2 * x + px + dx, top + y + dy, PAL[c]);
+      });
+    };
+    // on the title, the engine's APEX-8 badge (art/brand/apex8.js) in the bottom left corner
+    if (g.mode === G.TITLE) {
+      const B = BADGE;
+      for (let y = 0; y < B.h; y++) for (let x = 0; x < B.w; x++) for (const dx of [0, 1]) put(BADGE_AT.x + 2 * x + dx, BADGE_AT.y + y, PAL[B.px[y * B.w + x]]);
+    }
+    const lines = g.mode === G.TITLE ? TEXT.title.filter(([t]) => t !== 'PRESS FIRE' || (g.t >> 5) & 1) : g.mode === G.WIN ? TEXT.win : g.mode === G.OVER ? TEXT.over : [];
+    for (const l of lines) write(...l);
+    // the status bar
+    for (let y = BAR_LINE; y < BAR_LINE + 8; y++) for (let x = 0; x < 320; x++) put(x, y, PAL[0]);
+    const barText = (col, text, color) => [...text].forEach((ch, k) => {
+      const rows = FONT[ch].split(' ');
+      for (let y = 0; y < 5; y++) for (let x = 0; x < 3; x++) if (rows[y][x] === '1') {
+        put(8 * (col + k) + 2 * x + 2, BAR_LINE + 2 + y, PAL[11]);
+        put(8 * (col + k) + 2 * x, BAR_LINE + 1 + y, PAL[color]);
+      }
+    });
+    if (g.mode === G.TITLE) barText(15, 'HI ' + digits(g.hi, 6), 1);
+    else {
+      barText(1, '***'.slice(0, g.hero.hearts).padEnd(3, ' '), 10);
+      barText(33, digits(g.score, 6), 1);
+      // the boss's strength, a bar per 2 hits left, once it is up
+      const B = g.boss;
+      if (B.state === G.RISE || B.state === G.FIGHT) barText(14, '|'.repeat((B.hp + 1) >> 1), COLOR.boss);
+    }
+    for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++) if (x < 7 || x >= 311 || y < 4 || y >= 196) put(x, y, PAL[IV.COLORS.border]);
+    return { pixels: out, scroll: sc, sprites };
+  }
+
+  return { SPRITE, COLOR, GAP, BAR_LINE, withTiles, setTitle, FRAMES, FRAME_NAMES, FONT, TEXT, lightStep, onScreen, objects, multiplex, frame };
+});
+
+</script>
+<script>
+/*
+ * APEX sound: the reference for SID music and sound effects. Integer maths only, so a 6502 driver
+ * that follows the same steps writes exactly the same SID registers every frame.
+ *
+ *   - one tick per frame; each tick sets all 25 SID registers (the register image)
+ *   - music: 3 voices, each playing patterns of 32 rows in its own order list (all the same length;
+ *     the song loops); a row lasts `speed` ticks. A row on a voice is a note (with its instrument, or
+ *     the voice's last), a release, or nothing (the note goes on)
+ *   - instruments: a waveform, ADSR, a pulse width that sweeps, an arpeggio (semitones added tick by
+ *     tick, round and round) and a gate length (ticks until release; 0 holds it). Or, for drums, a
+ *     table: per tick of the note a waveform and a note (the played note + n, or a fixed note), the
+ *     last held. An instrument can go through the filter
+ *   - a new note restarts hard: one tick with the gate off and the envelope's rates and sustain at 0
+ *     (so the SID's envelope counter comes round at once, and the note's attack starts on time: the
+ *     SID's ADSR bug), then the gate on (a table starts once it's on)
+ *   - the filter: one for the song, a resonant low-pass (or band or high) whose cutoff sweeps up and
+ *     down, over the voices playing instruments that use it
+ *   - a sound effect plays on its voice (its own `voice`, else the song's effectsVoice, voice 3 unless
+ *     it says) instead of the music, which goes on underneath; effects on different voices play at
+ *     once. An effect is steps, each a waveform (with its gate bit), a frequency that slides, ADSR, a
+ *     pulse width and a length in ticks. A new effect starts if none is playing on its voice or its
+ *     priority is at least the one's playing there
+ *   - the music can be turned off: while it is, the song stands still where it is and every voice is
+ *     released (it fades on its release); turned on, it goes on from there
+ *   - with two SIDs (a C64 Ultimate's, or a stereo SID cartridge: the second at $D420), the music
+ *     plays on the first and the effects on the second, each on its voice there, so they never
+ *     interrupt the music. A voice of the second SID with no effect keeps its last registers with the
+ *     gate off (the effect's release plays out); its filter is off and its volume full
+ *
+ * compile(def) turns a song and its effects (see sound/shmup.js) into tables; player(c, { sids }) makes a
+ * player for one SID or two; tick(c, p, effects, music) plays one tick, starting the effects listed
+ * (in order), with the music on unless music is false, and returns the register image: 25 bytes, or
+ * 50 with two SIDs (the second's after the first's). checksum(sum, image) folds an image into a running 16-bit checksum, which
+ * the C64 tests compare.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSOUND = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const ROWS = 32;
+  const WAVE = { tri: 0x10, saw: 0x20, pulse: 0x40, noise: 0x80 };
+  const PAL_CLOCK = 985248;
+  // SID frequency values for notes 0-95 (C-0 to B-7), A-4 (57) at 440 Hz on a PAL machine.
+  const FREQ = Array.from({ length: 96 }, (_, n) => Math.min(0xffff, Math.round((440 * 2 ** ((n - 57) / 12) * 16777216) / PAL_CLOCK)));
+  const NAMES = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];
+  const noteOf = s => {
+    const i = NAMES.indexOf(s.slice(0, 2)), oct = +s[2];
+    if (i < 0 || !(oct >= 0 && oct <= 7)) throw new Error(`not a note: ${s}`);
+    return oct * 12 + i;
+  };
+  // Row tokens in the tables: 0 nothing, 1 release, 2 + note (with the instrument in the next byte).
+  const NOTHING = 0, RELEASE = 1;
+  const FILTER_MODE = { low: 0x10, band: 0x20, high: 0x40 };
+
+  // def: { speed, instruments: { name: { wave, ad, sr, pw, pwSpeed, arp, gate } }, patterns: { name:
+  // 'C-3:inst . . == ...' (32 tokens) }, order: [[names] x 3], effects: { name: { priority, steps:
+  // [{ wave, gate, freq, slide, ad, sr, pw, ticks }] } } }
+  function compile(def) {
+    const insNames = Object.keys(def.instruments), ins = insNames.map(n => {
+      const i = def.instruments[n];
+      // a table step: [wave, note], the note + n or a fixed note ('C-3'): as tw (the waveform) and tn
+      // (a fixed note + $80, or n as a signed byte)
+      const table = (i.table || []).map(([w, n]) => [WAVE[w], typeof n === 'string' ? 0x80 | noteOf(n) : n & 0x7f]);
+      return { wave: WAVE[i.wave || 'pulse'], ad: i.ad, sr: i.sr, pw: i.pw || 0, pwSpeed: i.pwSpeed || 0, arp: i.arp && i.arp.length ? i.arp : [0], gate: i.gate || 0, table, filter: !!i.filter };
+    });
+    const patNames = Object.keys(def.patterns), patterns = patNames.map(n => {
+      const toks = def.patterns[n].trim().split(/\s+/);
+      if (toks.length !== ROWS) throw new Error(`pattern ${n}: ${toks.length} rows, not ${ROWS}`);
+      return toks.map(t => {
+        if (t === '.') return { op: NOTHING };
+        if (t === '==') return { op: RELEASE };
+        const [note, insName] = t.split(':');
+        const k = insName === undefined ? -1 : insNames.indexOf(insName);
+        if (insName !== undefined && k < 0) throw new Error(`pattern ${n}: no instrument ${insName}`);
+        return { op: 2, note: noteOf(note), ins: k };
+      });
+    });
+    const order = def.order.map(list => list.map(n => {
+      const k = patNames.indexOf(n);
+      if (k < 0) throw new Error(`no pattern ${n}`);
+      return k;
+    }));
+    if (order.length !== 3 || order.some(l => l.length !== order[0].length)) throw new Error('3 order lists of one length');
+    const effectsVoice = def.effectsVoice === undefined ? 2 : def.effectsVoice;
+    const effNames = Object.keys(def.effects || {}), effects = effNames.map(n => {
+      const e = def.effects[n];
+      return { priority: e.priority, voice: e.voice === undefined ? effectsVoice : e.voice, steps: e.steps.map(s => ({ ctrl: WAVE[s.wave] | (s.gate === false ? 0 : 1), freq: s.freq & 0xffff, slide: s.slide || 0, ad: s.ad, sr: s.sr, pw: s.pw || 0, ticks: s.ticks })) };
+    });
+    // the filter's cutoff (11 bits) tick by tick: a triangle from min to max and back over period ticks
+    const f = def.filter || { res: 0, min: 0, max: 0, period: 2 };
+    if (f.period < 2 || f.period > 256 || f.period & 1) throw new Error('filter period: an even number of ticks up to 256');
+    const half = f.period / 2, cut = Array.from({ length: f.period }, (_, k) => f.min + Math.floor(((f.max - f.min) * (k < half ? k : f.period - k)) / half));
+    const filter = { res: f.res, mode: FILTER_MODE[f.mode] || 0, cut };
+    return { speed: def.speed, ins, insNames, patterns, patNames, order, effects, effNames, filter, effectsVoice };
+  }
+
+  function player(c, opts = {}) {
+    return {
+      sids: opts.sids === 2 ? 2 : 1,
+      hold: [0, 1, 2].map(() => new Uint8Array(7)), // two SIDs: each effect voice's last registers
+      timer: 0, row: 0, pos: 0,
+      voices: [0, 1, 2].map(() => ({ ins: -1, note: 0, phase: 2, age: 0, arp: 0, pw: 0, tpos: 0 })),
+      fx: [0, 1, 2].map(() => ({ sfx: -1, step: 0, left: 0, freq: 0 })), ft: 0,
+    };
+  }
+
+  function startEffect(c, p, id) {
+    const f = p.fx[c.effects[id].voice];
+    if (f.sfx >= 0 && c.effects[id].priority < c.effects[f.sfx].priority) return;
+    f.sfx = id; f.step = 0;
+    const s = c.effects[id].steps[0];
+    f.left = s.ticks; f.freq = s.freq;
+  }
+
+  function tick(c, p, effects = [], music = true) {
+    for (const id of effects) startEffect(c, p, id);
+    // the music off: the song stands still, every voice released
+    if (!music) for (const vs of p.voices) vs.phase = 2;
+    // a new row on every voice
+    else if (p.timer === 0) {
+      for (let v = 0; v < 3; v++) {
+        const r = c.patterns[c.order[v][p.pos]][p.row], vs = p.voices[v];
+        if (r.op === RELEASE) vs.phase = 2;
+        else if (r.op >= 2) {
+          if (r.ins >= 0) vs.ins = r.ins;
+          if (vs.ins >= 0) Object.assign(vs, { note: r.note, phase: 0, age: 0, arp: 0, tpos: 0, pw: c.ins[vs.ins].pw });
+        }
+      }
+      if (++p.row === ROWS) { p.row = 0; if (++p.pos === c.order[0].length) p.pos = 0; }
+      p.timer = c.speed;
+    }
+    if (music) p.timer--;
+    // each voice's registers, then its state moves on
+    const stereo = p.sids === 2, R = new Uint8Array(25 * p.sids);
+    let route = 0;
+    for (let v = 0; v < 3; v++) {
+      const vs = p.voices[v], b = 7 * v;
+      if (vs.ins < 0) continue;
+      const ins = c.ins[vs.ins];
+      let wave = ins.wave, note = vs.note + ins.arp[vs.arp];
+      if (ins.table.length) {
+        const [tw, tn] = ins.table[Math.min(vs.tpos, ins.table.length - 1)];
+        wave = tw;
+        note = tn & 0x80 ? tn & 0x7f : vs.note + ((tn ^ 0x40) - 0x40); // (a fixed note, or + n)
+      }
+      const f = FREQ[Math.max(0, Math.min(95, note))];
+      if (stereo || p.fx[v].sfx < 0) {
+        R[b] = f & 255; R[b + 1] = f >> 8;
+        R[b + 2] = vs.pw & 255; R[b + 3] = vs.pw >> 8;
+        R[b + 4] = wave | (vs.phase === 1 ? 1 : 0);
+        R[b + 5] = vs.phase === 0 ? 0 : ins.ad; R[b + 6] = vs.phase === 0 ? 0 : ins.sr;
+        if (ins.filter) route |= 1 << v;
+      }
+      if (vs.phase !== 0 && vs.tpos < 255) vs.tpos++;
+      if (vs.phase === 0) vs.phase = 1;
+      else if (vs.phase === 1 && ins.gate && vs.age + 1 >= ins.gate) vs.phase = 2;
+      if (vs.age < 255) vs.age++;
+      if (++vs.arp === ins.arp.length) vs.arp = 0;
+      vs.pw = (vs.pw + ins.pwSpeed) & 0x0fff;
+    }
+    // the effects, each on its voice (of the second SID, if there are two)
+    for (let v = 0; v < 3; v++) {
+      const f = p.fx[v], b = (stereo ? 25 : 0) + 7 * v;
+      if (f.sfx < 0) {
+        if (stereo) { R.set(p.hold[v], b); R[b + 4] &= 0xfe; } // its last registers, the gate off
+        continue;
+      }
+      const e = c.effects[f.sfx], s = e.steps[f.step];
+      R[b] = f.freq & 255; R[b + 1] = f.freq >> 8;
+      R[b + 2] = s.pw & 255; R[b + 3] = s.pw >> 8;
+      R[b + 4] = s.ctrl; R[b + 5] = s.ad; R[b + 6] = s.sr;
+      if (stereo) p.hold[v].set(R.subarray(b, b + 7));
+      f.freq = (f.freq + s.slide) & 0xffff;
+      if (--f.left === 0) {
+        if (++f.step === e.steps.length) f.sfx = -1;
+        else { const n = e.steps[f.step]; f.left = n.ticks; f.freq = n.freq; }
+      }
+    }
+    // the filter, and the volume
+    const cut = c.filter.cut[p.ft];
+    if (++p.ft === c.filter.cut.length) p.ft = 0;
+    R[21] = cut & 7; R[22] = cut >> 3;
+    R[23] = (c.filter.res << 4) | route;
+    R[24] = c.filter.mode | 0x0f;
+    if (stereo) R[49] = 0x0f; // the second SID: no filter, full volume
+    return R;
+  }
+
+  const checksum = (sum, R) => {
+    for (const b of R) sum = ((((sum << 1) | (sum >> 15)) & 0xffff) + b) & 0xffff;
+    return sum;
+  };
+
+  return { ROWS, WAVE, FREQ, NOTHING, RELEASE, noteOf, compile, player, tick, checksum };
+});
+
+</script>
+<script>
+/*
+ * APEX SID: an emulation of the C64's sound chip, for hearing the games outside a C64 (the browser
+ * pages, WAV files). It plays the register image core/sound.js makes each frame (all 25 registers,
+ * written at once), so the music and effects sound as the C64's SID makes them, closely though not
+ * exactly (the C64 tests check the registers, not the sound):
+ *
+ *   - three voices, each a 24-bit phase accumulator adding its frequency every cycle (985248 a second,
+ *     PAL), giving a triangle, sawtooth, pulse (against the 12-bit pulse width) or noise (a 23-bit
+ *     shift register clocked by bit 19), and combinations of them as the bitwise AND (roughly); sync
+ *     and ring modulation from the voice before, the test bit
+ *   - an envelope per voice: attack, decay to the sustain level, release, at the SID's rates, decay and
+ *     release slowing as the level falls (its piecewise exponential), its rate counter never reset
+ *     (so the ADSR bug happens as on the chip); the gate starts and releases it
+ *   - the filter: a resonant state-variable filter (low, band and high pass, mixed by the mode bits)
+ *     over the voices routed to it, its cutoff following the 6581's curve; voice 3 can be cut from the
+ *     output; the master volume
+ *
+ * create(sampleRate) makes a chip; write(R) sets its 25 registers; render(out, at, n) adds n samples
+ * (-1..1) into out from at. Works in Node, in the browser (global APEXSID), and inside an
+ * AudioWorklet (APEXSID.source is this file's factory as text, to build one from).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSID = Object.assign(factory(), { source: '(' + factory.toString() + ')()' });
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const CLOCK = 985248;
+  // Cycles per envelope step for rates 0-15 (attack; decay and release use the same, slowed below).
+  const RATE = [9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251];
+  // Decay and release take 1, 2, 4, 8, 16 or 30 steps of the rate per level step as the level falls.
+  const slowdown = l => (l >= 0x5d ? 1 : l >= 0x36 ? 2 : l >= 0x1a ? 4 : l >= 0x0e ? 8 : l >= 0x06 ? 16 : 30);
+  const ATTACK = 0, DECAY = 1, RELEASE = 2;
+  // The output's scale: as loud as VICE's recordings of the same (test/sid-compare.js).
+  const LEVEL = 0.095;
+  // The 6581's filter cutoff in Hz for the 11-bit cutoff register, every $100 (roughly, as measured
+  // chips go): low and flat at first, then rising steeply. Between the points it is interpolated on a
+  // log scale.
+  const CUTOFF = [220, 230, 300, 520, 1000, 2200, 4500, 8000, 12000];
+  const cutoffHz = fc => {
+    const i = Math.min(7, fc >> 8), t = (fc & 255) / 256;
+    return CUTOFF[i] * (CUTOFF[i + 1] / CUTOFF[i]) ** t;
+  };
+
+  function create(sampleRate) {
+    const cps = CLOCK / sampleRate; // cycles a sample
+    const voices = [0, 1, 2].map(() => ({
+      acc: 0, freq: 0, pw: 0, ctrl: 0, ad: 0, sr: 0, noise: 0x7ffff8, gate: false,
+      env: 0, state: RELEASE, rc: 0, ec: 0, frac: 0,
+    }));
+    let cutoff = 0, res = 0, route = 0, mode = 0, volume = 0, voice3off = false;
+    let low = 0, band = 0; // the filter's state
+
+    function write(R) {
+      voices.forEach((v, k) => {
+        const b = 7 * k;
+        v.freq = R[b] | (R[b + 1] << 8);
+        v.pw = (R[b + 2] | (R[b + 3] << 8)) & 0x0fff;
+        const ctrl = R[b + 4], gate = !!(ctrl & 1);
+        if (gate && !v.gate) { v.state = ATTACK; v.ec = 0; }
+        if (!gate && v.gate) v.state = RELEASE;
+        v.gate = gate;
+        if (ctrl & 8) { v.acc = 0; v.noise = 0x7ffff8; } // the test bit: the oscillator held at 0
+        v.ctrl = ctrl;
+        v.ad = R[b + 5]; v.sr = R[b + 6];
+      });
+      cutoff = (R[21] & 7) | (R[22] << 3);
+      res = R[23] >> 4; route = R[23] & 7;
+      mode = R[24] & 0x70; volume = R[24] & 15; voice3off = !!(R[24] & 0x80);
+    }
+
+    // A voice's envelope moves on by `cycles`. As on the chip: a 15-bit rate counter counts cycles up
+    // to the rate's period and steps the envelope there; it is never reset, so a period shorter than
+    // the count so far waits for the counter to come round (up to 32768 cycles: the ADSR bug, which
+    // the driver's hard restart avoids). Decay and release step only every slowdown(level) of those.
+    function envelope(v, cycles) {
+      v.frac += cycles;
+      let c = Math.floor(v.frac);
+      v.frac -= c;
+      while (c > 0) {
+        const p = RATE[v.state === ATTACK ? v.ad >> 4 : v.state === DECAY ? v.ad & 15 : v.sr & 15];
+        const need = v.rc < p ? p - v.rc : 0x8000 - v.rc + p;
+        if (c < need) { v.rc = (v.rc + c) & 0x7fff; return; }
+        c -= need;
+        v.rc = 0;
+        if (v.state === ATTACK) {
+          if (++v.env >= 0xff) { v.env = 0xff; v.state = DECAY; v.ec = 0; }
+        } else if (!(v.state === DECAY && v.env <= (v.sr >> 4) * 17) && v.env > 0 && ++v.ec >= slowdown(v.env)) {
+          v.ec = 0;
+          v.env--;
+        }
+      }
+    }
+
+    // A voice's waveform, 12 bits, from its accumulator (and the voice before's, for ring modulation).
+    function wave(v, before) {
+      const c = v.ctrl, a = Math.floor(v.acc);
+      let out = 0xfff, any = false;
+      const and = w => { out &= w; any = true; };
+      if (c & 0x10) { // triangle: the top bit folds the ramp (or the voice before's, ring modulated)
+        const fold = (c & 4 ? (a ^ Math.floor(before.acc)) : a) & 0x800000;
+        and(((fold ? ~a : a) >> 11) & 0xfff);
+      }
+      if (c & 0x20) and(a >> 12);
+      if (c & 0x40) and((a >> 12) >= v.pw ? 0xfff : 0);
+      if (c & 0x80) { // noise: 8 bits of the shift register
+        const n = v.noise;
+        and((((n >> 20) & 1) << 11) | (((n >> 18) & 1) << 10) | (((n >> 14) & 1) << 9) | (((n >> 11) & 1) << 8) |
+          (((n >> 9) & 1) << 7) | (((n >> 5) & 1) << 6) | (((n >> 2) & 1) << 5) | ((n & 1) << 4));
+      }
+      return any ? out : 0x800;
+    }
+
+    function render(out, at, n) {
+      // the filter's coefficients for this stretch
+      const fc = cutoffHz(cutoff), f = 2 * Math.sin(Math.PI * Math.min(fc, sampleRate / 4) / sampleRate);
+      const q = 1.0 / (0.707 + res / 15 * 2.2);
+      for (let s = 0; s < n; s++) {
+        let direct = 0, filtered = 0;
+        for (let k = 0; k < 3; k++) {
+          const v = voices[k], before = voices[(k + 2) % 3];
+          if (!(v.ctrl & 8)) {
+            const step = v.freq * cps, old = v.acc, next = old + step;
+            // noise: its shift register clocks each time bit 19 of the accumulator goes up
+            if (v.ctrl & 0x80) for (let t = Math.floor(next / 0x100000) - Math.floor(old / 0x100000); t > 0; t--) {
+              const bit = ((v.noise >> 22) ^ (v.noise >> 17)) & 1;
+              v.noise = ((v.noise << 1) | bit) & 0x7fffff;
+            }
+            v.acc = next % 0x1000000;
+            // hard sync: the next voice restarts when this one's top bit rises
+            const after = voices[(k + 1) % 3];
+            if ((after.ctrl & 2) && Math.floor((next + 0x800000) / 0x1000000) > Math.floor((old + 0x800000) / 0x1000000)) after.acc = 0;
+          }
+          envelope(v, cps);
+          const o = ((wave(v, before) - 0x800) * v.env) / (0x800 * 0xff);
+          if (route & (1 << k)) filtered += o;
+          else if (!(k === 2 && voice3off)) direct += o;
+        }
+        // the state-variable filter, in two half steps a sample for stability
+        let hp = 0;
+        for (let r = 0; r < 2; r++) {
+          hp = filtered - low - q * band;
+          band += (f / 2) * hp;
+          low += (f / 2) * band;
+        }
+        const f2 = (mode & 0x10 ? low : 0) + (mode & 0x20 ? band : 0) + (mode & 0x40 ? hp : 0);
+        out[at + s] += ((direct + f2) * volume) / 15 * LEVEL;
+      }
+    }
+
+    return { write, render };
+  }
+
+  return { CLOCK, create };
+});
+
+</script>
+<script>
+// The Drowned Crypt's sound (core/sound.js): original creeping music in the manner of a 1920s silent
+// film's mysterioso cue, and the game's effects. D minor, slow: a plucked bass on beats 1 and 3
+// walking chromatically into each change (voice 1, through a dark low-pass), stride-like chords on
+// 2 and 4 as quick arpeggios (voice 2, which the hero's and the creatures' effects borrow), and a
+// melody that tiptoes up in plucked notes onto ghostly held ones (voice 3). Dm Dm Gm A7, Dm Bb Gm A7.
+// The plucked notes ring on as they release; the hero's and the creatures' effects are short and
+// sustain nothing, so they tick over the music rather than drown it.
+//
+// Patterns are 32 rows: four bars of eighths. Speed 10 makes a row 10 frames: 75 beats a minute, a
+// 38-second loop.
+//
+// When the boss rises the game turns the music off, and the boss's effects have voices 1 and 3 to
+// themselves: a roar over a rumble as it rises, moans, a screech as it spits, the floor cracking and a
+// tentacle bursting up, a shriek over a collapse as it dies. EVENTS says which effects each of the
+// game's events (core/crypt.js) starts.
+(function (root, song) {
+  if (typeof module === 'object' && module.exports) module.exports = song;
+  else (root.APEXSONGS = root.APEXSONGS || {}).crypt = song;
+})(typeof self !== 'undefined' ? self : this, {
+  speed: 10,
+  effectsVoice: 1,
+  filter: { res: 10, mode: 'low', min: 0x1c0, max: 0x480, period: 256 },
+  instruments: {
+    pizz: { wave: 'pulse', ad: 0x0a, sr: 0x0a, pw: 0x600, gate: 2, filter: true },
+    mi: { wave: 'pulse', ad: 0x08, sr: 0x48, pw: 0x400, pwSpeed: 24, arp: [0, 3, 7], gate: 3 },
+    ma: { wave: 'pulse', ad: 0x08, sr: 0x48, pw: 0x400, pwSpeed: 24, arp: [0, 4, 7], gate: 3 },
+    dom: { wave: 'pulse', ad: 0x08, sr: 0x48, pw: 0x400, pwSpeed: 24, arp: [0, 4, 7, 10], gate: 3 },
+    pluck: { wave: 'pulse', ad: 0x09, sr: 0x29, pw: 0x200, pwSpeed: 8, gate: 4 },
+    ghost: { wave: 'tri', ad: 0x89, sr: 0xa8 },
+  },
+  patterns: {
+    sil: '. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .',
+    // the bass: Dm Dm Gm A7, then Dm Bb Gm A7, walking into the changes
+    bassA: 'D-2:pizz . . . A-1 . . . D-2 . . . A-1 . C#2 . G-1 . . . D-2 . . . A-1 . . . E-1 . C#2 .',
+    bassB: 'D-2:pizz . . . A-1 . . . A#1 . . . F-1 . . . G-1 . . . D-2 . E-2 . A-1 . . . C#2 . A-1 .',
+    // the chords, on 2 and 4
+    chA: '. . D-3:mi . . . D-3 . . . D-3 . . . D-3 . . . G-2:mi . . . G-2 . . . A-2:dom . . . A-2 .',
+    chB: '. . D-3:mi . . . D-3 . . . A#2:ma . . . A#2 . . . G-2:mi . . . G-2 . . . A-2:dom . . . A-2 .',
+    // the melody: creeping up in plucked notes onto held ones
+    melA: 'D-4:pluck . E-4 . F-4 . F#4 . G-4:ghost . . . F#4:pluck . F-4 . E-4:ghost . . . D#4:pluck . E-4 . A-3:ghost . . . . . == .',
+    melB: 'D-4:pluck . E-4 . F-4 . G#4 . A-4:ghost . . . A#4:pluck . A-4 . G-4 . E-4 . C#4 . E-4 . D-4:ghost . . . . . == .',
+    melC: 'A-4:ghost . . . . . G#4:pluck . A-4:ghost . . . . . A#4:pluck . A#4:ghost . . . A-4:pluck . G-4 . C#5:ghost . . . . . == .',
+  },
+  order: [
+    ['bassA', 'bassB', 'bassA', 'bassB', 'bassA', 'bassB'],
+    ['chA', 'chB', 'chA', 'chB', 'chA', 'chB'],
+    ['sil', 'sil', 'melA', 'melB', 'melC', 'melB'],
+  ],
+  // in priority order on each voice, lowest first
+  effects: {
+    // the hero's and the creatures', on voice 2
+    shot: { priority: 0, steps: [
+      { wave: 'noise', freq: 0x5000, ad: 0x03, sr: 0x00, ticks: 2 },
+      { wave: 'noise', gate: false, freq: 0x1800, ad: 0x03, sr: 0x00, ticks: 1 },
+    ] },
+    wake: { priority: 1, steps: [
+      { wave: 'tri', freq: 0x0500, slide: 0x40, ad: 0x06, sr: 0x50, ticks: 8 },
+      { wave: 'saw', freq: 0x0700, slide: -0x60, ad: 0x06, sr: 0x50, ticks: 6 },
+      { wave: 'saw', gate: false, freq: 0x0400, ad: 0x06, sr: 0x50, ticks: 1 },
+    ] },
+    hit: { priority: 2, steps: [
+      { wave: 'pulse', freq: 0x0600, ad: 0x04, sr: 0x00, pw: 0x400, ticks: 2 },
+      { wave: 'noise', gate: false, freq: 0x2000, ad: 0x04, sr: 0x00, ticks: 1 },
+    ] },
+    kill: { priority: 3, steps: [
+      { wave: 'noise', freq: 0x1800, slide: -0x80, ad: 0x08, sr: 0x60, ticks: 10 },
+      { wave: 'noise', gate: false, freq: 0x0c00, slide: -0x40, ad: 0x08, sr: 0x66, ticks: 4 },
+    ] },
+    start: { priority: 4, steps: [
+      { wave: 'tri', freq: 0x1250, ad: 0x00, sr: 0xa6, ticks: 8 },
+      { wave: 'tri', freq: 0x1d50, ad: 0x00, sr: 0xa6, ticks: 8 },
+      { wave: 'tri', gate: false, freq: 0x1d50, ad: 0x00, sr: 0xa6, ticks: 1 },
+    ] },
+    hurt: { priority: 5, steps: [
+      { wave: 'pulse', freq: 0x0900, slide: -0x60, ad: 0x06, sr: 0x86, pw: 0x300, ticks: 8 },
+      { wave: 'noise', gate: false, freq: 0x1000, ad: 0x06, sr: 0x86, ticks: 4 },
+    ] },
+    win: { priority: 6, steps: [
+      { wave: 'tri', freq: 0x1250, ad: 0x00, sr: 0xa8, ticks: 10 },
+      { wave: 'tri', freq: 0x15d0, ad: 0x00, sr: 0xa8, ticks: 10 },
+      { wave: 'tri', freq: 0x1b70, ad: 0x00, sr: 0xa8, ticks: 10 },
+      { wave: 'tri', freq: 0x24a0, ad: 0x00, sr: 0xaa, ticks: 30 },
+      { wave: 'tri', gate: false, freq: 0x24a0, ad: 0x00, sr: 0xaa, ticks: 1 },
+    ] },
+    dead: { priority: 7, steps: [
+      { wave: 'saw', freq: 0x2000, slide: -0x30, ad: 0x00, sr: 0xfa, ticks: 60 },
+      { wave: 'saw', gate: false, freq: 0x0a00, slide: -0x10, ad: 0x00, sr: 0xfa, ticks: 20 },
+    ] },
+    // the boss's, on voices 1 and 3 (the music off)
+    moan: { voice: 0, priority: 0, steps: [
+      { wave: 'tri', freq: 0x0380, slide: 0x05, ad: 0x8a, sr: 0xa9, ticks: 30 },
+      { wave: 'saw', freq: 0x0420, slide: -0x07, ad: 0x8a, sr: 0xa9, ticks: 40 },
+      { wave: 'saw', gate: false, freq: 0x0300, slide: -0x04, ad: 0x8a, sr: 0xa9, ticks: 30 },
+    ] },
+    grasp: { voice: 0, priority: 1, steps: [
+      { wave: 'noise', freq: 0x0c00, slide: 0x100, ad: 0x00, sr: 0xc0, ticks: 10 },
+      { wave: 'saw', freq: 0x0600, slide: 0x80, ad: 0x00, sr: 0xc0, ticks: 12 },
+      { wave: 'saw', gate: false, freq: 0x0c00, slide: -0x80, ad: 0x00, sr: 0xc0, ticks: 8 },
+    ] },
+    roar: { voice: 0, priority: 2, steps: [
+      { wave: 'saw', freq: 0x0300, slide: 0x08, ad: 0x88, sr: 0xfa, ticks: 40 },
+      { wave: 'saw', freq: 0x0640, slide: -0x10, ad: 0x88, sr: 0xfa, ticks: 40 },
+      { wave: 'saw', gate: false, freq: 0x0240, slide: -0x04, ad: 0x88, sr: 0xfa, ticks: 20 },
+    ] },
+    collapse: { voice: 0, priority: 3, steps: [
+      { wave: 'noise', freq: 0x0700, slide: -0x10, ad: 0x00, sr: 0xfb, ticks: 60 },
+      { wave: 'noise', gate: false, freq: 0x0340, slide: -0x04, ad: 0x00, sr: 0xfb, ticks: 30 },
+    ] },
+    crack: { voice: 2, priority: 0, steps: [
+      { wave: 'noise', freq: 0x0900, ad: 0x00, sr: 0x90, ticks: 3 },
+      { wave: 'noise', freq: 0x1600, ad: 0x00, sr: 0x90, ticks: 2 },
+      { wave: 'noise', gate: false, freq: 0x0700, ad: 0x00, sr: 0x90, ticks: 6 },
+    ] },
+    screech: { voice: 2, priority: 1, steps: [
+      { wave: 'saw', freq: 0x3000, slide: 0x200, ad: 0x00, sr: 0xd8, ticks: 10 },
+      { wave: 'noise', freq: 0x6000, slide: -0x300, ad: 0x00, sr: 0xd8, ticks: 8 },
+      { wave: 'saw', gate: false, freq: 0x2400, slide: -0x100, ad: 0x00, sr: 0xd8, ticks: 10 },
+    ] },
+    rumble: { voice: 2, priority: 2, steps: [
+      { wave: 'noise', freq: 0x0300, ad: 0x6a, sr: 0xfb, ticks: 60 },
+      { wave: 'noise', gate: false, freq: 0x0280, ad: 0x6a, sr: 0xfb, ticks: 20 },
+    ] },
+    shriek: { voice: 2, priority: 3, steps: [
+      { wave: 'saw', freq: 0x4000, slide: 0x100, ad: 0x00, sr: 0xfa, ticks: 20 },
+      { wave: 'saw', freq: 0x6000, slide: -0x200, ad: 0x00, sr: 0xfa, ticks: 30 },
+      { wave: 'saw', gate: false, freq: 0x2000, slide: -0x80, ad: 0x00, sr: 0xfa, ticks: 30 },
+    ] },
+  },
+  // the effects each of the game's events starts
+  EVENTS: {
+    shot: ['shot'], wake: ['wake'], hit: ['hit'], kill: ['kill'], start: ['start'], hurt: ['hurt'], win: ['win'],
+    dead: ['dead'], moan: ['moan'], grasp: ['grasp'], rise: ['roar', 'rumble'], crack: ['crack'], spit: ['screech'],
+    bossDies: ['shriek', 'collapse'],
+  },
+});
+
+</script>
+<script>
+/*
+ * APEX audio for the browser pages: a game's sound, as the C64 makes it (by default as a C64 Ultimate
+ * with two SIDs does: the music on one, the effects on the other). Each tick the page tells it
+ * what the game did (the effects to start, whether the music plays); core/sound.js turns that into the
+ * SID's 25 registers, exactly as the C64's driver writes them, and core/sid.js plays them, in an
+ * AudioWorklet (built from APEXSID.source), or a ScriptProcessor where worklets can't run (pages opened
+ * from a file).
+ *
+ * Browsers start sound only after the player does something, so start() is called from the page's
+ * first key press, click or touch; until then the song still moves on, silently, so it is where it
+ * would be. M (the page's) mutes and unmutes.
+ *
+ *   const audio = APEXAUDIO.create(songDefinition, { sids: 2 })   two SIDs, as on a C64 Ultimate (the
+ *                                                                 default; 1 for a stock C64)
+ *   audio.tick(['shot', ...], musicOn)   once a game tick (50 a second), the effects by name
+ *   audio.start()                         from a user gesture; audio.toggleMute()
+ *
+ * Works in the browser (global APEXAUDIO, needing APEXSOUND and APEXSID).
+ */
+(function (root, factory) {
+  root.APEXAUDIO = factory(root.APEXSOUND, root.APEXSID);
+})(typeof self !== 'undefined' ? self : this, function (S, SID) {
+  'use strict';
+
+  const FPS = 50;
+  // The worklet: a queue of register frames, each played for 1/50 s of samples. A few frames of slack
+  // absorb the page's uneven ticks; too many (the page ran ahead) and the oldest go; none for half a second
+  // (the page stopped, say hidden) and the chip falls silent rather than hold a note.
+  const WORKLET = `
+const APEXSID = ${SID.source};
+class ApexSid extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.chips = [APEXSID.create(sampleRate), APEXSID.create(sampleRate)];
+    this.queue = [];
+    this.left = 0;
+    this.starved = 0;
+    this.port.onmessage = e => { this.queue.push(e.data); if (this.queue.length > 8) this.queue.splice(0, this.queue.length - 3); };
+  }
+  // A frame's registers: the first SID's, then the second's if there are two.
+  write(R) { this.chips[0].write(R); if (R.length > 25) this.chips[1].write(R.slice(25)); }
+  process(inputs, outputs) {
+    const out = outputs[0][0];
+    out.fill(0);
+    for (let i = 0; i < out.length;) {
+      if (this.left <= 0) {
+        if (this.queue.length) { this.write(this.queue.shift()); this.starved = 0; }
+        else if (++this.starved === 25) this.write(new Array(50).fill(0)); // the page stopped: silence
+        this.left += sampleRate / ${FPS};
+      }
+      const n = Math.min(out.length - i, Math.ceil(this.left));
+      for (const chip of this.chips) chip.render(out, i, n);
+      i += n;
+      this.left -= n;
+    }
+    for (let c = 1; c < outputs[0].length; c++) outputs[0][c].set(out);
+    return true;
+  }
+}
+registerProcessor('apex-sid', ApexSid);
+`;
+
+  function create(def, { sids = 2 } = {}) {
+    const c = S.compile(def), p = S.player(c, { sids });
+    let ctx = null, send = null, muted = false;
+
+    // The fallback: the same queue and chip on the page's own thread.
+    function scriptProcessor() {
+      const chips = [SID.create(ctx.sampleRate), SID.create(ctx.sampleRate)], queue = [];
+      const write = R => { chips[0].write(R); if (R.length > 25) chips[1].write(R.slice(25)); };
+      let left = 0, starved = 0;
+      const node = ctx.createScriptProcessor(2048, 0, 1);
+      node.onaudioprocess = e => {
+        const out = e.outputBuffer.getChannelData(0);
+        out.fill(0);
+        for (let i = 0; i < out.length;) {
+          if (left <= 0) {
+            if (queue.length) { write(queue.shift()); starved = 0; } else if (++starved === 25) write(new Array(50).fill(0));
+            left += ctx.sampleRate / FPS;
+          }
+          const n = Math.min(out.length - i, Math.ceil(left));
+          for (const chip of chips) chip.render(out, i, n);
+          i += n;
+          left -= n;
+        }
+      };
+      node.connect(ctx.destination);
+      send = R => { queue.push(R); if (queue.length > 12) queue.splice(0, queue.length - 5); };
+    }
+
+    function start() {
+      if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+      const Ctx = globalThis.AudioContext || globalThis.webkitAudioContext;
+      if (!Ctx) return;
+      ctx = new Ctx();
+      if (ctx.audioWorklet && globalThis.isSecureContext) {
+        const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
+        ctx.audioWorklet.addModule(url).then(() => {
+          const node = new AudioWorkletNode(ctx, 'apex-sid', { numberOfInputs: 0, outputChannelCount: [2] });
+          node.connect(ctx.destination);
+          send = R => node.port.postMessage(R);
+        }).catch(scriptProcessor);
+      } else scriptProcessor();
+    }
+
+    function tick(effects = [], music = true) {
+      const ids = effects.map(n => c.effNames.indexOf(n)).filter(k => k >= 0);
+      const R = S.tick(c, p, ids, music);
+      if (!send) return;
+      if (muted) R[24] &= 0xf0; // the volume to 0
+      send(Array.from(R));
+    }
+
+    return { start, tick, toggleMute: () => { muted = !muted; return muted; }, get muted() { return muted; } };
+  }
+
+  return { create };
+});
+
+</script>
+<script>window.LEVEL_TEXT = "; The Drowned Crypt\r\n; d a drowned one, s a spawn (both on floor); the rest as in d1.txt\r\n; B the boss, the Mother of the Deep, asleep under the floor (floor)\r\n-------------------------------\r\n---#####t#####-----------------\r\n---#.........#---######t###----\r\n---#..,......#---#.....s..#----\r\n---#....P....#####........#----\r\n---t.....,..........,..s..#----\r\n---#.........#####........#----\r\n---#...,.....#---#..,.....#----\r\n---####..#####---####..####----\r\n------#..#----------#..#-------\r\n------#.,#----------#.,#-------\r\n------#..#----------#..#-------\r\n--#####..######--####..##------\r\n--#...........#--#......#------\r\n--t..d....,...####..d...t------\r\n--#.....,.............,.#------\r\n--#..,...d....####...s..#------\r\n--#.......,...#--#.d....#------\r\n--######t######--###..#t#------\r\n-------------------#..#--------\r\n-------------------#..#--------\r\n-------------------#..#--------\r\n-------------###t###..###t####-\r\n-------------#...............#-\r\n-------------#.........,.....#-\r\n-------------t...............t-\r\n-------------#...............#-\r\n-------------#..,............#-\r\n-------------#.......B.......#-\r\n-------------#...............#-\r\n-------------t...............t-\r\n-------------#....,.......,..#-\r\n-------------#...............#-\r\n-------------####t#######t####-\r\n-------------------------------\r\n";</script>
+<script>
+// APEX Drowned Crypt, the reference, playable: the same game and the same frames the C64 engine is to
+// draw, at a fixed 50 ticks a second, inside a C64-sized border.
+(async function () {
+  const text = window.LEVEL_TEXT || await (await fetch('../levels/iso/c1.txt')).text();
+  const map = APEXCRYPT.parse(text);
+  let game = APEXCRYPT.game(map);
+  const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(320, 200);
+  const border = APEXSCII.PALETTE[APEXISOVIEW.COLORS.border];
+  const hi = () => game.hi;
+
+  // The sound (web/audio.js), from the first key press, click or touch; M mutes.
+  const audio = APEXAUDIO.create(APEXSONGS.crypt);
+  for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, () => audio.start());
+  addEventListener('keydown', e => { if (e.code === 'KeyM') audio.toggleMute(); });
+
+  // Input: keyboard, the touch pad and the first gamepad, as joystick bits (1 up, 2 down, 4 left, 8 right,
+  // 16 fire).
+  const KEYS = { ArrowUp: 1, KeyW: 1, ArrowDown: 2, KeyS: 2, ArrowLeft: 4, KeyA: 4, ArrowRight: 8, KeyD: 8, Space: 16 };
+  let keys = 0, touch = 0, firing = 0;
+  addEventListener('keydown', e => {
+    if (e.code === 'KeyR') game = Object.assign(APEXCRYPT.game(map), { hi: hi() });
+    if (KEYS[e.code]) { keys |= KEYS[e.code]; e.preventDefault(); }
+  });
+  addEventListener('keyup', e => { if (KEYS[e.code]) keys &= ~KEYS[e.code]; });
+  addEventListener('blur', () => { keys = 0; touch = 0; firing = 0; });
+  // The fire button, for touch.
+  const fire = document.getElementById('fire');
+  fire.addEventListener('pointerdown', e => { e.preventDefault(); fire.setPointerCapture(e.pointerId); firing = 16; });
+  for (const ev of ['pointerup', 'pointercancel']) fire.addEventListener(ev, () => { firing = 0; });
+  // The pad: the direction from its centre, in eighths.
+  const pad = document.getElementById('pad'), knob = document.getElementById('knob');
+  const EIGHTHS = [8, 10, 2, 6, 4, 5, 1, 9]; // right, then clockwise
+  const aim = e => {
+    const r = pad.getBoundingClientRect(), dx = e.clientX - r.left - r.width / 2, dy = e.clientY - r.top - r.height / 2;
+    const far = Math.hypot(dx, dy) > 12;
+    touch = far ? EIGHTHS[Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) & 7] : 0;
+    const k = Math.min(1, 48 / Math.max(1, Math.hypot(dx, dy)));
+    knob.style.transform = far ? `translate(${dx * k}px, ${dy * k}px)` : '';
+  };
+  pad.addEventListener('pointerdown', e => { e.preventDefault(); pad.setPointerCapture(e.pointerId); aim(e); });
+  pad.addEventListener('pointermove', e => { if (pad.hasPointerCapture(e.pointerId)) aim(e); });
+  const release = () => { touch = 0; knob.style.transform = ''; };
+  pad.addEventListener('pointerup', release);
+  pad.addEventListener('pointercancel', release);
+  function gamepad() {
+    const g = navigator.getGamepads && [...navigator.getGamepads()].find(Boolean);
+    if (!g) return 0;
+    const x = g.axes[0] || 0, y = g.axes[1] || 0, btn = i => g.buttons[i] && g.buttons[i].pressed;
+    return (y < -0.4 || btn(12) ? 1 : 0) | (y > 0.4 || btn(13) ? 2 : 0) | (x < -0.4 || btn(14) ? 4 : 0) | (x > 0.4 || btn(15) ? 8 : 0) | (btn(0) ? 16 : 0);
+  }
+
+  function draw() {
+    image.data.set(APEXCRYPTVIEW.frame(map, game).pixels);
+    ctx.fillStyle = border;
+    ctx.fillRect(0, 0, 384, 272);
+    ctx.putImageData(image, 32, 36);
+  }
+
+  // Fixed 50 Hz ticks; the screen shows the latest.
+  const TICK = 20;
+  let last = performance.now(), acc = 0;
+  function loop(now) {
+    acc = Math.min(acc + now - last, 200);
+    last = now;
+    let stepped = false;
+    while (acc >= TICK) {
+      APEXCRYPT.tick(map, game, keys | touch | firing | gamepad());
+      audio.tick(game.events.flatMap(e => APEXSONGS.crypt.EVENTS[e] || []), APEXCRYPT.music(game));
+      acc -= TICK;
+      stepped = true;
+    }
+    if (stepped) draw();
+    requestAnimationFrame(loop);
+  }
+  draw();
+  requestAnimationFrame(loop);
+})().catch(e => { document.getElementById('help').textContent = 'Could not start: ' + e.message; });
+</script>
+</body>
+</html>

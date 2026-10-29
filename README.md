@@ -329,7 +329,6 @@ To play on a C64 or in VICE, load `c64/out/iso.prg` with `LOAD"*",8,1`, then `RU
 | `core/iso.js` | Maps, and the hero's movement and collision, in integer maths |
 | `c64/iso/view.js` | What the C64 screen shows each frame |
 | `levels/iso/d1.txt` | The Crypt: nine rooms and their corridors on a 48×48 map, with wall torches and cracked flagstones |
-| `web/iso.html` | The reference, playable in a browser (`web/bundle.js` makes one-file versions in `web/out/`) |
 | `showcase/iso-pilot.js` | An autopilot that tours the rooms along shortest paths |
 | `showcase/iso.js` | The autopilot's tour, as `showcase/out/iso-run.mp4` |
 | `c64/iso/iso.s` | The 6502 engine (ca65) |

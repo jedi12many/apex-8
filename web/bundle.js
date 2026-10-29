@@ -3,7 +3,7 @@
 //   web/out/<name>-play.html      a whole page, to open anywhere
 //   web/out/<name>-artifact.html  the same body for publishing as a claude.ai artifact (no html/head/body
 //                                 tags: the viewer adds its own, so the title, meta and styles go first)
-// for ray.html (the raycaster, the Cell Block), side.html (the platformer, Green Hills), iso.html (the isometric dungeon, the Crypt), shmup.html
+// for ray.html (the raycaster, the Cell Block), side.html (the platformer, Green Hills), shmup.html
 // (the shoot-'em-up, the Dreadnought) and crypt.html (the Drowned Crypt). A page can be given more globals
 // to inline (extra).
 //
@@ -38,7 +38,6 @@ function bundle(page, levelFile, name, extra = {}) {
 }
 
 bundle('side.html', 'levels/side/w1.txt', 'side');
-bundle('iso.html', 'levels/iso/d1.txt', 'iso');
 bundle('shmup.html', 'levels/shmup/s1.txt', 'shmup');
 bundle('crypt.html', 'levels/iso/c1.txt', 'crypt');
 bundle('ray.html', 'levels/e1m1.txt', 'ray');

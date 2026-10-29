@@ -41,7 +41,7 @@ function png(rgba, file) {
   png(VIEW.frame(level, map, g.p, cam, VIEW.objectSprites(g, cam)).pixels, path.join(img, 'side.png'));
 }
 // The others, from their videos (768x544: the screen is 640x400 at 64, 72).
-for (const name of ['iso', 'shmup', 'crypt']) {
+for (const name of ['shmup', 'crypt']) {
   const video = path.join(root, 'showcase', 'out', `${name}-run.mp4`);
   if (!fs.existsSync(video)) { console.log(`(no ${name}-run.mp4: keeping web/img/${name}.png)`); continue; }
   const r = spawnSync('ffmpeg', ['-v', 'error', '-y', '-ss', '8', '-i', video, '-vf', 'crop=640:400:64:72', '-frames:v', '1', path.join(img, `${name}.png`)]);
@@ -55,7 +55,7 @@ fs.mkdirSync(path.join(docs, 'img'), { recursive: true });
 fs.mkdirSync(path.join(docs, 'c64'), { recursive: true });
 const menu = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8').replace(/\.\.\/c64\/out\//g, 'c64/');
 fs.writeFileSync(path.join(docs, 'index.html'), menu);
-for (const name of ['ray', 'side', 'iso', 'crypt', 'shmup']) fs.copyFileSync(path.join(__dirname, 'out', `${name}-play.html`), path.join(docs, `${name}.html`));
+for (const name of ['ray', 'side', 'crypt', 'shmup']) fs.copyFileSync(path.join(__dirname, 'out', `${name}-play.html`), path.join(docs, `${name}.html`));
 for (const f of fs.readdirSync(img)) fs.copyFileSync(path.join(img, f), path.join(docs, 'img', f));
 for (const f of fs.readdirSync(path.join(root, 'c64', 'out'))) fs.copyFileSync(path.join(root, 'c64', 'out', f), path.join(docs, 'c64', f));
 fs.writeFileSync(path.join(docs, '.nojekyll'), '');

@@ -4,7 +4,8 @@
  * its centre; over it go the game's sprites, a status bar and the game's messages.
  *
  * Sprites are multicolor, 12 fat pixels by 21 rows, sharing red ($D025) and white ($D026); each has
- * its own colour. The hero is an investigator in a hat and coat with a pistol; the drowned are hunched
+ * its own colour. The hero is an investigator in a hat and coat with a pistol, seen from the side,
+ * the front or the back as it aims; the drowned are hunched
  * fish-men, the spawn tentacled eyes. A creature out of the torchlight shows dimmed, and in the dark
  * only its eyes, glowing red.
  *
@@ -41,6 +42,17 @@
     '...aaccaa...', '..aaaccaaaa.', '..aaaccawwaa', '..aaaccaa..a', '..aaaaaaa...', '..aaaaaaa...',
     '...aaaaaa...', '...aaaaaa...',
   ];
+  // Facing the viewer (aiming down the screen) and away from it (up).
+  const HERO_FRONT = [
+    '....aaaa....', '...aaaaaa...', '.aaaaaaaaaa.', '....wwww....', '....wwww....', '.....ww.....',
+    '...aaccaa...', '..aaaccaaa..', '.waaaccaaaw.', '.aaaaccaaaaa', '..aaaaaaa...', '..aaaaaaa...',
+    '...aaaaaa...', '...aaaaaa...',
+  ];
+  const HERO_BACK = [
+    '....aaaa....', '...aaaaaa...', '.aaaaaaaaaa.', '....aaaa....', '....aaaa....', '.....ww.....',
+    '...aaaaaa...', '..aaaaaaaa..', '.waaaaaaaaw.', '.aaaaaaaaaa.', '..aaaaaaa...', '..aaaaaaa...',
+    '...aaaaaa...', '...aaaaaa...',
+  ];
   const HERO_LEGS = {
     stand: ['...aa..aa...', '...aa..aa...', '...aa..aa...', '...aa..aa...', '..ccc..ccc..'],
     walk1: ['...aa...aa..', '..aa.....aa.', '..aa.....aa.', '.aa.......aa', '.ccc.....ccc'],
@@ -61,7 +73,13 @@
       '..aaaaaaaa..', '..a.aaaa.a..', '..a.a..a.a..', '.a..a..a..a.', '.a...a..a..a', '..a..a.a...a', '..a.a..a..a.'],
   ];
   const FRAMES = {};
-  for (const [name, legs] of Object.entries(HERO_LEGS)) FRAMES['hero_' + name] = art([...HERO_TOP, ...legs]);
+  for (const [name, legs] of Object.entries(HERO_LEGS)) {
+    FRAMES['hero_side_' + name] = art([...HERO_TOP, ...legs]);
+    FRAMES['hero_front_' + name] = art([...HERO_FRONT, ...legs]);
+    FRAMES['hero_back_' + name] = art([...HERO_BACK, ...legs]);
+  }
+  // Which view of the hero shows for its aim: up the screen (1, 5, 9) its back, down (2, 6, 10) its front.
+  const heroView = aim => ([1, 5, 9].includes(aim) ? 'back' : [2, 6, 10].includes(aim) ? 'front' : 'side');
   FRAMES.hero_dead = art(['............', '............', '.aaa........', 'aaaaaaaaaaww', 'awwaaccaaaa.', '.ww.aaaaaaaa']);
   DROWNED.forEach((r, k) => { FRAMES['drowned' + k] = art(r); });
   SPAWN.forEach((r, k) => { FRAMES['spawn' + k] = art(r); });
@@ -91,7 +109,7 @@
     const out = [], h = g.hero;
     const feet = (o, frame, color, flip = false, lift = 0) => { const s = onScreen(h, o); out.push({ x: s.x - 12, y: s.y - 20 - lift, frame, color, flip }); };
     if (g.mode === G.OVER) feet(h, 'hero_dead', COLOR.hero, h.facing < 0);
-    else if (!(h.invuln & 4)) feet(h, 'hero_' + IV.spriteFrame(h), COLOR.hero, h.facing < 0);
+    else if (!(h.invuln & 4)) feet(h, `hero_${heroView(h.aim)}_${IV.spriteFrame(h)}`, COLOR.hero, h.facing < 0);
     for (const b of g.bullets) if (b.on) feet(b, 'bullet', COLOR.bullet, false, 10);
     for (const c of g.creatures) {
       if (!c.hp && !c.dying) continue;

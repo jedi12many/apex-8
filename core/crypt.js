@@ -6,9 +6,10 @@
  *   - the map is an iso map (core/iso.js) whose floor can also carry creatures: 'd' a drowned one,
  *     's' a spawn
  *   - one tick per 50 Hz frame; input is the joystick's bits: 1 up, 2 down, 4 left, 8 right, 16 fire
- *   - the hero walks as in core/iso.js, and fires the way it last walked: a bullet flies straight
- *     until it hits a wall, a creature, or its range. Up to SLOTS.bullets at a time, one every COOL
- *     ticks while fire is held
+ *   - the hero walks as in core/iso.js. Holding fire plants its feet: the joystick then turns it, in
+ *     the same 8 directions, and it fires the way it faces. A bullet flies straight until it hits a
+ *     wall, a creature, or its range. Up to SLOTS.bullets at a time, one every COOL ticks while fire
+ *     is held
  *   - a creature wakes when the hero comes within WAKE of it (each axis), and from then on comes for
  *     the hero, the drowned at a shamble and the spawn in lurches. Touching the hero costs it a heart
  *     (then INVULN ticks of safety); shot, a creature flashes, and after its last hit it dies
@@ -97,9 +98,13 @@
       return g;
     }
 
-    // the hero walks, and fires the way it last walked
-    ISO.tick(M, h, input & 15);
-    if (ISO.DIRS[input & 15]) h.aim = input & 15;
+    // the hero walks, or with fire held stands and turns; it fires the way it faces
+    ISO.tick(M, h, firing ? 0 : input & 15);
+    if (ISO.DIRS[input & 15]) {
+      h.aim = input & 15;
+      const d = ISO.DIRS[h.aim], sdx = d[0] - d[1];
+      if (sdx) h.facing = sdx > 0 ? 1 : -1;
+    }
     if (h.invuln) h.invuln--;
     if (h.cool) h.cool--;
     if (firing && !h.cool) {

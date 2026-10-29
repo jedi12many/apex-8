@@ -4,11 +4,18 @@
  *
  * A story (stories/<name>.js) is:
  *   { name, song, sounds: { type, more, move, choose } (effects of the song to play, any may be left
- *     out), typeSpeed (ticks a letter, default 2), pictures: { id: { file, crop, cells: [cw, ch], ... } },
- *     start: scene id, scenes: { id: scene } }
- * and a scene:
- *   { picture, pan: { from: [x, y], to: [x, y], ticks }, speaker, text,
- *     then one of: choices: [{ text, go, set, if, unless }], next: scene id, end: true }
+ *     out), typeSpeed (ticks a letter, default 2), pictures: { id: picture }, start: scene id,
+ *     scenes: { id: scene } }
+ * A picture is { file, crop, cells: [cw, ch], ... } (c64/story/pictures.js converts it), or a run of
+ * frames for zooming and turning: { file, frames: { count, from, to } }, from and to each { x, y, w,
+ * angle }: the image's point at the window's middle, the image's width the window shows, and the
+ * angle it is turned by (degrees, clockwise), each frame a step between them. Frames are window-sized
+ * (40 x 15 cells), and listed as pictures id#0, id#1, ... (pictureList).
+ * A scene is:
+ *   { picture, pan: { from: [x, y], to: [x, y], ticks }, or steps: { frames, every, reverse },
+ *     speaker, text, then one of: choices: [{ text, go, set, if, unless }], next: scene id, end: true }
+ * steps play a run of frames, one every `every` ticks (at least STEP_GAP), backwards if reverse: a zoom
+ * played backwards is a pull-back.
  *
  * The picture shows in a window 304 pixels wide (the 38-column screen) and 113 lines high; pan
  * positions are the picture's pixel (hires x, line) at the window's top-left corner, x counted from
@@ -36,7 +43,14 @@
   const LINE = 38, LINES = 4, CHOICES = 4, NAME = 38, BLANK = 16;
   const VIEW_W = 304, VIEW_H = 113;           // the window: 38 columns, lines 55-167 of the frame
   const FLAGS = 16;
-  const GAP = 8;
+  const GAP = 8, STEP_GAP = 3;
+  const FRAME_CELLS = [40, 15];
+  // A story's pictures, frames expanded: [{ id, picture (the story's), group, k }] (k: the frame, or -1).
+  function pictureList(story) {
+    return Object.entries(story.pictures).flatMap(([id, p]) => (p.frames
+      ? Array.from({ length: p.frames.count }, (_, k) => ({ id: `${id}#${k}`, picture: p, group: id, k }))
+      : [{ id, picture: p, group: id, k: -1 }]));
+  }
   // The window's first cell for a pan position (8.8 pixels): column ceil(x / 8), row floor(y / 8).
   const cellOf = (x8, y8) => `${((x8 >> 8) + 7) >> 3},${(y8 >> 8) >> 3}`;
   // The letters the text can use: APEXSCII's text block ($00-$3F, as screen codes).
@@ -58,22 +72,30 @@
   }
 
   function compile(story, sizes) {
-    const ids = Object.keys(story.scenes), picIds = Object.keys(story.pictures);
+    const ids = Object.keys(story.scenes), list = pictureList(story), picIds = list.map(p => p.id);
     const flags = [];
     const flag = name => { if (name === undefined) return -1; let k = flags.indexOf(name); if (k < 0) { k = flags.length; flags.push(name); } if (k >= FLAGS) throw new Error(`story: more than ${FLAGS} flags`); return k; };
     const scene = id => { const k = ids.indexOf(id); if (k < 0) throw new Error(`story: no scene "${id}"`); return k; };
     const scenes = ids.map(id => {
       const sc = story.scenes[id], where = `story: scene "${id}"`;
-      const pic = picIds.indexOf(sc.picture);
+      let steps = null;
+      if (sc.steps) {
+        const st = sc.steps, base = picIds.indexOf(`${st.frames}#0`);
+        if (base < 0) throw new Error(`${where}: no frames "${st.frames}"`);
+        if (!(st.every >= STEP_GAP)) throw new Error(`${where}: steps must be at least ${STEP_GAP} ticks apart`);
+        steps = { base, count: story.pictures[st.frames].frames.count, every: st.every, reverse: !!st.reverse };
+      }
+      const pic = steps ? steps.base + (steps.reverse ? steps.count - 1 : 0) : picIds.indexOf(sc.picture);
       if (pic < 0) throw new Error(`${where}: no picture "${sc.picture}"`);
+      if (steps && sc.pan) throw new Error(`${where}: steps don't pan`);
       const [cw, ch] = sizes[pic], maxX = cw * 8 - 320, maxY = ch * 8 - VIEW_H;
       const pan = sc.pan || { from: [0, 0], to: [0, 0], ticks: 0 };
       for (const [x, y] of [pan.from, pan.to]) {
         if (x < 0 || x > maxX || y < 0 || y > maxY) throw new Error(`${where}: the pan must stay within 0-${maxX} across and 0-${maxY} down`);
       }
-      const ticks = pan.ticks || 0;
+      const ticks = steps ? (steps.count - 1) * steps.every : pan.ticks || 0;
       const step = d => (ticks ? Math.trunc((d * 256) / ticks) : 0);
-      const dx = step(pan.to[0] - pan.from[0]), dy = step(pan.to[1] - pan.from[1]);
+      const dx = steps ? 0 : step(pan.to[0] - pan.from[0]), dy = steps ? 0 : step(pan.to[1] - pan.from[1]);
       if (Math.abs(dx) > 256 || Math.abs(dy) > 256) throw new Error(`${where}: the pan is faster than a pixel a tick`);
       // The window's cell changes when the pan crosses a cell; each needs the picture copied again,
       // which takes a C64 about 6 frames, so changes must be GAP ticks apart (or in the same tick).
@@ -98,11 +120,12 @@
       if (choices.length > CHOICES) throw new Error(`${where}: more than ${CHOICES} choices`);
       if (!choices.length && !sc.end && sc.next === undefined) throw new Error(`${where}: needs choices, next or end`);
       return {
-        id, picture: pic, x0: pan.from[0], y0: pan.from[1], dx, dy, ticks, speaker, pages, choices,
+        id, picture: pic, steps, x0: pan.from[0], y0: pan.from[1], dx, dy, ticks, speaker, pages, choices,
         next: choices.length || sc.end ? -1 : scene(sc.next), set: flag(sc.set),
       };
     });
-    return { name: story.name, typeSpeed: story.typeSpeed || 2, scenes, flags, start: scene(story.start), pictures: picIds, sounds: story.sounds || {} };
+    return { name: story.name, typeSpeed: story.typeSpeed || 2, scenes, flags, start: scene(story.start), pictures: picIds,
+      frames: list.map(p => p.k >= 0), sounds: story.sounds || {} };
   }
 
   // The choices a scene shows with these flags, as indexes into its choices.
@@ -120,15 +143,23 @@
     return s;
   }
 
+  // The picture the window shows: the scene's, or the frame its steps are at.
+  function picture(c, s) {
+    const sc = c.scenes[s.scene], st = sc.steps;
+    if (!st) return sc.picture;
+    const f = Math.min(st.count - 1, Math.floor(s.t / st.every));
+    return st.base + (st.reverse ? st.count - 1 - f : f);
+  }
+
   function enter(c, s, k, first = false) {
-    const sc = c.scenes[k], prev = s.scene, old = { x8: s.x8, y8: s.y8 };
+    const sc = c.scenes[k], oldPic = first ? -1 : picture(c, s), old = { x8: s.x8, y8: s.y8 };
     s.scene = k;
     s.page = 0; s.shown = 0; s.wait = 0; s.sel = 0; s.t = 0;
     s.phase = 'type';
     s.x8 = sc.x0 * 256; s.y8 = sc.y0 * 256;
     if (sc.set >= 0) s.flags |= 1 << sc.set;
     // A new picture, or a jump to another cell of this one: dark while the window is readied.
-    if (first || c.scenes[prev].picture !== sc.picture || cellOf(s.x8, s.y8) !== cellOf(old.x8, old.y8)) s.blank = BLANK;
+    if (first || picture(c, s) !== oldPic || cellOf(s.x8, s.y8) !== cellOf(old.x8, old.y8)) s.blank = BLANK;
   }
 
   function play(c, s, bits) {
@@ -169,5 +200,5 @@
   // Where the pan is: the picture's pixel at the window's top-left.
   const pan = s => ({ x: s.x8 >> 8, y: s.y8 >> 8 });
 
-  return { LINE, LINES, CHOICES, NAME, BLANK, GAP, cellOf, VIEW_W, VIEW_H, FLAGS, LETTERS, wrap, compile, start, play, pan, shownChoices, pageLength };
+  return { LINE, LINES, CHOICES, NAME, BLANK, GAP, STEP_GAP, FRAME_CELLS, pictureList, picture, cellOf, VIEW_W, VIEW_H, FLAGS, LETTERS, wrap, compile, start, play, pan, shownChoices, pageLength };
 });

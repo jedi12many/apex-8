@@ -1,6 +1,7 @@
 // The Mountain: the story mode's demo (core/story.js). A traveller reaches the foot of APEX and meets
-// its guide. It pans over the APEX-8 badge's art, and shows pages, choices, a choice that only
-// appears until it is taken (a flag), and the start again at the end.
+// its guide. It pans over the APEX-8 badge's art, zooms up to the summit and pulls back (one run of
+// frames, played forwards then backwards), turns the world at the end, and shows pages, choices, a
+// choice that only appears until it is taken (a flag), and the start again at the end.
 (function (root, story) {
   if (typeof module === 'object' && module.exports) module.exports = story;
   else (root.APEXSTORIES = root.APEXSTORIES || {}).mountain = story;
@@ -12,6 +13,12 @@
   pictures: {
     // the badge's art, 48 x 40 cells (384 x 320 pixels): the sun, the mountain and the name
     peak: { file: 'art/brand/apex8-source.png', crop: [0, 100, 1254, 1045], cells: [48, 40], saturation: 1.2, dither: 24 },
+    // up to the summit: from the whole badge to the snow at the top
+    closer: { file: 'art/brand/apex8-source.png', saturation: 1.2, dither: 24,
+      frames: { count: 8, from: { x: 627, y: 560, w: 1300 }, to: { x: 627, y: 330, w: 240 } } },
+    // the world turning, an eighth of a turn a frame
+    spin: { file: 'art/brand/apex8-source.png', saturation: 1.2, dither: 24,
+      frames: { count: 8, from: { x: 627, y: 560, w: 1100, angle: 0 }, to: { x: 627, y: 560, w: 1100, angle: 315 } } },
   },
   start: 'sunset',
   scenes: {
@@ -19,6 +26,18 @@
       picture: 'peak', pan: { from: [32, 0], to: [32, 96], ticks: 384 },
       speaker: 'The Mountain',
       text: 'At the top of the world the sun sets behind a mountain of snow. Travellers say that whoever climbs it can make anything at all, in eight bits.\nYou have walked for days to reach it.',
+      next: 'look_up',
+    },
+    look_up: {
+      steps: { frames: 'closer', every: 5 },
+      speaker: 'The Mountain',
+      text: 'You look up. The summit seems close enough to touch.',
+      next: 'far_again',
+    },
+    far_again: {
+      steps: { frames: 'closer', every: 5, reverse: true },
+      speaker: 'The Mountain',
+      text: 'Then it is far away again, as it always is.',
       next: 'guide',
     },
     guide: {
@@ -60,7 +79,7 @@
       next: 'summit',
     },
     summit: {
-      picture: 'peak', pan: { from: [32, 0], to: [32, 0], ticks: 0 },
+      steps: { frames: 'spin', every: 6 },
       speaker: 'The Mountain',
       text: 'The sun goes down. The snow turns gold, then blue. Somewhere above you, a path begins.\nThe end. Press fire to begin again.',
       end: true,

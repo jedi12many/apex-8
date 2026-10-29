@@ -16,14 +16,14 @@ const here = __dirname, root = path.join(here, '..', '..');
 function load(name = 'mountain') {
   const story = require(path.join(root, 'stories', `${name}.js`));
   const stored = require(path.join(root, 'stories', `${name}-pictures.js`));
-  const pics = Object.keys(story.pictures).map(id => PICS.decode(stored[id]));
+  const pics = STORY.pictureList(story).map(({ id }) => PICS.decode(stored[id]));
   const SONG = require(path.join(root, 'sound', `${story.song}.js`));
   return { name, story, pics, c: STORY.compile(story, pics.map(p => [p.cw, p.ch])), SONG, song: S.compile(SONG) };
 }
 
 function build(dir, opts = {}, s = load(opts.story)) {
   fs.mkdirSync(dir, { recursive: true });
-  gen(s.story, s.pics, dir);
+  gen(s.story, s.pics, dir, s.name);
   sidgen(s.song, dir);
   return assemble({ src: path.join(here, 'story.s'), cfg: path.join(here, 'story.cfg'), dir, script: opts.script, defines: opts.defines });
 }
@@ -45,4 +45,10 @@ module.exports = { load, build, soundOf };
 if (require.main === module) {
   const dir = path.join(here, 'build', 'game');
   writeOut('story', build(dir, {}, load(process.argv[2])), dir, ['CODE', 'RODATA']);
+  // the frame files, for the disk
+  const out = path.join(here, '..', 'out', 'story');
+  fs.rmSync(out, { recursive: true, force: true });
+  fs.mkdirSync(out, { recursive: true });
+  const frames = path.join(dir, 'frames');
+  if (fs.existsSync(frames)) for (const f of fs.readdirSync(frames)) fs.copyFileSync(path.join(frames, f), path.join(out, f));
 }

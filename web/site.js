@@ -64,6 +64,6 @@ const menu = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8').replace
 fs.writeFileSync(path.join(docs, 'index.html'), menu);
 for (const name of ['ray', 'side', 'crypt', 'shmup', 'story']) fs.copyFileSync(path.join(__dirname, 'out', `${name}-play.html`), path.join(docs, `${name}.html`));
 for (const f of fs.readdirSync(img)) fs.copyFileSync(path.join(img, f), path.join(docs, 'img', f));
-for (const f of fs.readdirSync(path.join(root, 'c64', 'out'))) fs.copyFileSync(path.join(root, 'c64', 'out', f), path.join(docs, 'c64', f));
+fs.cpSync(path.join(root, 'c64', 'out'), path.join(docs, 'c64'), { recursive: true });
 fs.writeFileSync(path.join(docs, '.nojekyll'), '');
 console.log(`docs/: ${fs.readdirSync(docs).length} entries`);

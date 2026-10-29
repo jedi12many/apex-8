@@ -489,7 +489,7 @@ To play on a C64 or in VICE, load `c64/out/story.prg` with `LOAD"*",8,1`, then `
 | `web/story.html` | The reference, playable in a browser |
 | `c64/story/story.s` | The 6502 engine (ca65) |
 | `c64/story/gen.js`, `build.js` | Turn the story, its pictures, the font and the song into the engine's data, and assemble it |
-| `test/story-check.js` | Plays the story in VICE and checks every pixel of the C64's frames against the reference, every SID tick, and that no frame is late |
+| `test/story-check.js` | Plays the story in VICE and checks every pixel of the C64's frames against the reference (every frame of the zooms and turns too), every SID tick, that no frame is late, and that the frames load from the disk |
 
 **A story** is a module of pictures and scenes. Each picture is converted from any image to a multicolor bitmap of any size in cells (`art/picture.js` `cells`). Each scene names a picture, a pan across it (from, to, and how many ticks), a speaker and the text, and then either up to 4 choices (each going to a scene, and able to set a flag, or to show only if a flag is set or isn't), the next scene, or the end. The text wraps into 38-letter lines, 4 to a page, in APEXSCII's text font (capitals). A scene that moves to another picture, or to another part of this one, goes dark for 16 ticks while the window is readied.
 
@@ -504,7 +504,9 @@ To play on a C64 or in VICE, load `c64/out/story.prg` with `LOAD"*",8,1`, then `
 - *pans*: at most a pixel a tick, and the window's cell may change at most every 8 ticks (copying a window takes about 6 frames); `core/story.js` checks both
 - *memory*: the picture's rows go wherever the VIC doesn't look (`c64/story/gen.js` `REGIONS`); the variables sit under the KERNAL, switched out
 
-Panning only: a C64 can't scale a bitmap in real time. A zoom can be made in steps, from the same picture at a few scales (still to come).
+**Zooms, pull-backs and turns.** A C64 can't scale or rotate a bitmap in real time, so these are runs of frames made ahead of time. A picture can be `frames: { count, from, to }`, each of from and to a point in the image to keep at the window's middle, the image's width to show and an angle (degrees, clockwise). The converter crops, turns and scales each frame from the image, the width stepping evenly in scale so a zoom moves at a steady rate. A scene with `steps: { frames, every, reverse }` shows them one after another, a frame every `every` ticks (3 at least); played in reverse, a zoom is a pull-back from the same frames. The Mountain zooms up to its summit, pulls back, and turns the world at the end.
+
+Frames are window-sized, 6000 bytes each, too many for the C64's memory, so they live in an REU. A frame comes into the hidden window by DMA, a few lines at a time away from the split, in about a frame. At start-up the engine looks in the REU for the frames (a signature after them); if they aren't there it loads them from files on its disk (`mountain.f00`, ...). That takes a while on a stock drive (each 6000-byte file is several seconds at the KERNAL's speed), so `c64/out/story/mountain.reu` holds them as an REU image: VICE takes it with `-reuimage`, and a C64 Ultimate can preload it into its REU at start-up (its REU settings), so the frames are there at once. Without an REU the window stays dark while frames play.
 
 ```bash
 node c64/story/pictures.js mountain
@@ -596,7 +598,7 @@ node test/sid-compare.js crypt 58
 | 5 | The shooter in the brick look | As 4 |
 | 6, 7, 8, 9 | The Dreadnought's, the Drowned Crypt's, Green Hills' and the Cell Block's songs on the sound player | Joystick directions and fire play the first five effects |
 | 0 | The APEX-8 splash | |
-| S | The story mode, the Mountain | Fire (or space or return) to go on; joystick up and down, or W and S, to pick a choice |
+| S | The story mode, the Mountain (its zooms and turns need an REU: it loads them from the disk, or preload `mountain.reu`) | Fire (or space or return) to go on; joystick up and down, or W and S, to pick a choice |
 
 Each program is also in `c64/out` as a `.prg`, which the Ultimate can run straight from its file browser.
 

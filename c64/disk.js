@@ -58,6 +58,9 @@ const image = path.join(OUT, 'apex-8.d81');
 try { fs.unlinkSync(image); } catch (e) { /* not there yet */ }
 const args = ['-format', 'apex-8,a8', 'd81', image, '-write', path.join(dir, 'menu.prg'), 'menu'];
 for (const [, file, , prg] of PROGRAMS) args.push('-write', path.join(OUT, prg), file);
+// the story mode's frames (zooms and turns), which it loads into the REU at start-up
+const frames = path.join(OUT, 'story');
+if (fs.existsSync(frames)) for (const f of fs.readdirSync(frames).sort()) args.push('-write', path.join(frames, f), f);
 run(c1541, args);
 fs.rmSync(dir, { recursive: true, force: true });
 const list = run(c1541, ['-attach', image, '-list']).stdout.trim().split('\n');

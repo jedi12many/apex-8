@@ -93,9 +93,9 @@
     <div class="body">
       <span class="kind">Story mode</span>
       <h3>The Mountain</h3>
-      <p>Scenes told over a slowly panning picture, like an old documentary, with the words typed beneath and choices that change what happens next.</p>
+      <p>Scenes told over a slowly panning picture, like an old documentary, with zooms, pull-backs and turns, the words typed beneath and choices that change what happens next.</p>
       <p class="keys">Fire (Space or Enter) to go on · Up / Down or W / S to pick a choice</p>
-      <div class="actions"><a class="play" href="story.html">Play</a><a href="c64/story.prg" download>story.prg</a></div>
+      <div class="actions"><a class="play" href="story.html">Play</a><a href="c64/story.prg" download>story.prg</a><a href="c64/story/mountain.reu" download>REU image</a></div>
     </div>
   </article>
 </section>
@@ -110,6 +110,7 @@
   <ul class="dim">
     <li>Joystick in port 2. The keys above work on the C64's keyboard too.</li>
     <li>A second SID at $D420 plays the sound effects, so the music keeps all three voices. The shooter also uses an REU when there is one. Without them everything still runs.</li>
+    <li>The story mode's zooms and turns need an REU. It loads them from the disk at start-up, which takes a few minutes at a stock drive's speed; preload <code>mountain.reu</code> into the C64 Ultimate's REU (its REU settings) and they are there at once.</li>
   </ul>
 </div>
 

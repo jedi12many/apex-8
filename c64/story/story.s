@@ -14,6 +14,10 @@
 ; text rows), writes the sound and starts the next tick; the main loop plays the tick (core/story.js),
 ; ticks the sound, and works out the next frame; then, until the next tick, copies the window.
 ;
+; Zooms, pull-backs and turns are runs of frames (window-sized pictures) in the REU, which the engine
+; loads at start-up from files on its disk and copies into the hidden buffer by DMA, a few lines at a
+; time away from the split. Without an REU, the window stays dark while they play.
+;
 ; Memory: $0400 bitmap screen A, $2000 bitmap A (bank 0); $4000 text screen, $4800 the font (bank 1);
 ; $4C00 code and data; $8400 bitmap screen B, $A000 bitmap B (bank 2); picture rows wherever is left
 ; (c64/story/gen.js REGIONS). BASIC and the KERNAL are switched out; the IRQs use the hardware vector.
@@ -39,6 +43,14 @@ D011_GAP = $70               ; the same, plus a fine scroll that is no line's ba
 D011_TEXT = $1b              ; text, 25 rows, scroll 3
 D018_WIN = $18               ; bitmap at +$2000, its screen at +$0400 (banks 0 and 2 alike)
 D018_TEXT = $02              ; text screen at +$0000, font at +$0800 (bank 1)
+FRAMES_OK = $47ff            ; start-up's note that the frames are in the REU (bank 1, unused)
+LOADBUF  = $a000             ; where a frame file loads at start-up (bitmap B, not yet in use)
+SIGBUF   = $0340             ; the REU's signature, fetched at start-up (the tape buffer)
+REU_CMD  = $df01
+REU_C64  = $df02
+REU_ADDR = $df04
+REU_LEN  = $df07
+REU_CTRL = $df0a
 
 .segment "ZEROPAGE"
 inp:     .res 1             ; this tick's input: 1 up, 2 down, 16 fire
@@ -85,7 +97,11 @@ hcy:     .res 1
 tpic:    .res 1             ; the target: what the hidden buffer is being readied for ($FE: find it)
 tcx:     .res 1
 tcy:     .res 1
-crow:    .res 1             ; the target's next row to copy
+haveframes: .res 1          ; 1: the frames are in the REU
+sframe:  .res 1             ; a scene's steps: the frame it is at, and the ticks into it
+stick:  .res 1
+crow:    .res 1             ; the target's next row to copy, and how many steps it takes (15, a frame 17)
+climit:  .res 1
 cphase:  .res 1             ; and the step of it: 0-4 the bitmap, 5 the screen and colours
 front:   .res 1             ; the front buffer: 0 bank 0, 1 bank 2
 flipwait: .res 1            ; 1: a flip is asked for and the top IRQ hasn't made it yet
@@ -123,6 +139,7 @@ COLBUF:  .res 600           ; colour RAM for the hidden buffer's window (15 rows
 
 .segment "CODE"
 start:
+    jsr load_frames         ; (with the KERNAL, before it is switched out)
     KIT_INIT irq_top
     lda #0                  ; the variables (under the KERNAL) all 0
     tax
@@ -132,6 +149,8 @@ start:
 .endrepeat
     inx
     bne :-
+    lda FRAMES_OK
+    sta haveframes
     lda #0
     sta $d020
     sta $d021
@@ -443,6 +462,15 @@ pan_step:
     inc pt
     bne :+
     inc pt+1
+:   lda SC_STEPN,x          ; steps: the next frame every SC_EVERY ticks
+    beq :+
+    inc stick
+    lda stick
+    cmp SC_EVERY,x
+    bne :+
+    lda #0
+    sta stick
+    inc sframe
 :   clc
     lda xf
     adc SC_DXLO,x
@@ -704,6 +732,8 @@ enter:
     sta pt+1
     sta xf
     sta yf
+    sta sframe
+    sta stick
     lda SC_X0LO,x
     sta xp
     lda SC_X0HI,x
@@ -720,7 +750,7 @@ enter:
     jsr cell                ; the new cell
     lda t2
     bne @dark
-    lda SC_PIC,x
+    lda cnew
     cmp fpic
     bne @dark
     lda cnx
@@ -744,6 +774,20 @@ cell:
     ldy scene
     lda SC_PIC,y
     sta cnew
+    lda SC_STEPN,y          ; steps: the frame (from the last, backwards)
+    beq @pan
+    lda SC_REV,y
+    beq :+
+    lda SC_STEPN,y
+    sec
+    sbc #1
+    sbc sframe
+    jmp :++
+:   lda sframe
+:   clc
+    adc SC_STEPB,y
+    sta cnew
+@pan:
     lda xp
     clc
     adc #7
@@ -786,7 +830,14 @@ frame:
     eor #7
     ora #D011_WIN
     ldx blank
+    bne @dark
+    ldx cnew                ; (a frame, without an REU: dark too)
+    ldy PIC_FRAME,x
+    iny
     beq :+
+    ldx haveframes
+    bne :+
+@dark:
     ora #D011_DARK
 :   sta p_d011
     lda cnew                ; a new cell: flip to the hidden buffer if it is ready
@@ -1103,7 +1154,7 @@ work:
     cmp #$ff
     beq @idle
     lda crow
-    cmp #15
+    cmp climit
     bcc :+
 @idle:
     rts
@@ -1124,7 +1175,23 @@ look:
     lda cny
     cmp fcy
     bne @take
-    lda scene               ; no: start running the pan on from here
+    ldx scene               ; no: steps: the next frame, if there is one
+    lda SC_STEPN,x
+    beq @pan
+    sec
+    sbc #1
+    cmp sframe
+    beq @last
+    inc sframe
+    jsr cell
+    dec sframe
+    jmp target
+@last:
+    lda #$ff
+    sta tpic
+    rts
+@pan:
+    lda scene               ; or start running the pan on from here
     sta lscene
     inc lscene              ; (lscene is the scene + 1; 0 means not started)
     lda xf
@@ -1231,12 +1298,24 @@ target:
     sta crow
     sta cphase
     sta lscene
+    ldx tpic
+    lda PIC_FRAME,x
+    cmp #$ff
+    lda #15
+    bcs :+
+    lda #17
+:   sta climit
     rts
 
 ; Copies row crow (0-14) of the target's window into the hidden buffer: 320 bitmap bytes, 40 screen bytes,
 ; and 40 colours into COLBUF.
 copy_row:
-    ldx tpic
+    ldx tpic                ; a frame: from the REU
+    lda PIC_FRAME,x
+    cmp #$ff
+    beq :+
+    jmp copy_frame
+:   ldx tpic
     lda PIC_ROW0,x
     clc
     adc tcy
@@ -1360,7 +1439,221 @@ copy_row:
     sta hcy
 :   rts
 
+; A frame's step crow (0-16) by DMA from the REU: bitmap rows 0-14, then the screen, then the colours.
+; Each takes 5 to 10 lines with the CPU stopped, so none starts near the split (or its IRQ would be
+; late). Without the frames, the buffer just counts as ready (the window is dark for them).
+copy_frame:
+    tax                     ; X: the frame
+    lda haveframes
+    bne :+
+    jmp @done
+:   lda $d011               ; not from line 140 to 180
+    bmi @go
+    lda $d012
+    cmp #140
+    bcc @go
+    cmp #181
+    bcs @go
+    rts
+@go:
+    lda #0
+    sta REU_CTRL
+    lda crow
+    cmp #15
+    bcs @attrs
+    tay                     ; bitmap row crow: 320 bytes at crow * 320
+    lda ROW320LO,y
+    sta t0
+    lda ROW320HI,y
+    sta t1
+    sta t2
+    lda t0
+    sta REU_C64
+    lda t2
+    ldy front
+    ora HIDBMP,y
+    sta REU_C64+1
+    lda #<320
+    sta REU_LEN
+    lda #>320
+    sta REU_LEN+1
+    jmp @fetch
+@attrs:
+    bne @colours
+    lda #0                  ; the screen: 600 bytes at 4800
+    sta REU_C64
+    ldy front
+    lda HIDSCR,y
+    sta REU_C64+1
+    lda #<4800
+    sta t0
+    lda #>4800
+    sta t1
+    jmp @600
+@colours:
+    lda #<COLBUF            ; the colours: 600 bytes at 5400
+    sta REU_C64
+    lda #>COLBUF
+    sta REU_C64+1
+    lda #<5400
+    sta t0
+    lda #>5400
+    sta t1
+@600:
+    lda #<600
+    sta REU_LEN
+    lda #>600
+    sta REU_LEN+1
+@fetch:
+    clc                     ; the REU address: the frame's + the part's
+    lda FR_A0,x
+    adc t0
+    sta REU_ADDR
+    lda FR_A1,x
+    adc t1
+    sta REU_ADDR+1
+    lda FR_A2,x
+    adc #0
+    sta REU_ADDR+2
+    lda #$91                ; fetch, now
+    sta REU_CMD
+    inc crow
+    lda crow
+    cmp #17
+    bne @rts
+@done:
+    lda climit              ; (the copy loop's "finished")
+    sta crow
+    lda tpic
+    sta hpic
+    lda tcx
+    sta hcx
+    lda tcy
+    sta hcy
+@rts:
+    rts
+
+; Start-up, with the KERNAL: if there is an REU, each frame file from this program's disk into $A000,
+; then out to the REU; FRAMES_OK 1 if all are there.
+load_frames:
+    lda #0
+    sta FRAMES_OK
+.if NFRAMES > 0
+    lda #$a5                ; an REU keeps what is written to its address registers
+    sta REU_C64
+    lda #$3c
+    sta REU_C64+1
+    lda REU_C64
+    cmp #$a5
+    bne @fail
+    lda REU_C64+1
+    cmp #$3c
+    bne @fail
+    lda #$5a
+    sta REU_C64
+    lda REU_C64
+    cmp #$5a
+    bne @fail
+    jmp @found
+@fail:
+    jmp @none
+@found:
+    lda #0                  ; frames already there (an REU image)? fetch the signature after them
+    sta REU_CTRL
+    lda #<SIGBUF
+    sta REU_C64
+    lda #>SIGBUF
+    sta REU_C64+1
+    lda #SIG_A0
+    sta REU_ADDR
+    lda #SIG_A1
+    sta REU_ADDR+1
+    lda #SIG_A2
+    sta REU_ADDR+2
+    lda #12
+    sta REU_LEN
+    lda #0
+    sta REU_LEN+1
+    lda #$91
+    sta REU_CMD
+    ldx #11
+:   lda SIGBUF,x
+    cmp FR_SIG,x
+    bne @load
+    dex
+    bpl :-
+    jmp @have
+@load:
+    ldx #0
+@msg:
+    lda LOADING,x
+    beq :+
+    jsr $ffd2
+    inx
+    bne @msg
+:   lda #0
+    sta t0
+@one:
+    ldx t0
+    lda FRN_LEN,x
+    pha
+    ldy FRN_HI,x
+    lda FRN_LO,x
+    tax
+    pla
+    jsr $ffbd               ; SETNAM
+    lda #1
+    ldx $ba                 ; the drive this program came from (8 if none)
+    cpx #8
+    bcs :+
+    ldx #8
+:   ldy #0
+    jsr $ffba               ; SETLFS: load where we say
+    lda #0
+    ldx #<LOADBUF
+    ldy #>LOADBUF
+    jsr $ffd5               ; LOAD
+    bcs @none
+    lda #'.'
+    jsr $ffd2
+    ldx t0
+    sei                     ; (the REU reads what the CPU would: BASIC out of the way)
+    lda #$36
+    sta $01
+    lda #0
+    sta REU_CTRL
+    lda #<LOADBUF
+    sta REU_C64
+    lda #>LOADBUF
+    sta REU_C64+1
+    lda FR_A0,x
+    sta REU_ADDR
+    lda FR_A1,x
+    sta REU_ADDR+1
+    lda FR_A2,x
+    sta REU_ADDR+2
+    lda #<FRAME_BYTES
+    sta REU_LEN
+    lda #>FRAME_BYTES
+    sta REU_LEN+1
+    lda #$90                ; stash, now
+    sta REU_CMD
+    lda #$37
+    sta $01
+    cli
+    inc t0
+    lda t0
+    cmp #NFRAMES
+    bne @one
+@have:
+    lda #1
+    sta FRAMES_OK
+.endif
+@none:
+    rts
+
 .segment "RODATA"
+LOADING: .byte 13, "LOADING THE PICTURES", 0
 BANKS:   .byte %11, %01     ; $DD00 for banks 0 and 2
 HIDBMP:  .byte >BMP_B, >BMP_A ; the hidden bitmap and screen, by the front buffer
 HIDSCR:  .byte >SCR_B, >SCR_A

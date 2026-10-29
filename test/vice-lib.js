@@ -17,18 +17,21 @@ function findVice(dir) {
 // 512 KB REU.
 // The remote monitor's port (APEX_MONITOR_PORT to run two at once).
 const PORT = +(process.env.APEX_MONITOR_PORT || 6510);
-const machine = ({ ntsc, model, sid2, reu }) => [...(model ? ['-model', model] : ntsc ? ['-ntsc'] : []), ...(sid2 ? ['-sidextra', '1', '-sid2address', '0xd420'] : []),
-  ...(reu ? ['-reu', '-reusize', '512'] : [])];
+// fs8: a folder to serve as drive 8, for programs that load files.
+// reu: true for a 512K REU, or an image file to start it with (its size, a power of 2, sets the REU's).
+const machine = ({ ntsc, model, sid2, reu, fs8 }) => [...(model ? ['-model', model] : ntsc ? ['-ntsc'] : []), ...(sid2 ? ['-sidextra', '1', '-sid2address', '0xd420'] : []),
+  ...(reu === true ? ['-reu', '-reusize', '512'] : reu ? ['-reu', '-reusize', String(fs.statSync(reu).size >> 10), '-reuimage', reu, '+reuimagerw'] : []),
+  ...(fs8 ? ['-fs8', fs8, '-devicebackend8', '1', '-trapdevice8', '+drive8truedrive'] : [])];
 // Cycles per frame on each machine: PAL 63 x 312, NTSC 65 x 263, old NTSC 64 x 262, Drean (PAL-N)
 // 65 x 312.
 const FRAME_CYCLES = { pal: 19656, c64: 19656, c64c: 19656, c64old: 19656, c64gs: 19656, ntsc: 17095, newntsc: 17095, jap: 17095, oldntsc: 16768, drean: 20280 };
 const frameCycles = ({ ntsc, model }) => FRAME_CYCLES[model || (ntsc ? 'ntsc' : 'pal')] || 19656;
 
 // Run a PRG for `cycles` and save VICE's screenshot of the last frame; returns false if none appeared.
-function screenshot(exe, prg, shot, { ntsc = false, model, sid2 = false, reu = false, cycles = '12000000' } = {}) {
+function screenshot(exe, prg, shot, { ntsc = false, model, sid2 = false, reu = false, fs8, cycles = '12000000' } = {}) {
   try { fs.unlinkSync(shot); } catch (e) { /* not there yet */ }
   spawnSync(exe, ['-default', '-warp', '-sounddev', 'dummy', '+confirmonexit', '-autostartprgmode', '1',
-    ...machine({ ntsc, model, sid2, reu }), '-limitcycles', String(cycles), '-exitscreenshot', shot, '-autostart', prg], { timeout: 120000 });
+    ...machine({ ntsc, model, sid2, reu, fs8 }), '-limitcycles', String(cycles), '-exitscreenshot', shot, '-autostart', prg], { timeout: 120000 });
   return fs.existsSync(shot);
 }
 
@@ -88,11 +91,11 @@ function compare(shot, rgba, border, palette) {
 
 // Runs prg in VICE, stopping when `from` first executes, and returns the CPU cycles from there to the
 // first time `to` executes (the monitor's stopwatch).
-function cyclesBetween(exe, prg, from, to, { ntsc = false, model, sid2 = false, reu = false } = {}) {
+function cyclesBetween(exe, prg, from, to, { ntsc = false, model, sid2 = false, reu = false, fs8 } = {}) {
   const hex = a => a.toString(16).padStart(4, '0');
   return new Promise((resolve, reject) => {
     const vice = spawn(exe, ['-default', '-warp', '-sounddev', 'dummy', '+confirmonexit', '-autostartprgmode', '1',
-      ...machine({ ntsc, model, sid2, reu }), '-initbreak', '0x' + hex(from),
+      ...machine({ ntsc, model, sid2, reu, fs8 }), '-initbreak', '0x' + hex(from),
       '-remotemonitor', '-remotemonitoraddress', `ip4://127.0.0.1:${PORT}`, '-autostart', prg], { stdio: 'ignore' });
     // The monitor takes one command per prompt: each step waits for `until` in the output, then sends.
     const steps = [
@@ -126,11 +129,11 @@ function cyclesBetween(exe, prg, from, to, { ntsc = false, model, sid2 = false, 
 }
 
 // Runs prg in VICE until `at` first executes, then returns the `len` bytes of memory from `addr`.
-function readMemory(exe, prg, at, addr, len, { ntsc = false, model, sid2 = false, reu = false } = {}) {
+function readMemory(exe, prg, at, addr, len, { ntsc = false, model, sid2 = false, reu = false, fs8 } = {}) {
   const hex = a => a.toString(16).padStart(4, '0');
   return new Promise((resolve, reject) => {
     const vice = spawn(exe, ['-default', '-warp', '-sounddev', 'dummy', '+confirmonexit', '-autostartprgmode', '1',
-      ...machine({ ntsc, model, sid2, reu }), '-initbreak', '0x' + hex(at),
+      ...machine({ ntsc, model, sid2, reu, fs8 }), '-initbreak', '0x' + hex(at),
       '-remotemonitor', '-remotemonitoraddress', `ip4://127.0.0.1:${PORT}`, '-autostart', prg], { stdio: 'ignore' });
     let out = '', sent = false;
     const done = (err, v) => { clearTimeout(timer); vice.kill(); err ? reject(err) : resolve(v); };

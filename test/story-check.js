@@ -1,7 +1,9 @@
 // Checks the C64 story engine against the reference: plays the Mountain from a script in VICE and
 // compares every pixel of the C64's frame with c64/story/view.js at ticks through it (the dark start,
-// typing, pages, the choices and their selection, scene changes, and the pan at every fine scroll);
-// then times the run (no late frames) and checks every tick's SID registers, on one SID and two.
+// typing, pages, the choices and their selection, scene changes, the pan at every fine scroll, and
+// every frame of the zoom, the pull-back and the turn); then times the run (no late frames) and checks
+// every tick's SID registers, on one SID and two. VICE starts the REU with the frames (the story's REU
+// image); a last check loads them from files instead (drive 8), and finds none without an REU.
 //
 //   node test/story-check.js <path to VICE folder> [--quick] [--timing] [--ntsc | --model <name>]
 const path = require('path');
@@ -13,6 +15,10 @@ const { runs } = require('../c64/kit/build.js');
 
 const o = kit.options('node test/story-check.js');
 const s = load();
+const frames = path.join(o.scratch, 'frames');
+build(path.join(o.scratch, 'frames-build'), {}, s);
+require('fs').cpSync(path.join(o.scratch, 'frames-build', 'frames'), frames, { recursive: true });
+o.vice.reu = path.join(frames, `${s.name}.reu`);
 
 // The script: fire every 70 ticks (the text, then on), and at the choices first down once (and up and
 // down again later), so every scene and both kinds of choice come up.
@@ -38,7 +44,8 @@ const stops = new Set([1, 10, 17, 60, 150, 300, 600, 900, 1200, 1500, 1800, 2100
   inputs.forEach((b, n) => {
     STORY.play(s.c, st, b);
     const key = `${st.phase}${st.blank ? 'dark' : ''}${st.sel}`, ys = `ys${7 - ((st.y8 >> 8) & 7)}`, xs = `xs${(-(st.x8 >> 8)) & 7}`;
-    for (const k of [key, ys, xs]) if (!seen.has(k)) { seen.add(k); stops.add(n + 1); }
+    const pic = st.blank ? 'dark' : `pic${STORY.picture(s.c, st)}`;
+    for (const k of [key, ys, xs, pic]) if (!seen.has(k)) { seen.add(k); stops.add(n + 1); }
   });
 }
 const cases = [...stops].sort((a, b) => a - b).map(n => ({
@@ -58,5 +65,16 @@ const sound = [1, 2].map(sids => ({
   let failures = o.timingOnly ? 0 : await kit.checkFrames(o, o.quick ? cases.filter((c, i) => i % 4 === 0) : cases, { border: VIEW.BORDER, width: 10 });
   failures += await kit.checkTiming(o, timing);
   failures += await kit.checkSound(o, sound);
+  if (!o.quick) {
+    // loading: from the frame files into an empty REU; and with no REU, none
+    const V = require('./vice-lib.js'), d = path.join(o.scratch, 'load');
+    build(d, { script: [[0, 20]] }, s);
+    const lbl = V.labels(path.join(d, 'story.lbl')), prg = path.join(d, 'story.prg');
+    for (const [reu, want] of [[true, 1], [false, 0]]) {
+      const [got] = await V.readMemory(o.exe, prg, lbl.script_park, lbl.haveframes, 1, { ...o.vice, reu, fs8: frames });
+      console.log(`loading the frames ${reu ? 'from drive 8 into an REU' : 'with no REU'}: ${got ? 'all there' : 'none'}${got === want ? '' : ' WRONG'}`);
+      if (got !== want) failures++;
+    }
+  }
   kit.finish(o, failures, 'the C64 story engine shows every frame and plays every SID tick exactly like the reference');
 })().catch(e => { console.error(e.message); process.exit(1); });

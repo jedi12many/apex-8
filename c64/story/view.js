@@ -15,7 +15,8 @@
  *                 waiting for fire, a '>' blinks at the end of row 24
  *                 Each row's colour is fixed, so colour RAM never changes there. The font is
  *                 APEXSCII's 64 text glyphs, and the same reversed as codes 64-127.
- * The window is dark while a scene change readies the next picture.
+ * The window is dark while a scene change readies the next picture. A scene's steps show its frames
+ * (window-sized pictures) one after another, at no pan.
  *
  * Works in Node and in the browser (global APEXSTORYVIEW, needing APEXSCII and APEXSTORY).
  */
@@ -50,12 +51,14 @@
   }
 
   // A frame: 320 x 200 RGBA. pics: the story's pictures (c64/story/pictures.js decode), in its order.
-  function frame(c, pics, s) {
+  // Without an REU (reu false) the C64 has no frames, and the window stays dark while steps play.
+  function frame(c, pics, s, { reu = true } = {}) {
     const px = new Uint8ClampedArray(320 * 200 * 4);
     const set = (x, y, k) => px.set([...PAL[k], 255], (y * 320 + x) * 4);
-    const pic = pics[c.scenes[s.scene].picture], { x: panX, y: panY } = STORY.pan(s);
+    const k = STORY.picture(c, s), pic = pics[k], { x: panX, y: panY } = STORY.pan(s);
+    const dark = s.blank || (!reu && c.frames[k]);
     for (let y = 0; y < WIN_END; y++) for (let x = 0; x < 320; x++) {
-      if (y < WIN_TOP || x < 7 || x >= 311 || s.blank) { set(x, y, y < WIN_TOP || x < 7 || x >= 311 ? BORDER : BG); continue; }
+      if (y < WIN_TOP || x < 7 || x >= 311 || dark) { set(x, y, y < WIN_TOP || x < 7 || x >= 311 ? BORDER : BG); continue; }
       const ix = panX + x, iy = panY + y - WIN_TOP, cell = (iy >> 3) * pic.cw + (ix >> 3);
       const v = (pic.bitmap[cell * 8 + (iy & 7)] >> (6 - 2 * ((ix >> 1) & 3))) & 3;
       set(x, y, [pic.bg, pic.screen[cell] >> 4, pic.screen[cell] & 15, pic.colram[cell] & 15][v]);

@@ -42,7 +42,7 @@
 (async function () {
   const story = APEXSTORIES.mountain, stored = APEXPICTURES.mountain;
   const bytes = b64 => Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
-  const pics = Object.keys(story.pictures).map(id => {
+  const pics = APEXSTORY.pictureList(story).map(({ id }) => {
     const p = stored[id];
     return { cw: p.cw, ch: p.ch, bg: p.bg, bitmap: bytes(p.bitmap), screen: bytes(p.screen), colram: bytes(p.colram) };
   });

@@ -4,7 +4,8 @@
 //   web/out/<name>-artifact.html  the same body for publishing as a claude.ai artifact (no html/head/body
 //                                 tags: the viewer adds its own, so the title, meta and styles go first)
 // for side.html (the platformer, Green Hills), iso.html (the isometric dungeon, the Crypt), shmup.html
-// (the shoot-'em-up, the Dreadnought) and crypt.html (The Drowned Crypt, its title picture inlined).
+// (the shoot-'em-up, the Dreadnought) and crypt.html (the Drowned Crypt). A page can be given more globals
+// to inline (extra).
 //
 //   node web/bundle.js
 const fs = require('fs'), path = require('path');
@@ -39,4 +40,4 @@ function bundle(page, levelFile, name, extra = {}) {
 bundle('side.html', 'levels/side/w1.txt', 'side');
 bundle('iso.html', 'levels/iso/d1.txt', 'iso');
 bundle('shmup.html', 'levels/shmup/s1.txt', 'shmup');
-bundle('crypt.html', 'levels/iso/c1.txt', 'crypt', { TITLE_KLA: fs.readFileSync(path.join(root, 'art', 'title', 'title.kla')).toString('base64') });
+bundle('crypt.html', 'levels/iso/c1.txt', 'crypt');

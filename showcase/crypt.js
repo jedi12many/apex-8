@@ -18,7 +18,6 @@ const S = require('../core/sound.js');
 const SONG = require('../sound/crypt.js');
 
 const M = G.parse(fs.readFileSync(path.join(__dirname, '..', 'levels', 'iso', 'c1.txt'), 'utf8'));
-VIEW.setTitle(fs.readFileSync(path.join(__dirname, '..', 'art', 'title', 'title.kla')));
 const TITLE = 150, AFTER = 200;
 // play until the win (or the loss) and its message has shown for AFTER ticks
 const { inputs } = pilot.inputs(M, 9000, TITLE);

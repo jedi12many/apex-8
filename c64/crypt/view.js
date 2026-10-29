@@ -15,15 +15,15 @@
  * sprite is left out that frame. multiplex() is the rule.
  *
  * The status bar is the last 8 lines: hearts at the left, the score at the right, and while the boss is
- * up its strength in the middle.
+ * up its strength in the middle. The title shows the engine's APEX-8 badge in its bottom left corner.
  *
  * Works in Node and in the browser (global APEXCRYPTVIEW, needing APEXSCII, APEXISO, APEXISOVIEW,
- * APEXCRYPT, APEXCRYPTTILES and APEXCRYPTSPRITES).
+ * APEXCRYPT, APEXCRYPTTILES, APEXCRYPTSPRITES and APEX8).
  */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('../../core/iso.js'), require('../iso/view.js'), require('../../core/crypt.js'), require('./tiles.js'), require('./sprites.js'));
-  else root.APEXCRYPTVIEW = factory(root.APEXISO, root.APEXISOVIEW, root.APEXCRYPT, root.APEXCRYPTTILES, root.APEXCRYPTSPRITES);
-})(typeof self !== 'undefined' ? self : this, function (ISO, IV, G, TILES, SP) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('../../core/iso.js'), require('../iso/view.js'), require('../../core/crypt.js'), require('./tiles.js'), require('./sprites.js'), require('../../art/brand/apex8.js'));
+  else root.APEXCRYPTVIEW = factory(root.APEXISO, root.APEXISOVIEW, root.APEXCRYPT, root.APEXCRYPTTILES, root.APEXCRYPTSPRITES, root.APEX8);
+})(typeof self !== 'undefined' ? self : this, function (ISO, IV, G, TILES, SP, APEX8) {
   'use strict';
 
   const SPRITE = SP.COLORS;
@@ -125,11 +125,12 @@
 
   // ------------------------------------------------------------------ a frame
   const PAL = IV.PAL;
+  const BADGE = APEX8.badge(), BADGE_AT = { x: 16, y: 132 };
   // A map with the crypt's drawn tiles (set once, before the iso view prepares its characters).
   const withTiles = M => Object.assign(M, { art: M.art || TILES });
-  // The title picture (art/title/title.kla, a multicolor bitmap as Koala Painter keeps it:
-  // the bitmap, the screen's colours, colour RAM, the background), once given: on the title the screen
-  // shows it instead of the dungeon.
+  // A title picture (a multicolor bitmap as Koala Painter keeps it: the bitmap, the screen's colours,
+  // colour RAM, the background), if a page gives one: on the title the screen shows it instead of the
+  // dungeon.
   let titlePixels = null;
   function setTitle(kla) {
     const k = kla[0] === 0x00 && kla[1] === 0x60 && kla.length === 10003 ? kla.subarray(2) : kla;
@@ -167,6 +168,11 @@
           for (const px of [0, 1]) put(left + 8 * k + 2 * x + px + dx, top + y + dy, PAL[c]);
       });
     };
+    // on the title, the engine's APEX-8 badge (art/brand/apex8.js) in the bottom left corner
+    if (g.mode === G.TITLE) {
+      const B = BADGE;
+      for (let y = 0; y < B.h; y++) for (let x = 0; x < B.w; x++) for (const dx of [0, 1]) put(BADGE_AT.x + 2 * x + dx, BADGE_AT.y + y, PAL[B.px[y * B.w + x]]);
+    }
     const lines = g.mode === G.TITLE ? TEXT.title.filter(([t]) => t !== 'PRESS FIRE' || (g.t >> 5) & 1) : g.mode === G.WIN ? TEXT.win : g.mode === G.OVER ? TEXT.over : [];
     for (const l of lines) write(...l);
     // the status bar

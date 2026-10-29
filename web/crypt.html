@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>The Drowned Crypt</title>
+<title>APEX Drowned Crypt</title>
 <style>
   /* One look on purpose: a C64 screen in a dark room, whatever the viewer's theme. */
   :root { --bg: #15131c; --fg: #e4e1ee; --dim: #9893ad; --key: #2c2838; --key-on: #4a4460; color-scheme: dark; }
@@ -26,6 +26,7 @@
 <script src="../core/iso.js"></script>
 <script src="../c64/iso/view.js"></script>
 <script src="../core/crypt.js"></script>
+<script src="../art/brand/apex8.js"></script>
 <script src="../c64/crypt/tiles.js"></script>
 <script src="../c64/crypt/sprites.js"></script>
 <script src="../c64/crypt/view.js"></script>
@@ -39,10 +40,6 @@
 (async function () {
   const text = window.LEVEL_TEXT || await (await fetch('../levels/iso/c1.txt')).text();
   const map = APEXCRYPT.parse(text);
-  // the title picture: inlined by web/bundle.js (base64), or fetched
-  const kla = window.TITLE_KLA ? Uint8Array.from(atob(window.TITLE_KLA), c => c.charCodeAt(0)).buffer
-    : await fetch('../art/title/title.kla').then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
-  if (kla) APEXCRYPTVIEW.setTitle(new Uint8Array(kla));
   let game = APEXCRYPT.game(map);
   const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');
   const image = ctx.createImageData(320, 200);

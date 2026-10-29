@@ -5,5 +5,5 @@ c64/side/build/
 c64/iso/build/
 c64/shmup/build/
 c64/sound/build/
-c64/title/build/
+c64/picture/build/
 showcase/out/*.wav

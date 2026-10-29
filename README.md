@@ -332,6 +332,21 @@ node test/iso-check.js "C:\path\to\GTK3VICE-3.10-win64"
 node showcase/iso-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
+### The Drowned Crypt
+
+A demo of what the dungeon engine can make: a small action game in the browser, with a C64 version still to come. An investigator in a long raincoat clears a drowned crypt with a pistol. Drowned fish-men shamble at him, tentacled spawn lurch at him in bursts, and in a chamber at the end the Mother of the Deep rips up out of the floor. It spits, sends tentacles up under his feet, and takes 24 shots to sink. Out of the torchlight a creature shows only its glowing eyes. Holding fire plants his feet so he can aim in all 8 directions.
+
+The dungeon is cut from drawn tiles here, not the textures (`M.art`, see `c64/iso/view.js`): a floor, a cracked floor, a wall and a torch wall drawn as pixel grids and placed with each tile, so every character is cut from the drawings. It uses 59 characters. The boss is six sprites drawn from shaded, outlined shapes. The music stops while it is up (see Sound).
+
+| File | What it is |
+|------|------------|
+| `core/crypt.js` | The game's reference: the creatures, the pistol, the boss, hearts and score |
+| `levels/iso/c1.txt` | The map: four rooms, their corridors and the boss's chamber |
+| `c64/crypt/` | Its view (`view.js`), drawn tiles (`tiles.js`) and sprites (`sprites.js`) |
+| `sound/crypt.js` | Its music and effects |
+| `web/crypt.html` | The game, playable in a browser, with its sound |
+| `showcase/crypt-pilot.js`, `showcase/crypt.js` | An autopilot that clears the crypt, and its video with the C64's sound from VICE (`showcase/out/crypt-run.mp4`) |
+
 ## Shoot-'em-up
 
 A vertical-scrolling shooter for the C64, over the hull of a space dreadnought, and the first APEX game that is a whole game: a title, three ships, a score and a high score, game over, music and sound effects. Everything that moves is a hardware sprite: the ship, its shots, the enemies, their bullets, the explosions and the titles. The score sits in a status bar that stays still while the level scrolls above it. That is more than the VIC's eight, so a sprite multiplexer shares them out down the screen. A JavaScript reference defines every frame and every SID register; the 6502 engine draws exactly the same frames and plays exactly the same sound at 50 frames a second, checked in VICE.
@@ -444,7 +459,7 @@ Music and sound effects for the SID, made the way the pictures are: `core/sound.
 - *effects*: steps of a waveform, a sliding frequency, ADSR and a length, each played on its own voice (the song's effects voice unless it names another) instead of the music, which goes on underneath. Effects on different voices play at once. A new effect starts unless one of higher priority is playing on its voice
 - *the music off*: the game can turn the music off. The song stands still, every voice fades on its release, and the effects have the voices to themselves. Turned on, the song goes on from where it stopped
 - `sound/shmup.js`: the Dreadnought's music, an original late-80s house track at 125 beats a minute in A minor. A four-on-the-floor kick with offbeat hats and claps, an octave-jumping bass through the sweeping filter, and arpeggiated chord stabs that give way to a hook. The effects borrow the stabs' voice, so firing never stops the beat. It loops every 31 seconds
-- `sound/crypt.js`: The Drowned Crypt's music, an original creeping cue in the manner of a 1920s silent film, in D minor at 75 beats a minute. A plucked bass walking chromatically into each change, stride chords on 2 and 4, and a melody that tiptoes up onto ghostly held notes. The hero's and creatures' effects are short and sit under the music. When the boss rises the music stops for its roar, moans, screeches and death shriek. `EVENTS` maps the game's events to effects
+- `sound/crypt.js`: the Drowned Crypt's music, an original creeping cue in the manner of a 1920s silent film, in D minor at 75 beats a minute. A plucked bass walking chromatically into each change, stride chords on 2 and 4, and a melody that tiptoes up onto ghostly held notes. The hero's and creatures' effects are short and sit under the music. When the boss rises the music stops for its roar, moans, screeches and death shriek. `EVENTS` maps the game's events to effects
 
 ### The SID in the browser
 
@@ -454,9 +469,9 @@ Music and sound effects for the SID, made the way the pictures are: `core/sound.
 - *envelopes*: as on the chip, a 15-bit rate counter that is never reset, so the ADSR bug happens, and a second counter that slows decay and release as the level falls
 - *the filter*: a resonant state-variable filter following the 6581's cutoff curve, then the volume
 
-`web/audio.js` runs it in an AudioWorklet, or a ScriptProcessor where worklets can't run (a page opened from a file). The page tells it each tick what the game did, and it starts on the first key press, click or touch, as browsers require. M mutes. The shooter and The Drowned Crypt pages use it.
+`web/audio.js` runs it in an AudioWorklet, or a ScriptProcessor where worklets can't run (a page opened from a file). The page tells it each tick what the game did, and it starts on the first key press, click or touch, as browsers require. M mutes. The shooter and Drowned Crypt pages use it.
 
-`test/sid-compare.js` sets the emulation against VICE's recording of the same music and effects, in 100 ms slices. For The Drowned Crypt, its loudness over time correlates 0.92 with VICE's and its spectra match 0.93, at the same level. For the Dreadnought it's 0.88 and 0.80; the 6581's filter is hard to model.
+`test/sid-compare.js` sets the emulation against VICE's recording of the same music and effects, in 100 ms slices. For the Drowned Crypt, its loudness over time correlates 0.92 with VICE's and its spectra match 0.93, at the same level. For the Dreadnought it's 0.88 and 0.80; the 6581's filter is hard to model.
 
 | File | What it is |
 |------|------------|
@@ -473,6 +488,18 @@ node c64/sound/build.js
 node test/sound-check.js "C:\path\to\GTK3VICE-3.10-win64"
 node showcase/sound-wav.js "C:\path\to\GTK3VICE-3.10-win64" --song crypt --seconds 58
 node test/sid-compare.js crypt 58
+```
+
+## The APEX-8 badge
+
+Games made with APEX-8 can carry its badge: a striped sun setting behind a snowy mountain over APEX-8. `art/brand/apex8.js` draws it for the C64's multicolor modes: 40×48 fat pixels with at most 3 colours a cell, so it drops into a bitmap or a character set as it is. The Drowned Crypt shows it on its title. `art/brand/apex8-source.png` is the full-size art.
+
+`art/picture.js` turns any picture into a C64 multicolor bitmap. For each 4×8 cell it picks the 3 colours that match best and ordered-dithers between them, and writes a Koala Painter file and a preview. `c64/picture/` shows a Koala picture on a C64; by default the APEX-8 splash (`art/brand/apex8-splash.kla`), made from the badge's art, which a game can show before its own title. `test/picture-check.js` checks it in VICE pixel for pixel.
+
+```bash
+node art/picture.js art/brand/apex8-source.png art/brand/apex8-splash.kla --crop 27,150,1200,840 --saturation 1.2 --dither 24
+node c64/picture/build.js
+node test/picture-check.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
 ## Roadmap

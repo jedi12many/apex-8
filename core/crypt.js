@@ -1,7 +1,8 @@
 /*
- * APEX Crypt: the reference for a small isometric action game on the dungeon engine (core/iso.js). An
- * investigator with a pistol clears a drowned crypt of the creatures that sleep in it. Integer maths
- * only, so a 6502 port that follows the same steps gets exactly the same game every frame.
+ * APEX Drowned Crypt: the reference for a small isometric action game on the dungeon engine (core/iso.js),
+ * a demo of what the engine can make. An investigator with a pistol clears a drowned crypt of the
+ * creatures that sleep in it. Integer maths only, so a 6502 port that follows the same steps gets
+ * exactly the same game every frame.
  *
  *   - the map is an iso map (core/iso.js) whose floor can also carry creatures: 'd' a drowned one,
  *     's' a spawn

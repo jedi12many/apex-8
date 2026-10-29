@@ -4,7 +4,7 @@
 //   web/out/<name>-artifact.html  the same body for publishing as a claude.ai artifact (no html/head/body
 //                                 tags: the viewer adds its own, so the title, meta and styles go first)
 // for ray.html (the raycaster, the Cell Block), side.html (the platformer, Green Hills), shmup.html
-// (the shoot-'em-up, the Dreadnought) and crypt.html (the Drowned Crypt). A page can be given more globals
+// (the shoot-'em-up, the Dreadnought), crypt.html (the Drowned Crypt) and story.html (the story mode, the Mountain). A page can be given more globals
 // to inline (extra).
 //
 //   node web/bundle.js
@@ -41,3 +41,4 @@ bundle('side.html', 'levels/side/w1.txt', 'side');
 bundle('shmup.html', 'levels/shmup/s1.txt', 'shmup');
 bundle('crypt.html', 'levels/iso/c1.txt', 'crypt');
 bundle('ray.html', 'levels/e1m1.txt', 'ray');
+bundle('story.html', 'stories/mountain.js', 'story');

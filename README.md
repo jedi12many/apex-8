@@ -6,6 +6,7 @@ Game engines and tools for 8-bit machines, starting with the Commodore 64:
 - **a parallax platformer**: Green Hills, with coins, beetles, a flag and music
 - **an isometric dungeon**: the Crypt, with a torchlight that follows the hero, and the Drowned Crypt, a small action game built on it
 - **a vertical shoot-'em-up**: the Dreadnought, with a sprite multiplexer, a status bar and music
+- **a story mode**: scenes told over a slowly panning picture, with typed text and choices (the Mountain)
 
 Each engine has a JavaScript reference that defines every frame, and a 6502 engine that is checked against it pixel for pixel in VICE, timing included. Alongside them:
 
@@ -472,6 +473,45 @@ node test/shmup-check.js "C:\path\to\GTK3VICE-3.10-win64"
 node showcase/shmup-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 ```
 
+## Story mode
+
+Scenes told over a picture larger than the screen, which pans slowly under them like an old documentary, with the words typed beneath and choices that change what happens next. A JavaScript reference defines every frame; the 6502 engine shows exactly the same frames, checked pixel for pixel in VICE. Games can use it for their story between levels.
+
+To play on a C64 or in VICE, load `c64/out/story.prg` with `LOAD"*",8,1`, then `RUN`. `web/story.html` plays the reference in a browser.
+
+| File | What it is |
+|------|------------|
+| `core/story.js` | The story format and how it plays, tick by tick |
+| `c64/story/view.js` | What the C64 screen shows each frame |
+| `stories/mountain.js` | The Mountain, the demo: a traveller meets the guide at the foot of APEX |
+| `stories/mountain-pictures.js` | Its picture, converted (`node c64/story/pictures.js mountain`, with ffmpeg) |
+| `sound/peak.js` | Its music, and the text's effects |
+| `web/story.html` | The reference, playable in a browser |
+| `c64/story/story.s` | The 6502 engine (ca65) |
+| `c64/story/gen.js`, `build.js` | Turn the story, its pictures, the font and the song into the engine's data, and assemble it |
+| `test/story-check.js` | Plays the story in VICE and checks every pixel of the C64's frames against the reference, every SID tick, and that no frame is late |
+
+**A story** is a module of pictures and scenes. Each picture is converted from any image to a multicolor bitmap of any size in cells (`art/picture.js` `cells`). Each scene names a picture, a pan across it (from, to, and how many ticks), a speaker and the text, and then either up to 4 choices (each going to a scene, and able to set a flag, or to show only if a flag is set or isn't), the next scene, or the end. The text wraps into 38-letter lines, 4 to a page, in APEXSCII's text font (capitals). A scene that moves to another picture, or to another part of this one, goes dark for 16 ticks while the window is readied.
+
+**The screen.**
+- *the window*: lines 55-167, a multicolor bitmap panned to the pixel both ways by the VIC's fine scroll, 38 columns wide
+- *the gap*: 11 black lines in an invalid mode. FLD (a fine scroll that no line matches) holds off the bad lines, so the window's last character row always runs its 8 lines: the VIC moves on to the next screen row only then, and the text then always starts on the same row
+- *the text*: rows 15-23 of its own screen and colour RAM, from line 179: the speaker in yellow, 4 lines in white, and the choices in grey, the chosen one a reversed bar. Each row's colour is fixed, so colour RAM there never changes
+
+**The C64 engine.**
+- *two windows*: the window is double-buffered across VIC banks 0 and 2. While one shows, the main loop runs the pan on to find the next cell it needs, and copies it into the other a row at a time. The frame that needs it flips the bank; colour RAM, which can't be doubled, is copied for it in the border after the window
+- *the text*: has its own screen and font in bank 1, switched to in the gap. A row the main loop changes is copied to the text screen at the top of the next frame, so the text and the window always change together
+- *pans*: at most a pixel a tick, and the window's cell may change at most every 8 ticks (copying a window takes about 6 frames); `core/story.js` checks both
+- *memory*: the picture's rows go wherever the VIC doesn't look (`c64/story/gen.js` `REGIONS`); the variables sit under the KERNAL, switched out
+
+Panning only: a C64 can't scale a bitmap in real time. A zoom can be made in steps, from the same picture at a few scales (still to come).
+
+```bash
+node c64/story/pictures.js mountain
+node c64/story/build.js
+node test/story-check.js "C:\path\to\GTK3VICE-3.10-win64"
+```
+
 ## The C64 kit
 
 What every C64 engine shares lives in `c64/kit/` and `test/`, so a new engine starts from a template instead of a copy of the last one.
@@ -556,6 +596,7 @@ node test/sid-compare.js crypt 58
 | 5 | The shooter in the brick look | As 4 |
 | 6, 7, 8, 9 | The Dreadnought's, the Drowned Crypt's, Green Hills' and the Cell Block's songs on the sound player | Joystick directions and fire play the first five effects |
 | 0 | The APEX-8 splash | |
+| S | The story mode, the Mountain | Fire (or space or return) to go on; joystick up and down, or W and S, to pick a choice |
 
 Each program is also in `c64/out` as a `.prg`, which the Ultimate can run straight from its file browser.
 

@@ -26,12 +26,21 @@ const ALL = Array.from({ length: 16 }, (_, k) => k);
 
 // rgb: W x H x 3 bytes. Returns { px (a C64 colour per fat pixel), kla (the Koala file's bytes) }.
 function convert(rgb, spread = 30) {
+  const c = cells(rgb, 40, 25, spread);
+  return { px: c.px, kla: Buffer.concat([Buffer.from([0x00, 0x60]), c.bitmap, c.screen, c.colram, Buffer.from([BG])]) };
+}
+
+// The same for a picture of any size: rgb is (4 * cw) x (8 * ch) fat pixels x 3 bytes. Returns
+// { cw, ch, bg, px (a colour per fat pixel, 4 * cw a row), bitmap (8 bytes a cell, cells row by row),
+// screen and colram (a byte a cell) }.
+function cells(rgb, cw, ch, spread = 30) {
+  const W = 4 * cw;
   const dithered = (x, y, set) => {
     const i = (y * W + x) * 3, d = (BAYER[y & 3][x & 3] / 16 - 0.47) * spread;
     return nearest([rgb[i] + d, rgb[i + 1] + d, rgb[i + 2] + d], set);
   };
-  const px = new Uint8Array(W * H), bitmap = new Uint8Array(8000), screen = new Uint8Array(1000), colram = new Uint8Array(1000);
-  for (let cy = 0; cy < 25; cy++) for (let cx = 0; cx < 40; cx++) {
+  const px = new Uint8Array(W * 8 * ch), bitmap = new Uint8Array(8 * cw * ch), screen = new Uint8Array(cw * ch), colram = new Uint8Array(cw * ch);
+  for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++) {
     const counts = new Map();
     for (let y = 8 * cy; y < 8 * cy + 8; y++) for (let x = 4 * cx; x < 4 * cx + 4; x++) {
       const k = dithered(x, y, ALL);
@@ -50,8 +59,8 @@ function convert(rgb, spread = 30) {
       if (err < bestErr) { bestErr = err; best = set; }
     }
     const set = [best[1], best[2], best[3]];
-    screen[cy * 40 + cx] = (set[0] << 4) | set[1];
-    colram[cy * 40 + cx] = set[2];
+    screen[cy * cw + cx] = (set[0] << 4) | set[1];
+    colram[cy * cw + cx] = set[2];
     for (let y = 0; y < 8; y++) {
       let byte = 0;
       for (let f = 0; f < 4; f++) {
@@ -59,10 +68,17 @@ function convert(rgb, spread = 30) {
         px[(8 * cy + y) * W + 4 * cx + f] = k;
         byte |= (k === BG ? 0 : set.indexOf(k) + 1) << (6 - 2 * f);
       }
-      bitmap[(cy * 40 + cx) * 8 + y] = byte;
+      bitmap[(cy * cw + cx) * 8 + y] = byte;
     }
   }
-  return { px, kla: Buffer.concat([Buffer.from([0x00, 0x60]), bitmap, screen, colram, Buffer.from([BG])]) };
+  return { cw, ch, bg: BG, px, bitmap, screen, colram };
+}
+
+// A picture file as RGB, scaled (after any ffmpeg filters) to w x h. Needs ffmpeg.
+function load(file, w, h, filters = []) {
+  const ff = spawnSync('ffmpeg', ['-v', 'error', '-i', file, '-vf', [...filters, `scale=${w}:${h}:flags=lanczos`].join(','), '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 26 });
+  if (ff.status) throw new Error('ffmpeg failed: ' + ff.stderr);
+  return ff.stdout;
 }
 
 // A picture as a C64 shows it (320 x 200, each fat pixel 2 wide), with a black border, as a PNG.
@@ -78,7 +94,7 @@ function png(px) {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ih), chunk('IDAT', zlib.deflateSync(img)), chunk('IEND', Buffer.alloc(0))]);
 }
 
-module.exports = { W, H, convert, png };
+module.exports = { W, H, PAL, convert, cells, load, png };
 
 if (require.main === module) {
   const args = process.argv.slice(2), opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d; };

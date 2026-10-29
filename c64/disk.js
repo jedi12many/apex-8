@@ -22,6 +22,7 @@ const PROGRAMS = [
   ['8', 'music hills', 'MUSIC: GREEN HILLS', 'sound-hills.prg'],
   ['9', 'music cell', 'MUSIC: THE CELL BLOCK', 'sound-cell.prg'],
   ['0', 'apex-8', 'THE APEX-8 SPLASH', 'picture.prg'],
+  ['s', 'story', 'STORY MODE: THE MOUNTAIN', 'story.prg'],
 ];
 
 // The menu, in BASIC (petcat's text form: {clr} and the like are control codes).
@@ -34,7 +35,7 @@ const MENU = [
   `${50 + 10 * PROGRAMS.length} print"{down}  {gry2}press a number. reset for the menu.{wht}"`,
   '200 geta$:ifa$=""then200',
   ...PROGRAMS.map(([key, file], k) => `${210 + 10 * k} ifa$="${key}"thenprint"{down}  loading...":load"${file}",8`),
-  '300 goto200',
+  '900 goto200',
 ];
 
 const vice = process.argv[2];

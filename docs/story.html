@@ -1,0 +1,1689 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>APEX The Mountain</title>
+<style>
+  /* One look on purpose: a C64 screen in a dark room, whatever the viewer's theme. */
+  :root { --bg: #15131c; --fg: #e4e1ee; --dim: #9893ad; --key: #2c2838; --key-on: #4a4460; color-scheme: dark; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; box-sizing: border-box; min-height: 100vh; touch-action: manipulation; }
+  canvas { width: min(100%, 960px); aspect-ratio: 384 / 272; image-rendering: pixelated; background: #000; }
+  .help { color: var(--dim); text-align: center; max-width: 960px; }
+  .pad { display: none; width: min(100%, 960px); justify-content: space-between; align-items: center; gap: 12px; user-select: none; -webkit-user-select: none; }
+  .pad div { display: flex; flex-direction: column; gap: 8px; }
+  .pad button { width: 64px; height: 64px; border-radius: 50%; border: 0; background: var(--key); color: var(--fg); font-size: 24px; }
+  .pad button.fire { width: 88px; height: 88px; font-size: 16px; font-weight: 600; }
+  .pad button.on { background: var(--key-on); }
+  .pad button:focus-visible { outline: 2px solid var(--fg); }
+  @media (pointer: coarse) { .pad { display: flex; } }
+</style>
+</head>
+<body>
+<canvas id="screen" width="384" height="272"></canvas>
+<div class="pad">
+  <div><button data-bit="1" aria-label="up">▲</button><button data-bit="2" aria-label="down">▼</button></div>
+  <button class="fire" data-bit="16" aria-label="fire">FIRE</button>
+</div>
+<p class="help" id="help">Fire (Space, Enter or Ctrl) shows the rest of the text and goes on · Up / Down or W / S pick a choice · R to restart · M mutes the sound · gamepad works too</p>
+<script>
+/*
+ * APEXSCII — PETSCII-style character sets for the Commodore 64, one per perspective:
+ * isometric 2:1, military 45°, top-down 3/4, side oblique, first-person dungeon and raycast,
+ * each in hi-res (8x8) and multicolor (4x8).
+ *
+ * Every set keeps PETSCII text at screen codes $00-$3F, then two shade sets (smooth and brick),
+ * line art and block elements; the rest of the 256 slots are free. buildDefault(mode, persp)
+ * returns the glyphs, their names and the layout regions.
+ *
+ * Also here: the C64 screen decoder, runnable .prg / .asm writers and specimen sheets.
+ * Works in the browser (window.APEXSCII) and in Node (require).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSCII = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- text font
+  const TEXT_NAMES = '@ABCDEFGHIJKLMNOPQRSTUVWXYZ[£]↑← !"#$%&\'()*+,-./0123456789:;<=>?';
+  const FONT_SRC = [
+    '..####.. .##..##. .##.###. .##.###. .##..... .##...#. ..####..', // @
+    '...##... ..####.. .##..##. .######. .##..##. .##..##. .##..##.', // A
+    '.#####.. .##..##. .##..##. .#####.. .##..##. .##..##. .#####..',
+    '..####.. .##..##. .##..... .##..... .##..... .##..##. ..####..',
+    '.####... .##.##.. .##..##. .##..##. .##..##. .##.##.. .####...',
+    '.######. .##..... .##..... .####... .##..... .##..... .######.',
+    '.######. .##..... .##..... .####... .##..... .##..... .##.....',
+    '..####.. .##..##. .##..... .##.###. .##..##. .##..##. ..####..',
+    '.##..##. .##..##. .##..##. .######. .##..##. .##..##. .##..##.',
+    '..####.. ...##... ...##... ...##... ...##... ...##... ..####..',
+    '...####. ....##.. ....##.. ....##.. ....##.. .##.##.. ..###...',
+    '.##..##. .##.##.. .####... .###.... .####... .##.##.. .##..##.',
+    '.##..... .##..... .##..... .##..... .##..... .##..... .######.',
+    '.##...## .###.### .####### .##.#.## .##...## .##...## .##...##',
+    '.##..##. .###.##. .######. .######. .##.###. .##..##. .##..##.',
+    '..####.. .##..##. .##..##. .##..##. .##..##. .##..##. ..####..',
+    '.#####.. .##..##. .##..##. .#####.. .##..... .##..... .##.....',
+    '..####.. .##..##. .##..##. .##..##. .##..##. ..####.. ....###.',
+    '.#####.. .##..##. .##..##. .#####.. .####... .##.##.. .##..##.',
+    '..####.. .##..##. .##..... ..####.. .....##. .##..##. ..####..',
+    '.######. ...##... ...##... ...##... ...##... ...##... ...##...',
+    '.##..##. .##..##. .##..##. .##..##. .##..##. .##..##. ..####..',
+    '.##..##. .##..##. .##..##. .##..##. .##..##. ..####.. ...##...',
+    '.##...## .##...## .##...## .##.#.## .####### .###.### .##...##',
+    '.##..##. .##..##. ..####.. ...##... ..####.. .##..##. .##..##.',
+    '.##..##. .##..##. .##..##. ..####.. ...##... ...##... ...##...',
+    '.######. .....##. ....##.. ...##... ..##.... .##..... .######.', // Z
+    '..####.. ..##.... ..##.... ..##.... ..##.... ..##.... ..####..', // [
+    '....##.. ...##.#. ..##.... .#####.. ..##.... .##...#. ######..', // £
+    '..####.. ....##.. ....##.. ....##.. ....##.. ....##.. ..####..', // ]
+    '...##... ..####.. .######. ...##... ...##... ...##... ...##...', // ↑
+    '........ ..#..... .##..... ######## .##..... ..#..... ........', // ←
+    '........',                                                        // space
+    '...##... ...##... ...##... ...##... ........ ........ ...##...', // !
+    '.##..##. .##..##. .##..##.',                                      // "
+    '.##..##. .##..##. ######## .##..##. ######## .##..##. .##..##.', // #
+    '...##... ..#####. .##..... ..####.. .....##. .#####.. ...##...', // $
+    '.##...#. .##..##. ....##.. ...##... ..##.... .##..##. .#...##.', // %
+    '..####.. .##..##. ..####.. ..###... .##..### .##..##. ..#####.', // &
+    '.....##. ....##.. ...##...',                                      // '
+    '....##.. ...##... ..##.... ..##.... ..##.... ...##... ....##..', // (
+    '..##.... ...##... ....##.. ....##.. ....##.. ...##... ..##....', // )
+    '........ .##..##. ..####.. ######## ..####.. .##..##. ........', // *
+    '........ ...##... ...##... .######. ...##... ...##... ........', // +
+    '........ ........ ........ ........ ........ ...##... ...##... ..##....', // ,
+    '........ ........ ........ .######.',                             // -
+    '........ ........ ........ ........ ........ ...##... ...##...', // .
+    '........ ......## .....##. ....##.. ...##... ..##.... .##.....', // /
+    '..####.. .##..##. .##.###. .###.##. .##..##. .##..##. ..####..', // 0
+    '...##... ..###... ...##... ...##... ...##... ...##... .######.',
+    '..####.. .##..##. .....##. ....##.. ..##.... .##..... .######.',
+    '..####.. .##..##. .....##. ...###.. .....##. .##..##. ..####..',
+    '.....##. ....###. ...####. .##..##. .####### .....##. .....##.',
+    '.######. .##..... .#####.. .....##. .....##. .##..##. ..####..',
+    '..####.. .##..##. .##..... .#####.. .##..##. .##..##. ..####..',
+    '.######. .##..##. ....##.. ...##... ...##... ...##... ...##...',
+    '..####.. .##..##. .##..##. ..####.. .##..##. .##..##. ..####..',
+    '..####.. .##..##. .##..##. ..#####. .....##. .##..##. ..####..', // 9
+    '........ ........ ...##... ........ ........ ...##... ........', // :
+    '........ ........ ...##... ........ ........ ...##... ...##... ..##....', // ;
+    '....###. ...###.. ..###... .###.... ..###... ...###.. ....###.', // <
+    '........ ........ .######. ........ .######.',                   // =
+    '.###.... ..###... ...###.. ....###. ...###.. ..###... .###....', // >
+    '..####.. .##..##. .....##. ....##.. ...##... ........ ...##...', // ?
+  ];
+
+  function parseGlyph(src) {
+    const rows = src.trim().split(/\s+/);
+    if (rows.length > 8) throw new Error('glyph has >8 rows: ' + src);
+    const g = new Uint8Array(8);
+    rows.forEach((r, y) => {
+      if (r.length !== 8) throw new Error('row not 8 wide: "' + r + '"');
+      for (let x = 0; x < 8; x++) if (r[x] === '#') g[y] |= 0x80 >> x;
+    });
+    return g;
+  }
+
+  // ---------------------------------------------------------- shade patterns
+  // Patterns are periodic in 8x8 so a glyph looks identical wherever it lands.
+  function brickWall(x, y) {
+    x &= 7; y &= 7;
+    if ((y & 3) === 3) return false;
+    return x !== (y < 4 ? 0 : 4);
+  }
+  const SETS = {
+    smooth: {
+      E: () => false,
+      T: () => true,
+      L: (x, y) => ((x + y) & 1) === 0,
+      R: (x, y) => (x & 1) === 0 && (y & 1) === 0,
+    },
+    brick: {
+      E: () => false,
+      T: (x, y) => !(((x & 3) === 0 && (y & 3) === 0) || ((x & 3) === 2 && (y & 3) === 2)),
+      L: brickWall,
+      R: (x, y) => brickWall(x, y) && ((x + y) & 1) === 0,
+    },
+  };
+  // Multicolor patterns work on 4x8 fat pixels: fn(fx, y) -> 2-bit value.
+  //   00 = $D021 background, 01 = $D022 (MC1), 10 = $D023 (MC2), 11 = the cell's colour RAM (0-7).
+  // The top face takes the cell colour, so materials share glyphs and differ only by colour;
+  // the left/right faces use the two shared shades.
+  function brickWallMC(fx, y) {
+    y &= 7;
+    if ((y & 3) === 3) return false;
+    return (fx & 3) !== (y < 4 ? 0 : 2);
+  }
+  const MC_SETS = {
+    smooth: { E: () => 0, T: () => 3, L: () => 1, R: () => 2 },
+    brick: {
+      E: () => 0,
+      T: (fx, y) => ((y & 3) === 0 && ((fx + (y >> 2)) & 1) === 0) ? 2 : 1, // light paving, dark joints
+      L: (fx, y) => brickWallMC(fx, y) ? 3 : 1,                             // bricks in cell colour, light mortar
+      R: (fx, y) => brickWallMC(fx, y) ? (((fx + y) & 1) ? 3 : 2) : 0,      // shaded bricks, dark mortar
+    },
+  };
+  // Dungeon faces: ceiling, ground, front wall, side wall, door (vertical planks).
+  Object.assign(SETS.smooth, { C: () => false, G: SETS.smooth.R, W: SETS.smooth.T, S: SETS.smooth.L, D: x => (x & 3) !== 3 });
+  Object.assign(SETS.brick, { C: () => false, G: SETS.brick.T, W: SETS.brick.L, S: SETS.brick.R, D: x => (x & 3) !== 3 });
+  Object.assign(MC_SETS.smooth, { C: () => 0, G: () => 2, W: () => 3, S: () => 1, D: fx => (fx & 1) ? 2 : 3 });
+  Object.assign(MC_SETS.brick, { C: () => 0, G: MC_SETS.brick.T, W: MC_SETS.brick.L, S: MC_SETS.brick.R, D: fx => (fx & 1) ? 2 : 3 });
+
+  // ------------------------------------------------------------ theme textures
+  // A theme repaints the two shade sets of every perspective with its own textures; glyph roles and
+  // screen codes stay the same, so maps and renderers work with any theme. A texture is 8 rows of
+  // 8 pixels ('#' on) for hi-res, or 8 rows of 4 fat pixels ('0'-'3') for multicolor, tiled every
+  // 8 pixels. Faces: T top, L lit side, R shaded side; dungeon C ceiling and D door. The dungeon's
+  // floor, front wall and side wall default to T, L and R.
+  const tex = rows => (x, y) => rows[y & 7][x & 7] === '#';
+  const texMC = rows => (fx, y) => +rows[y & 7][fx & 3];
+  const shaded = f => (x, y) => f(x, y) && ((x + y) & 1) === 0; // a darker side: every other pixel
+  function defineSet(name, hi, mc) {
+    const full = (s, none, door) => Object.assign({ E: none, C: none, G: s.T, W: s.L, S: s.R, D: door }, s);
+    SETS[name] = full(hi, () => false, x => (x & 3) !== 3);
+    MC_SETS[name] = full(mc, () => 0, fx => (fx & 1) ? 2 : 3);
+  }
+  const IRON_DOOR = tex(['########', '###.###.', '###.###.', '###.###.', '###.###.', '########', '###.###.', '###.###.']);
+  const IRON_DOOR_MC = texMC(['1111', '3303', '3303', '3303', '3303', '1111', '3303', '3303']);
+  const COBWEB = tex(['#.......', '.#......', '..#.....', '...#....', '........', '........', '......#.', '........']);
+  const COBWEB_MC = texMC(['1000', '0100', '0000', '0010', '0000', '0000', '0001', '0000']);
+
+  const cryptL = tex(['#######.', '#.######', '#######.', '........', '###.####', '###.##.#', '###.####', '........']);
+  defineSet('crypt-stone', {
+    T: tex(['#######.', '#######.', '#.#####.', '........', '###.####', '###.####', '###.##.#', '........']),
+    L: cryptL, R: shaded(cryptL), C: COBWEB, D: IRON_DOOR,
+  }, {
+    T: texMC(['3330', '3330', '3130', '0000', '3033', '3033', '3031', '0000']),
+    L: texMC(['1110', '1210', '1110', '0000', '1011', '1011', '1012', '0000']),
+    R: texMC(['2220', '2020', '2220', '0000', '2022', '2022', '2020', '0000']), C: COBWEB_MC, D: IRON_DOOR_MC,
+  });
+  const mossL = tex(['#.#####.', '#.###.#.', '#####.#.', '........', '###.#.##', '###.#.##', '###.####', '........']);
+  defineSet('crypt-moss', {
+    T: tex(['#.#####.', '#######.', '###.##..', '........', '###.##.#', '#.#.####', '###.####', '........']),
+    L: mossL, R: shaded(mossL), C: COBWEB, D: IRON_DOOR,
+  }, {
+    T: texMC(['3130', '3330', '3310', '0000', '3031', '3133', '3033', '0000']),
+    L: texMC(['1210', '1210', '1110', '0000', '1021', '1021', '1011', '0000']),
+    R: texMC(['2020', '2020', '2220', '0000', '2022', '2022', '2022', '0000']), C: COBWEB_MC, D: IRON_DOOR_MC,
+  });
+
+  const CANOPY = tex(['#..#....', '.#....#.', '....#..#', '#.#.....', '.....#..', '..#....#', '#...#...', '.#....#.']);
+  const CANOPY_MC = texMC(['1020', '0102', '2010', '0201', '1020', '0102', '2010', '0201']);
+  const PLANK_DOOR = tex(['########', '###.###.', '###.###.', '###.###.', '###.###.', '###.###.', '###.###.', '########']);
+  const PLANK_DOOR_MC = texMC(['2222', '3303', '3303', '3303', '3303', '3303', '3303', '2222']);
+  const dirt = tex(['#.#.#.#.', '.#.###.#', '#.#####.', '.#.###.#', '#.#.#.#.', '.#.#.#.#', '###.#.#.', '##.#.#.#']);
+  defineSet('forest-grass', {
+    T: tex(['########', '##.#####', '#.#.####', '########', '######.#', '#####.#.', '########', '########']),
+    L: dirt, R: shaded(dirt), C: CANOPY, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '3233', '3333', '3332', '3333', '3323', '3333', '2333']),
+    L: texMC(['1121', '1111', '2111', '1112', '1111', '1211', '1111', '1121']),
+    R: texMC(['2202', '2222', '0222', '2220', '2222', '2022', '2222', '2202']), C: CANOPY_MC, D: PLANK_DOOR_MC,
+  });
+  const bark = tex(['#.##.###', '#.##.###', '#.###.##', '#.###.##', '##.#.###', '##.#.###', '#.##.#.#', '#.##.###']);
+  defineSet('forest-wood', {
+    T: tex(['#######.', '#######.', '........', '###.####', '###.####', '........', '#####.##', '........']),
+    L: bark, R: shaded(bark), C: CANOPY, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3330', '3330', '0000', '3033', '3033', '0000', '3303', '0000']),
+    L: texMC(['3131', '3131', '3113', '3113', '1313', '1313', '3131', '3131']),
+    R: texMC(['2020', '2020', '2002', '2002', '0202', '0202', '2020', '2020']), C: CANOPY_MC, D: PLANK_DOOR_MC,
+  });
+
+  const BEAMS = tex(['########', '........', '........', '........', '########', '........', '........', '........']);
+  const BEAMS_MC = texMC(['2222', '0000', '0000', '0000', '2222', '0000', '0000', '0000']);
+  const timber = (x, y) => !((y & 7) === 0 || (x & 7) === 0 || (x & 7) === (y & 7)); // half-timbered panels
+  const timberMC = (fx, y) => ((y & 7) === 0 || (fx & 3) === 0 || (fx & 3) === (y & 7) >> 1 ? 2 : 1);
+  defineSet('town-cobble', {
+    T: tex(['###.###.', '###.###.', '###.###.', '........', '#.###.##', '#.###.##', '#.###.##', '........']),
+    L: timber, R: shaded(timber), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    // Cobbles in the shared shade (MC1) with a fat-pixel accent of the material's own colour.
+    T: texMC(['3101', '1101', '1101', '0000', '0310', '0110', '0110', '0000']),
+    L: timberMC, R: (fx, y) => (timberMC(fx, y) === 2 ? 2 : ((fx + y) & 1 ? 1 : 0)), C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+  defineSet('town-roof', {
+    T: tex(['.######.', '########', '########', '#.#.#.#.', '###..###', '########', '########', '#.#.#.#.']),
+    L: SETS.brick.L, R: SETS.brick.R, C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['0330', '3333', '3333', '1313', '3003', '3333', '3333', '1313']),
+    L: MC_SETS.brick.L, R: MC_SETS.brick.R, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+
+  // Toy bricks: studded plates on top (a stud a cell, lit on its upper left, shaded on its lower
+  // right), smooth 1x1 brick sides with a glint, and flat tiles with a groove for the second set.
+  const brickL = tex(['#######.', '#.#####.', '#######.', '#######.', '#######.', '#######.', '#######.', '........']);
+  const BRICK_L_MC = texMC(['3332', '3132', '3332', '3332', '3332', '3332', '3332', '0000']);
+  const BRICK_R_MC = texMC(['3230', '2320', '3230', '2320', '3230', '2320', '3230', '0000']);
+  defineSet('brick-stud', {
+    T: tex(['########', '##....##', '#.####.#', '#.####.#', '#.####.#', '#.####.#', '##....##', '########']),
+    L: brickL, R: shaded(brickL), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '1133', '1323', '1323', '1323', '3223', '3333', '3333']),
+    L: BRICK_L_MC, R: BRICK_R_MC, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+  defineSet('brick-tile', {
+    T: tex(['#######.', '#######.', '#######.', '#######.', '#######.', '#######.', '#######.', '........']),
+    L: brickL, R: shaded(brickL), C: BEAMS, D: PLANK_DOOR,
+  }, {
+    T: texMC(['3333', '3333', '3333', '3333', '3333', '3333', '3333', '2222']),
+    L: BRICK_L_MC, R: BRICK_R_MC, C: BEAMS_MC, D: PLANK_DOOR_MC,
+  });
+
+  // Animated textures: frames of a top-face texture, for a renderer to cycle through. They aren't in
+  // any theme's layout; on the C64 the few glyphs they produce are rewritten each frame. Water ripples
+  // drift right by one fat pixel per frame (four frames loop); its sides are the smooth ones.
+  const ANIMATIONS = { water: [] };
+  for (let f = 0; f < 4; f++) {
+    const crest = (x, y) => (y & 3) === 1 && ((x + 2 * f + ((y >> 2) & 1) * 4) & 7) < 3;
+    const crestMC = (fx, y) => (y & 3) === 1 && ((fx + f + ((y >> 2) & 1) * 2) & 3) < 2;
+    defineSet(`water-${f}`, { T: (x, y) => !crest(x, y), L: SETS.smooth.L, R: SETS.smooth.R },
+      { T: (fx, y) => (crestMC(fx, y) ? 1 : 3), L: MC_SETS.smooth.L, R: MC_SETS.smooth.R });
+    ANIMATIONS.water.push(`water-${f}`);
+  }
+
+  // Each theme names the pattern sets that fill the two shade-set regions of every perspective.
+  const THEMES = {
+    classic: { name: 'Classic', sets: ['smooth', 'brick'] },
+    crypt: { name: 'Crypt', sets: ['crypt-stone', 'crypt-moss'] },
+    forest: { name: 'Forest', sets: ['forest-grass', 'forest-wood'] },
+    town: { name: 'Town', sets: ['town-cobble', 'town-roof'] },
+    brick: { name: 'Brick', sets: ['brick-stud', 'brick-tile'] },
+  };
+  const FACE_NAMES = { E: 'empty', T: 'top', L: 'left', R: 'right' };
+
+  // 45° boundaries, corner to corner across a cell: military, side oblique and dungeon views.
+  const B45 = [
+    { id: '/', name: '/ 45°', row: x => 7 - x },
+    { id: '\\', name: '\\ 45°', row: x => x },
+  ];
+
+  // Every perspective shares the text block at $00-$3F, then its own shade sets.
+  //   faces: what the pair glyphs combine; key: which pattern each face uses; solids: plain faces.
+  // The top-down 3/4 view has no slopes at all, so it carries outline variants instead.
+  const PERSPECTIVES = {
+    iso: { name: 'Isometric 2:1' },
+    military: {
+      name: 'Military 45°', faces: ['E', 'T', 'L', 'R'], solids: ['T', 'L', 'R'], bounds: B45,
+      key: { E: 'E', T: 'T', L: 'L', R: 'R' }, faceNames: FACE_NAMES,
+    },
+    oblique: {
+      name: 'Top-down 3/4', faces: [], solids: [], bounds: [], edges: true,
+      key: { T: 'T', F: 'L' }, faceNames: { T: 'top', F: 'front' },
+    },
+    side: {
+      name: 'Side oblique', faces: ['E', 'T', 'F', 'R'], solids: ['T', 'F', 'R'], bounds: [B45[0]],
+      key: { E: 'E', T: 'T', F: 'L', R: 'R' }, faceNames: { E: 'empty', T: 'top', F: 'front', R: 'side' },
+    },
+    dungeon: {
+      name: 'First-person dungeon', faces: ['C', 'G', 'W', 'S'], solids: ['C', 'G', 'W', 'S', 'D'], bounds: B45,
+      key: { C: 'C', G: 'G', W: 'W', S: 'S', D: 'D' },
+      faceNames: { C: 'ceiling', G: 'floor', W: 'front wall', S: 'side wall', D: 'door' },
+    },
+    ray: { name: 'Raycast' },
+  };
+
+  // Raycast view: every screen column is two 4-pixel ray columns, and each ray column is in one of
+  // nine states: 0 empty, 1-4 wall shade A 2/4/6/8 pixels high, 5-8 shade B the same. The "top" glyphs
+  // are where a wall rises out of the ceiling (wall at the bottom of the cell), the "bottom" glyphs where
+  // it meets the floor (wall at the top). Screen code = base + 9 * left state + right state, so a full
+  // wall is top or bottom with both states 4 (shade A) or 8 (shade B).
+  // Multicolor: ceiling 00 ($D021), floor 01 ($D022), wall A 10 ($D023), wall B 11 (colour RAM). Walls
+  // are the VIC's foreground bit pairs, so sprites behind walls can use background priority, and
+  // colour RAM never changes from frame to frame. Hi-res: wall A solid, wall B checkered, floor dotted.
+  const RAY = { STATES: 9, top: 0x40, bottom: 0x40 + 81 };
+  RAY.state = (shade, h) => (h <= 0 ? 0 : (shade ? 4 : 0) + Math.min(4, h >> 1)); // h in pixels, rounded down to even
+  RAY.height = s => (s ? ((s - 1) & 3) * 2 + 2 : 0);
+  RAY.shade = s => (s > 4 ? 1 : 0);
+  const RAY_STATE_NAMES = ['empty', 'A2', 'A4', 'A6', 'A8', 'B2', 'B4', 'B6', 'B8'];
+
+  // The four 2:1 slope boundaries; row(x) is the first row of the "below" region.
+  const BOUNDS = [
+    { id: '/u', name: '/ upper', row: x => 3 - (x >> 1) },
+    { id: '/l', name: '/ lower', row: x => 7 - (x >> 1) },
+    { id: '\\u', name: '\\ upper', row: x => x >> 1 },
+    { id: '\\l', name: '\\ lower', row: x => 4 + (x >> 1) },
+  ];
+  const FACES = ['E', 'T', 'L', 'R'];
+  const PAIRS = [];
+  for (const a of FACES) for (const b of FACES) if (a !== b) PAIRS.push([a, b]);
+
+  function glyphFrom(fn) {
+    const g = new Uint8Array(8);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) if (fn(x, y)) g[y] |= 0x80 >> x;
+    return g;
+  }
+  function glyphFromMC(fn) {
+    const g = new Uint8Array(8);
+    for (let y = 0; y < 8; y++) for (let fx = 0; fx < 4; fx++) g[y] |= (fn(fx, y) & 3) << (6 - 2 * fx);
+    return g;
+  }
+
+  // ----------------------------------------------------------- default set
+  const REGIONS = [
+    { from: 0x00, to: 0x3f, name: 'text' },
+    { from: 0x40, to: 0x72, name: 'smooth' },
+    { from: 0x73, to: 0xa5, name: 'brick' },
+    { from: 0xa6, to: 0xad, name: 'lines' },
+    { from: 0xae, to: 0xb5, name: 'blocks' },
+    { from: 0xb6, to: 0xff, name: 'free' },
+  ];
+
+  // In multicolor mode the shade sets and free slots are fat-pixel glyphs; text, lines and
+  // blocks stay hi-res (they are shown with colour RAM 0-7, which keeps a cell hi-res).
+  const LAYOUTS = {};
+  const layout = persp => LAYOUTS[persp] || (LAYOUTS[persp] = buildDefault('hires', persp).regions);
+  function isMCSlot(i, persp = 'iso') {
+    const r = layout(persp).find(r => i >= r.from && i <= r.to);
+    return !['text', 'lines', 'blocks'].includes(r.name);
+  }
+
+  // theme picks the textures (see THEMES); the layout and glyph roles are the same for every theme.
+  // style.outline draws a dark seam where two different faces meet (see pairFn).
+  function buildDefault(mode = 'hires', persp = 'iso', theme = 'classic', style = {}) {
+    const sets = THEMES[theme].sets, outline = !!style.outline;
+    return persp === 'iso' ? buildIso(mode, sets, outline) : persp === 'ray' ? buildRay(mode) : buildPerspective(mode, persp, sets, outline);
+  }
+
+  // The raycast set has flat shading only, so it is the same in every theme and style (see RAY).
+  function buildRay(mode) {
+    const mc = mode === 'mc';
+    const glyphs = [], names = [], regions = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0, start = 0;
+    const add = (g, name) => { glyphs[i] = g; names[i++] = name; };
+    const region = name => { regions.push({ from: start, to: i - 1, name }); start = i; };
+    FONT_SRC.forEach((src, k) => add(parseGlyph(src), 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k])));
+    region('text');
+    const px = mc
+      ? { ceiling: () => 0, floor: () => 1, wall: [() => 2, () => 3] }
+      : { ceiling: () => false, floor: (x, y) => (x & 3) === 1 && (y & 3) === 2, wall: [() => true, (x, y) => ((x + y) & 1) === 0] };
+    const make = mc ? glyphFromMC : glyphFrom, half = mc ? x => x >> 1 : x => x >> 2;
+    for (const end of ['top', 'bottom']) {
+      for (let a = 0; a < 9; a++) for (let b = 0; b < 9; b++) {
+        add(make((x, y) => {
+          const s = half(x) ? b : a, h = RAY.height(s);
+          const isWall = end === 'top' ? y >= 8 - h : y < h;
+          return isWall ? px.wall[RAY.shade(s)](x, y) : (end === 'top' ? px.ceiling : px.floor)(x, y);
+        }), `${mc ? 'mc ' : ''}ray ${end} · ${RAY_STATE_NAMES[a]} | ${RAY_STATE_NAMES[b]}`);
+      }
+      region('ray ' + end);
+    }
+    EDGE_BLOCK_GLYPHS.slice(0, 4).forEach(([n, fn]) => add(glyphFrom(fn), 'line · ' + n));
+    region('lines');
+    EDGE_BLOCK_GLYPHS.slice(4).forEach(([n, fn]) => add(glyphFrom(fn), 'block · ' + n));
+    region('blocks');
+    i = 256; region('free');
+    return { glyphs, names, regions };
+  }
+
+  const EDGE_BLOCK_GLYPHS = [
+    ['left edge', (x) => x === 0], ['right edge', (x) => x === 7],
+    ['top edge', (x, y) => y === 0], ['bottom edge', (x, y) => y === 7],
+    ['upper half', (x, y) => y < 4], ['lower half', (x, y) => y >= 4],
+    ['left half', (x) => x < 4], ['right half', (x) => x >= 4],
+    ['quad TL', (x, y) => x < 4 && y < 4], ['quad TR', (x, y) => x >= 4 && y < 4],
+    ['quad BL', (x, y) => x < 4 && y >= 4], ['quad BR', (x, y) => x >= 4 && y >= 4],
+  ];
+
+  // A pair glyph: face pa above the boundary, pc below it. With a seam, the first row of the lower face
+  // is left dark (0 in either mode) — except in a cell's top row, so renderers can apply the same rule
+  // to every pixel without knowing where boundaries fall.
+  const pairFn = (row, b, pa, pc, seam) => (x, y) => {
+    const r = row(b, x);
+    return seam && y === r && y > 0 ? 0 : (y < r ? pa : pc)(x, y);
+  };
+
+  function buildPerspective(mode, persp, sets, outline) {
+    const P = PERSPECTIVES[persp], mc = mode === 'mc';
+    const glyphs = [], names = [], regions = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0, start = 0;
+    const add = (g, name) => { glyphs[i] = g; names[i++] = name; };
+    const region = name => { regions.push({ from: start, to: i - 1, name }); start = i; };
+    FONT_SRC.forEach((src, k) => add(parseGlyph(src), 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k])));
+    region('text');
+    const pairs = [];
+    for (const a of P.faces) for (const b of P.faces) if (a !== b) pairs.push([a, b]);
+    for (const setName of sets) {
+      const pat = f => (mc ? MC_SETS : SETS)[setName][P.key[f]], make = mc ? glyphFromMC : glyphFrom;
+      const row = mc ? (b, fx) => b.row(fx * 2) : (b, x) => b.row(x);
+      const label = (mc ? 'mc ' : '') + (outline ? 'outlined ' : '') + setName, fn = P.faceNames;
+      for (const f of P.solids) add(make(pat(f)), `${label} · ${fn[f]} face`);
+      for (const b of P.bounds) for (const [a, c] of pairs) {
+        add(make(pairFn(row, b, pat(a), pat(c), outline && a !== 'E' && c !== 'E')), `${label} · ${b.name} · ${fn[a]} over ${fn[c]}`);
+      }
+      if (P.edges) {
+        // Outlines where a block drops away: top faces with any of N/E/S/W, front faces with W/E.
+        const maxX = mc ? 3 : 7, off = mc ? 0 : false;
+        for (let e = 0; e < 16; e++) {
+          const on = [e & 1 && 'N', e & 2 && 'E', e & 4 && 'S', e & 8 && 'W'].filter(Boolean);
+          add(make((x, y) => ((e & 1) && y === 0) || ((e & 4) && y === 7) || ((e & 8) && x === 0) || ((e & 2) && x === maxX)
+            ? off : pat('T')(x, y)), `${label} · top · ${on.length ? 'edges ' + on.join('') : 'no edges'}`);
+        }
+        for (let e = 0; e < 4; e++) {
+          add(make((x, y) => ((e & 1) && x === 0) || ((e & 2) && x === maxX) ? off : pat('F')(x, y)),
+            `${label} · front · ${['no edges', 'edge W', 'edge E', 'edges WE'][e]}`);
+        }
+      }
+      region(setName);
+    }
+    for (const b of P.bounds) add(glyphFrom((x, y) => y === b.row(x)), `line · ${b.name}`);
+    EDGE_BLOCK_GLYPHS.slice(0, 4).forEach(([n, fn]) => add(glyphFrom(fn), 'line · ' + n));
+    region('lines');
+    EDGE_BLOCK_GLYPHS.slice(4).forEach(([n, fn]) => add(glyphFrom(fn), 'block · ' + n));
+    region('blocks');
+    i = 256; region('free');
+    return { glyphs, names, regions };
+  }
+
+  function buildIso(mode, sets, outline) {
+    const mc = mode === 'mc';
+    const glyphs = [], names = [];
+    for (let i = 0; i < 256; i++) { glyphs.push(new Uint8Array(8)); names.push('free'); }
+    let i = 0;
+    FONT_SRC.forEach((src, k) => {
+      glyphs[i] = parseGlyph(src);
+      names[i++] = 'text ' + (TEXT_NAMES[k] === ' ' ? 'space' : TEXT_NAMES[k]);
+    });
+    for (const setName of sets) {
+      const set = (mc ? MC_SETS : SETS)[setName], make = mc ? glyphFromMC : glyphFrom;
+      const row = mc ? (b, fx) => b.row(fx * 2) : (b, x) => b.row(x);
+      const label = (mc ? 'mc ' : '') + (outline ? 'outlined ' : '') + setName;
+      for (const f of ['T', 'L', 'R']) {
+        glyphs[i] = make(set[f]);
+        names[i++] = `${label} · ${FACE_NAMES[f]} face`;
+      }
+      for (const b of BOUNDS) for (const [a, c] of PAIRS) {
+        glyphs[i] = make(pairFn(row, b, set[a], set[c], outline && a !== 'E' && c !== 'E'));
+        names[i++] = `${label} · ${b.name} · ${FACE_NAMES[a]} over ${FACE_NAMES[c]}`;
+      }
+    }
+    for (const b of BOUNDS) {
+      glyphs[i] = glyphFrom((x, y) => y === b.row(x));
+      names[i++] = `line · ${b.name}`;
+    }
+    [['left edge', (x) => x === 0], ['right edge', (x) => x === 7],
+     ['top edge', (x, y) => y === 0], ['bottom edge', (x, y) => y === 7],
+     ['upper half', (x, y) => y < 4], ['lower half', (x, y) => y >= 4],
+     ['left half', (x) => x < 4], ['right half', (x) => x >= 4],
+     ['quad TL', (x, y) => x < 4 && y < 4], ['quad TR', (x, y) => x >= 4 && y < 4],
+     ['quad BL', (x, y) => x < 4 && y >= 4], ['quad BR', (x, y) => x >= 4 && y >= 4],
+    ].forEach(([n, fn], k) => {
+      glyphs[i] = glyphFrom(fn);
+      names[i++] = (k < 4 ? 'line · ' : 'block · ') + n;
+    });
+    if (i !== 0xb6) throw new Error('layout drift: ended at ' + i.toString(16));
+    const regions = REGIONS.map(r => ({ ...r, name: r.name === 'smooth' ? sets[0] : r.name === 'brick' ? sets[1] : r.name }));
+    return { glyphs, names, regions };
+  }
+
+  // --------------------------------------------------------------- palette
+  const PALETTE = ['#000000', '#ffffff', '#68372b', '#70a4b2', '#6f3d86', '#588d43', '#352879', '#b8c76f',
+                   '#6f4f25', '#433900', '#9a6759', '#444444', '#6c6c6c', '#9ad284', '#6c5eb5', '#959595'];
+  const COLOR_NAMES = ['black', 'white', 'red', 'cyan', 'purple', 'green', 'blue', 'yellow',
+                       'orange', 'brown', 'light red', 'dark grey', 'grey', 'light green', 'light blue', 'light grey'];
+
+  // --------------------------------------------------------------- screens
+  const W = 320, H = 200;
+
+  function asciiToScreen(ch) {
+    const c = ch.toUpperCase().charCodeAt(0);
+    if (c >= 65 && c <= 90) return c - 64;
+    if (ch === '@') return 0;
+    if (ch === '[') return 27;
+    if (ch === ']') return 29;
+    if (c >= 32 && c <= 63) return c;
+    return 32;
+  }
+
+  // Decode a 40x25 screen the way the VIC does: in MC mode, colour RAM bit 3 makes a cell multicolor.
+  // opts: { mode, bg, mc1, mc2, romRows }. The bottom `romRows` rows come from the ROM font (see
+  // screenPrg): pass the 4K chargen ROM as `rom` for an exact picture; otherwise APEXSCII's own text
+  // glyphs stand in (inverted for reverse codes).
+  function screenRGB(chars, screen, color, opts, rom) {
+    const pal = PALETTE.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
+    const out = new Uint8ClampedArray(W * H * 4), mc = opts.mode === 'mc', firstRom = 25 - (opts.romRows || 0);
+    const romGlyph = code => {
+      if (rom) return rom.subarray(code * 8, code * 8 + 8);
+      const t = (code & 0x7f) < 0x40 ? chars[code & 0x3f] : new Uint8Array(8);
+      return code & 0x80 ? t.map(b => b ^ 0xff) : t;
+    };
+    for (let cy = 0; cy < 25; cy++) for (let cx = 0; cx < 40; cx++) {
+      const k = cy * 40 + cx, cr = color[k];
+      const g = cy >= firstRom ? romGlyph(screen[k]) : chars[screen[k]];
+      const multi = mc && (cr & 8);
+      const cols = multi ? [opts.bg, opts.mc1, opts.mc2, cr & 7] : [opts.bg, cr];
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+        const v = multi ? (g[y] >> (6 - 2 * (x >> 1))) & 3 : (g[y] >> (7 - x)) & 1;
+        const c = pal[cols[v]], p = ((cy * 8 + y) * W + cx * 8 + x) * 4;
+        out[p] = c[0]; out[p + 1] = c[1]; out[p + 2] = c[2]; out[p + 3] = 255;
+      }
+    }
+    return out;
+  }
+
+  // --------------------------------------------------------------- exports
+  function flatten(chars) {
+    const out = new Uint8Array(2048);
+    chars.forEach((g, i) => out.set(g, i * 8));
+    return out;
+  }
+  function charsetPrg(chars) {
+    const out = new Uint8Array(2050);
+    out[0] = 0x00; out[1] = 0x38; out.set(flatten(chars), 2);
+    return out;
+  }
+
+  // Self-contained runnable PRG for a 40x25 screen: BASIC "10 SYS2064", copies screen/colour/charset
+  // into place, points the VIC at $3800 and parks. Memory: $0A00 screen, $0E00 colour, $1200 charset.
+  // opts: { mode, bg, border, mc1, mc2, romRows }. Multicolor also sets $D022/$D023 and $D016 bit 4.
+  //
+  // With romRows > 0, a two-stage raster IRQ swaps $D018 every frame: APEXSCII ($1E) above, the ROM
+  // uppercase/graphics font ($14, VIC sees ROM at $1000) for the bottom rows. The swap is polled to
+  // the very start of the first ROM row's raster line, before the VIC fetches that line's glyphs.
+  // ROM rows should use colour RAM 0-7, so they stay hi-res in MC mode.
+  function screenPrg(chars, screen, color, opts) {
+    const { bg, border } = opts, ORG = 0x0810;
+    const SCR = 0x0a00, COL = 0x0e00, CHR = 0x1200, START = 0x0801, END = 0x1a00;
+    const split = (opts.romRows || 0) > 0;
+    const L = 51 + 8 * (25 - (opts.romRows || 0)); // first raster line of the ROM rows (PAL and NTSC)
+    const lo = v => v & 0xff, hi = v => v >> 8;
+    const labels = {};
+    // Two passes: the first records label addresses, the second fills in forward references.
+    const emit = () => {
+      const c = [], pc = () => ORG + c.length, mark = n => { labels[n] = pc(); };
+      const at = n => labels[n] || 0, rel = n => (at(n) - (pc() + 2)) & 0xff;
+      const setVec = n => c.push(0xa9, lo(at(n)), 0x8d, 0x14, 0x03, 0xa9, hi(at(n)), 0x8d, 0x15, 0x03); // $0314/5 = n
+      c.push(
+        0xa9, border & 15, 0x8d, 0x20, 0xd0,   // LDA #border : STA $D020
+        0xa9, bg & 15, 0x8d, 0x21, 0xd0,       // LDA #bg     : STA $D021
+        0xa9, 0x80, 0x8d, 0x91, 0x02);         // LDA #$80    : STA $0291 (lock shift+C= charset switch)
+      if (opts.mode === 'mc') c.push(
+        0xa9, opts.mc1 & 15, 0x8d, 0x22, 0xd0, // LDA #mc1    : STA $D022
+        0xa9, opts.mc2 & 15, 0x8d, 0x23, 0xd0, // LDA #mc2    : STA $D023
+        0xa9, 0xd8, 0x8d, 0x16, 0xd0);         // LDA #$D8    : STA $D016 (multicolor on)
+      c.push(0xa2, 0x00);                      // LDX #0
+      mark('copy');
+      for (let p = 0; p < 4; p++) c.push(0xbd, 0x00, hi(SCR) + p, 0x9d, 0x00, 0x04 + p); // LDA src,X : STA dst,X
+      for (let p = 0; p < 4; p++) c.push(0xbd, 0x00, hi(COL) + p, 0x9d, 0x00, 0xd8 + p);
+      for (let p = 0; p < 8; p++) c.push(0xbd, 0x00, hi(CHR) + p, 0x9d, 0x00, 0x38 + p);
+      c.push(0xe8);                                    // INX
+      c.push(0xd0, rel('copy'));                       // BNE copy
+      c.push(0xa9, 0x1e, 0x8d, 0x18, 0xd0);            // LDA #$1E : STA $D018
+      if (split) {
+        c.push(0x78);                                  // SEI
+        c.push(0xa9, 0x7f, 0x8d, 0x0d, 0xdc);          // LDA #$7F : STA $DC0D (CIA timer IRQs off)
+        c.push(0xad, 0x0d, 0xdc);                      // LDA $DC0D (ack)
+        c.push(0xa9, 0x01, 0x8d, 0x1a, 0xd0);          // LDA #1 : STA $D01A (raster IRQ on)
+        c.push(0xad, 0x11, 0xd0, 0x29, 0x7f, 0x8d, 0x11, 0xd0); // clear raster bit 8
+        c.push(0xa9, L - 2, 0x8d, 0x12, 0xd0);         // first IRQ two lines above the split
+        setVec('split');
+        c.push(0x58);                                  // CLI
+      }
+      mark('park');
+      c.push(0x4c, lo(at('park')), hi(at('park')));    // JMP park
+      if (split) {
+        mark('split');
+        c.push(0xa9, L, 0xa2, 0x14);                   // LDA #L : LDX #$14
+        mark('wait');
+        c.push(0xcd, 0x12, 0xd0);                      // CMP $D012
+        c.push(0xd0, rel('wait'));                     // BNE wait
+        c.push(0x8e, 0x18, 0xd0);                      // STX $D018 (ROM font from here down)
+        c.push(0xa9, 0x00, 0x8d, 0x12, 0xd0);          // next IRQ at line 0
+        setVec('top');
+        c.push(0xa9, 0xff, 0x8d, 0x19, 0xd0);          // ack VIC IRQ
+        c.push(0x4c, 0x81, 0xea);                      // JMP $EA81 (restore regs, RTI)
+        mark('top');
+        c.push(0xa9, 0x1e, 0x8d, 0x18, 0xd0);          // APEXSCII above the split
+        c.push(0xa9, L - 2, 0x8d, 0x12, 0xd0);
+        setVec('split');
+        c.push(0xa9, 0xff, 0x8d, 0x19, 0xd0);
+        c.push(0x4c, 0x31, 0xea);                      // JMP $EA31 (KERNAL keyboard/jiffy once a frame)
+      }
+      return c;
+    };
+    emit();
+    const code = emit();
+    if (ORG + code.length > SCR) throw new Error('PRG code overruns screen data');
+    const mem = new Uint8Array(END - START);
+    const put = (addr, bytes) => mem.set(bytes, addr - START);
+    put(0x0801, [0x0b, 0x08, 0x0a, 0x00, 0x9e, 0x32, 0x30, 0x36, 0x34, 0x00, 0x00, 0x00]);
+    put(ORG, code);
+    put(SCR, screen);
+    put(COL, color.map(c => c & 15));
+    put(CHR, flatten(chars));
+    const out = new Uint8Array(mem.length + 2);
+    out[0] = 0x01; out[1] = 0x08; out.set(mem, 2);
+    return out;
+  }
+
+  const hex = (v, w = 2) => '$' + v.toString(16).toUpperCase().padStart(w, '0');
+  function charsetAsm(chars, names) {
+    const lines = ['; APEXSCII character set — 256 glyphs x 8 bytes', '; load/copy to a 2K boundary, e.g. $3800 (VIC $D018 = $1E)', 'apexscii:'];
+    chars.forEach((g, i) => lines.push(`    .byte ${Array.from(g, b => hex(b)).join(',')}  ; ${hex(i)} ${names[i] || ''}`));
+    return lines.join('\n') + '\n';
+  }
+  function screenAsm(screen, color, label = 'screen') {
+    const out = ['; APEXSCII screen — 40x25 screen codes then colour RAM values', `${label}_codes:`];
+    for (let r = 0; r < 25; r++) out.push('    .byte ' + Array.from(screen.slice(r * 40, r * 40 + 40), b => hex(b)).join(','));
+    out.push(`${label}_color:`);
+    for (let r = 0; r < 25; r++) out.push('    .byte ' + Array.from(color.slice(r * 40, r * 40 + 40), b => hex(b)).join(','));
+    return out.join('\n') + '\n';
+  }
+
+  // -------------------------------------------------------------- specimens
+  // A specimen sheet shows a whole set on the C64: the 256 glyphs as a 16x16 grid with hex labels
+  // (columns spaced for legibility), the layout regions underneath, and a status row in the ROM
+  // font, so the raster split is exercised too. Text stays below colour 8, so it is hi-res in MC.
+  function specimen(persp = 'iso', mode = 'hires', theme = 'classic', style = {}) {
+    const { glyphs, regions } = buildDefault(mode, persp, theme, style), mc = mode === 'mc';
+    const ink = mc ? { title: 7, sub: 1, label: 3, legend: 1 } : { title: 7, sub: 15, label: 12, legend: 15 };
+    const screen = new Uint8Array(1000).fill(0x20), color = new Uint8Array(1000).fill(1);
+    const text = (row, col, s, c, rev) => {
+      for (let k = 0; k < s.length && col + k < 40; k++) {
+        screen[row * 40 + col + k] = asciiToScreen(s[k]) | (rev ? 0x80 : 0);
+        color[row * 40 + col + k] = c;
+      }
+    };
+    const centre = (row, s, c, rev) => text(row, (40 - s.length) >> 1, s, c, rev);
+    const HEX = '0123456789ABCDEF';
+    centre(0, 'APEXSCII ' + PERSPECTIVES[persp].name.toUpperCase().replace('°', ''), ink.title);
+    centre(1, (theme === 'classic' ? '' : THEMES[theme].name.toUpperCase() + '  ') + (style.outline ? 'OUTLINED  ' : '') +
+      (mc ? 'MULTICOLOR 4X8' : 'HI-RES 8X8'), ink.sub);
+    for (let k = 0; k < 16; k++) text(3, 7 + 2 * k, HEX[k], ink.label);
+    for (let r = 0; r < 16; r++) {
+      text(4 + r, 3, HEX[r] + '0', ink.label);
+      for (let k = 0; k < 16; k++) {
+        const code = r * 16 + k, at = (4 + r) * 40 + 7 + 2 * k, region = regions.find(g => code >= g.from && code <= g.to).name;
+        screen[at] = code;
+        // MC slots use green as the cell colour; hi-res glyphs: white text, green sets, grey line art.
+        const hires = region === 'text' ? 1 : region === 'lines' || region === 'blocks' ? (mc ? 7 : 15) : 13;
+        color[at] = mc && isMCSlot(code, persp) ? 8 | 5 : hires;
+      }
+    }
+    // Region legend, wrapped over two rows.
+    const items = regions.map(g => `${g.name.toUpperCase()} ${g.from.toString(16).toUpperCase().padStart(2, '0')}-${g.to.toString(16).toUpperCase()}`);
+    const lines = [''];
+    for (const it of items) {
+      const cur = lines[lines.length - 1];
+      if ((cur ? cur.length + 2 : 0) + it.length > 38) lines.push(it); else lines[lines.length - 1] = cur ? cur + '  ' + it : it;
+    }
+    lines.slice(0, 3).forEach((l, i) => centre(21 + i, l, ink.legend)); // rows 21-23; the ROM row is 24
+    const tag = ' ROM FONT ', rest = ' STATUS ROW', start = (40 - tag.length - rest.length) >> 1;
+    text(24, start, tag, 7, true);
+    text(24, start + tag.length, rest, 7);
+    return { chars: glyphs, screen, color, opts: { mode, bg: 0, border: 0, mc1: 12, mc2: 11, romRows: 1 } };
+  }
+  const specimenPrg = (persp, mode, theme, style) => { const s = specimen(persp, mode, theme, style); return screenPrg(s.chars, s.screen, s.color, s.opts); };
+
+  return {
+    W, H, PALETTE, COLOR_NAMES, REGIONS, PERSPECTIVES, THEMES, ANIMATIONS, SETS, MC_SETS, BOUNDS, B45, PAIRS, FACE_NAMES, RAY,
+    glyphFrom, glyphFromMC, buildDefault, layout, isMCSlot, asciiToScreen,
+    screenRGB, screenPrg, screenAsm, flatten, charsetPrg, charsetAsm, hex, specimen, specimenPrg,
+  };
+});
+
+</script>
+<script>
+/*
+ * APEX story mode: the reference for scenes told over a picture, with text and choices. Integer maths
+ * only, so a 6502 port that follows the same steps shows exactly the same thing every frame.
+ *
+ * A story (stories/<name>.js) is:
+ *   { name, song, sounds: { type, more, move, choose } (effects of the song to play, any may be left
+ *     out), typeSpeed (ticks a letter, default 2), pictures: { id: { file, crop, cells: [cw, ch], ... } },
+ *     start: scene id, scenes: { id: scene } }
+ * and a scene:
+ *   { picture, pan: { from: [x, y], to: [x, y], ticks }, speaker, text,
+ *     then one of: choices: [{ text, go, set, if, unless }], next: scene id, end: true }
+ *
+ * The picture shows in a window 304 pixels wide (the 38-column screen) and 113 lines high; pan
+ * positions are the picture's pixel (hires x, line) at the window's top-left corner, x counted from
+ * the screen's left edge (the first 7 pixels are under the border). Below the window is the text area:
+ * the speaker's name, the text 4 lines at a time (each up to LINE letters), and up to 4 choices.
+ * Choices whose `if` flag isn't set, or whose `unless` flag is, aren't shown; `set` sets a flag.
+ *
+ * compile(story, sizes) checks a story and turns it into plain arrays (sizes: each picture's [cw, ch]).
+ * start(c) and play(c, s, bits) run it one 50 Hz tick at a time; bits: 1 up, 2 down, 16 fire (a press
+ * counts once). Each tick, in order:
+ *   1. a scene change in progress: the window stays dark for BLANK ticks while the next picture is
+ *      readied, and nothing else happens
+ *   2. the pan moves by its step (8.8 pixels) until its ticks are done
+ *   3. the text: a letter appears every typeSpeed ticks (fire shows the rest of the page). A full page
+ *      waits for fire: the next page; or, on the last page, the choices (up and down move the choice,
+ *      fire takes it), the next scene, or the start again at the end
+ * s.events lists what happened, for the sound: type, more, move, choose.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSTORY = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const LINE = 38, LINES = 4, CHOICES = 4, NAME = 38, BLANK = 16;
+  const VIEW_W = 304, VIEW_H = 113;           // the window: 38 columns, lines 55-167 of the frame
+  const FLAGS = 16;
+  const GAP = 8;
+  // The window's first cell for a pan position (8.8 pixels): column ceil(x / 8), row floor(y / 8).
+  const cellOf = (x8, y8) => `${((x8 >> 8) + 7) >> 3},${(y8 >> 8) >> 3}`;
+  // The letters the text can use: APEXSCII's text block ($00-$3F, as screen codes).
+  const LETTERS = '@ABCDEFGHIJKLMNOPQRSTUVWXYZ[£]^_ !"#$%&\'()*+,-./0123456789:;<=>?';
+  const code = ch => { const k = LETTERS.indexOf(ch); if (k < 0) throw new Error(`story: no letter for '${ch}'`); return k; };
+
+  // Words wrapped into lines of at most n letters; \n starts a new line.
+  function wrap(text, n) {
+    const lines = [];
+    for (const para of text.toUpperCase().split('\n')) {
+      let line = '';
+      for (const word of para.split(/\s+/).filter(Boolean)) {
+        if (word.length > n) throw new Error(`story: "${word}" is longer than a line`);
+        if (line && line.length + 1 + word.length > n) { lines.push(line); line = word; } else line = line ? line + ' ' + word : word;
+      }
+      lines.push(line);
+    }
+    return lines;
+  }
+
+  function compile(story, sizes) {
+    const ids = Object.keys(story.scenes), picIds = Object.keys(story.pictures);
+    const flags = [];
+    const flag = name => { if (name === undefined) return -1; let k = flags.indexOf(name); if (k < 0) { k = flags.length; flags.push(name); } if (k >= FLAGS) throw new Error(`story: more than ${FLAGS} flags`); return k; };
+    const scene = id => { const k = ids.indexOf(id); if (k < 0) throw new Error(`story: no scene "${id}"`); return k; };
+    const scenes = ids.map(id => {
+      const sc = story.scenes[id], where = `story: scene "${id}"`;
+      const pic = picIds.indexOf(sc.picture);
+      if (pic < 0) throw new Error(`${where}: no picture "${sc.picture}"`);
+      const [cw, ch] = sizes[pic], maxX = cw * 8 - 320, maxY = ch * 8 - VIEW_H;
+      const pan = sc.pan || { from: [0, 0], to: [0, 0], ticks: 0 };
+      for (const [x, y] of [pan.from, pan.to]) {
+        if (x < 0 || x > maxX || y < 0 || y > maxY) throw new Error(`${where}: the pan must stay within 0-${maxX} across and 0-${maxY} down`);
+      }
+      const ticks = pan.ticks || 0;
+      const step = d => (ticks ? Math.trunc((d * 256) / ticks) : 0);
+      const dx = step(pan.to[0] - pan.from[0]), dy = step(pan.to[1] - pan.from[1]);
+      if (Math.abs(dx) > 256 || Math.abs(dy) > 256) throw new Error(`${where}: the pan is faster than a pixel a tick`);
+      // The window's cell changes when the pan crosses a cell; each needs the picture copied again,
+      // which takes a C64 about 6 frames, so changes must be GAP ticks apart (or in the same tick).
+      let last = -GAP, cell = cellOf(pan.from[0] * 256, pan.from[1] * 256);
+      for (let t = 1, x = pan.from[0] * 256, y = pan.from[1] * 256; t <= ticks; t++) {
+        x += dx; y += dy;
+        const now = cellOf(x, y);
+        if (now === cell) continue;
+        if (t - last < GAP) throw new Error(`${where}: the pan crosses cells at ticks ${last} and ${t}, under ${GAP} apart; change its ends or ticks a little`);
+        last = t; cell = now;
+      }
+      const lines = wrap(sc.text || '', LINE);
+      const pages = [];
+      for (let k = 0; k < lines.length; k += LINES) pages.push(lines.slice(k, k + LINES).map(l => Array.from(l, code)));
+      const speaker = Array.from((sc.speaker || '').toUpperCase(), code);
+      if (speaker.length > NAME) throw new Error(`${where}: the speaker's name is too long`);
+      const choices = (sc.choices || []).map(c => {
+        const text = Array.from(c.text.toUpperCase(), code);
+        if (text.length > LINE - 2) throw new Error(`${where}: the choice "${c.text}" is longer than ${LINE - 2} letters`);
+        return { text, go: scene(c.go), set: flag(c.set), if: flag(c.if), unless: flag(c.unless) };
+      });
+      if (choices.length > CHOICES) throw new Error(`${where}: more than ${CHOICES} choices`);
+      if (!choices.length && !sc.end && sc.next === undefined) throw new Error(`${where}: needs choices, next or end`);
+      return {
+        id, picture: pic, x0: pan.from[0], y0: pan.from[1], dx, dy, ticks, speaker, pages, choices,
+        next: choices.length || sc.end ? -1 : scene(sc.next), set: flag(sc.set),
+      };
+    });
+    return { name: story.name, typeSpeed: story.typeSpeed || 2, scenes, flags, start: scene(story.start), pictures: picIds, sounds: story.sounds || {} };
+  }
+
+  // The choices a scene shows with these flags, as indexes into its choices.
+  function shownChoices(sc, flags) {
+    const on = k => k >= 0 && (flags >> k) & 1;
+    return sc.choices.map((c, i) => i).filter(i => { const c = sc.choices[i]; return (c.if < 0 || on(c.if)) && !on(c.unless); });
+  }
+  const pageLength = page => page.reduce((n, l) => n + l.length, 0);
+
+  // A story's state: the scene, its page, the letters shown, what it waits for, the choice, the pan
+  // (8.8 pixels) and its tick, the flags, the button held, a scene change's dark ticks, and the clock.
+  function start(c) {
+    const s = { scene: -1, page: 0, shown: 0, wait: 0, phase: 'type', sel: 0, x8: 0, y8: 0, t: 0, flags: 0, held: 0, blank: 0, clock: 0, events: [] };
+    enter(c, s, c.start, true);
+    return s;
+  }
+
+  function enter(c, s, k, first = false) {
+    const sc = c.scenes[k], prev = s.scene, old = { x8: s.x8, y8: s.y8 };
+    s.scene = k;
+    s.page = 0; s.shown = 0; s.wait = 0; s.sel = 0; s.t = 0;
+    s.phase = 'type';
+    s.x8 = sc.x0 * 256; s.y8 = sc.y0 * 256;
+    if (sc.set >= 0) s.flags |= 1 << sc.set;
+    // A new picture, or a jump to another cell of this one: dark while the window is readied.
+    if (first || c.scenes[prev].picture !== sc.picture || cellOf(s.x8, s.y8) !== cellOf(old.x8, old.y8)) s.blank = BLANK;
+  }
+
+  function play(c, s, bits) {
+    const events = (s.events = []), press = bits & ~s.held;
+    s.held = bits;
+    s.clock = (s.clock + 1) & 0xff;
+    if (s.blank) { s.blank--; return s; }
+    const sc = c.scenes[s.scene];
+    if (s.t < sc.ticks) { s.x8 += sc.dx; s.y8 += sc.dy; s.t++; }
+
+    const page = sc.pages[s.page] || [], len = pageLength(page);
+    if (s.phase === 'type') {
+      if (press & 16 && s.shown) { s.shown = len; s.wait = 0; }
+      else if (s.shown < len && ++s.wait === c.typeSpeed) { s.wait = 0; s.shown++; events.push('type'); }
+      if (s.shown === len) s.phase = s.page < sc.pages.length - 1 ? 'more' : sc.choices.length ? 'choose' : 'done';
+      return s;
+    }
+    if (s.phase === 'more') {
+      if (press & 16) { s.page++; s.shown = 0; s.wait = 0; s.phase = 'type'; events.push('more'); }
+      return s;
+    }
+    if (s.phase === 'choose') {
+      const list = shownChoices(sc, s.flags);
+      if (press & 1 && s.sel > 0) { s.sel--; events.push('move'); }
+      else if (press & 2 && s.sel < list.length - 1) { s.sel++; events.push('move'); }
+      else if (press & 16 && list.length) {
+        const ch = sc.choices[list[s.sel]];
+        if (ch.set >= 0) s.flags |= 1 << ch.set;
+        events.push('choose');
+        enter(c, s, ch.go);
+      }
+      return s;
+    }
+    if (press & 16) { events.push('more'); enter(c, s, sc.next >= 0 ? sc.next : c.start); }
+    return s;
+  }
+
+  // Where the pan is: the picture's pixel at the window's top-left.
+  const pan = s => ({ x: s.x8 >> 8, y: s.y8 >> 8 });
+
+  return { LINE, LINES, CHOICES, NAME, BLANK, GAP, cellOf, VIEW_W, VIEW_H, FLAGS, LETTERS, wrap, compile, start, play, pan, shownChoices, pageLength };
+});
+
+</script>
+<script>
+/*
+ * The story mode's C64 screen (core/story.js): what each frame shows, exactly as the engine is to
+ * show it.
+ *
+ *   lines 0-3     the top border (24-row mode)
+ *   lines 4-116   the window: a multicolor bitmap of the picture, panned to the pixel by the VIC's
+ *                 fine scroll both ways, in 38 columns (the border covers x 0-6 and 311-319)
+ *   lines 117-127 black (an invalid mode, its bad lines held off so every row of the window ends
+ *                 before the text starts)
+ *   lines 128-199 the text area, rows 16-24 in APEXSCII's text font on black, 38 columns:
+ *                   row 16      the speaker's name, in yellow
+ *                   rows 17-20  the page's text, typed so far, in white
+ *                   rows 21-24  the choices, when they are shown, from column 3 in light grey; the
+ *                               chosen one in a reversed bar from column 1 to 38
+ *                 waiting for fire, a '>' blinks at the end of row 24
+ *                 Each row's colour is fixed, so colour RAM never changes there. The font is
+ *                 APEXSCII's 64 text glyphs, and the same reversed as codes 64-127.
+ * The window is dark while a scene change readies the next picture.
+ *
+ * Works in Node and in the browser (global APEXSTORYVIEW, needing APEXSCII and APEXSTORY).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('../../apexscii/apexscii.js'), require('../../core/story.js'));
+  else root.APEXSTORYVIEW = factory(root.APEXSCII, root.APEXSTORY);
+})(typeof self !== 'undefined' ? self : this, function (APEXSCII, STORY) {
+  'use strict';
+
+  const BORDER = 0, BG = 0, WIN_TOP = 4, WIN_END = 117, TEXT_ROW = 16;
+  const ROW_COLOR = [7, 1, 1, 1, 1, 15, 15, 15, 15];
+  const PROMPT = 0x3e;                        // '>'
+  const PAL = APEXSCII.PALETTE.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
+  const TEXT = APEXSCII.buildDefault('hires', 'ray').glyphs.slice(0, 64);
+  const FONT = [...TEXT, ...TEXT.map(g => Array.from(g, b => b ^ 0xff))];
+
+  // The text area as 9 rows of 40 screen codes ($20 a space).
+  function text(c, s) {
+    const sc = c.scenes[s.scene], codes = new Uint8Array(360).fill(0x20);
+    const put = (row, col, list) => list.forEach((k, i) => { codes[row * 40 + col + i] = k; });
+    put(0, 1, sc.speaker);
+    let left = s.shown;
+    (sc.pages[s.page] || []).forEach((line, r) => { put(1 + r, 1, line.slice(0, Math.max(0, left))); left -= line.length; });
+    if (!s.blank && s.phase === 'choose') {
+      STORY.shownChoices(sc, s.flags).forEach((k, r) => {
+        put(5 + r, 3, sc.choices[k].text);
+        if (r === s.sel) for (let x = 1; x <= 38; x++) codes[(5 + r) * 40 + x] |= 0x40;
+      });
+    }
+    if (!s.blank && (s.phase === 'more' || s.phase === 'done') && s.clock & 16) put(8, 38, [PROMPT]);
+    return codes;
+  }
+
+  // A frame: 320 x 200 RGBA. pics: the story's pictures (c64/story/pictures.js decode), in its order.
+  function frame(c, pics, s) {
+    const px = new Uint8ClampedArray(320 * 200 * 4);
+    const set = (x, y, k) => px.set([...PAL[k], 255], (y * 320 + x) * 4);
+    const pic = pics[c.scenes[s.scene].picture], { x: panX, y: panY } = STORY.pan(s);
+    for (let y = 0; y < WIN_END; y++) for (let x = 0; x < 320; x++) {
+      if (y < WIN_TOP || x < 7 || x >= 311 || s.blank) { set(x, y, y < WIN_TOP || x < 7 || x >= 311 ? BORDER : BG); continue; }
+      const ix = panX + x, iy = panY + y - WIN_TOP, cell = (iy >> 3) * pic.cw + (ix >> 3);
+      const v = (pic.bitmap[cell * 8 + (iy & 7)] >> (6 - 2 * ((ix >> 1) & 3))) & 3;
+      set(x, y, [pic.bg, pic.screen[cell] >> 4, pic.screen[cell] & 15, pic.colram[cell] & 15][v]);
+    }
+    for (let y = WIN_END; y < 128; y++) for (let x = 0; x < 320; x++) set(x, y, 0);
+    const t = text(c, s);
+    for (let r = 0; r < 9; r++) for (let cx = 0; cx < 40; cx++) {
+      const g = FONT[t[r * 40 + cx] & 127], fg = ROW_COLOR[r];
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+        const X = cx * 8 + x, Y = (TEXT_ROW + r) * 8 + y;
+        set(X, Y, X < 7 || X >= 311 ? BORDER : (g[y] >> (7 - x)) & 1 ? fg : BG);
+      }
+    }
+    return { pixels: px, border: BORDER };
+  }
+
+  return { BORDER, BG, WIN_TOP, WIN_END, TEXT_ROW, ROW_COLOR, PROMPT, FONT, text, frame };
+});
+
+</script>
+<script>
+// The Mountain: the story mode's demo (core/story.js). A traveller reaches the foot of APEX and meets
+// its guide. It pans over the APEX-8 badge's art, and shows pages, choices, a choice that only
+// appears until it is taken (a flag), and the start again at the end.
+(function (root, story) {
+  if (typeof module === 'object' && module.exports) module.exports = story;
+  else (root.APEXSTORIES = root.APEXSTORIES || {}).mountain = story;
+})(typeof self !== 'undefined' ? self : this, {
+  name: 'The Mountain',
+  song: 'peak',
+  sounds: { type: 'type', more: 'more', move: 'move', choose: 'choose' },
+  typeSpeed: 2,
+  pictures: {
+    // the badge's art, 48 x 40 cells (384 x 320 pixels): the sun, the mountain and the name
+    peak: { file: 'art/brand/apex8-source.png', crop: [0, 100, 1254, 1045], cells: [48, 40], saturation: 1.2, dither: 24 },
+  },
+  start: 'sunset',
+  scenes: {
+    sunset: {
+      picture: 'peak', pan: { from: [32, 0], to: [32, 96], ticks: 384 },
+      speaker: 'The Mountain',
+      text: 'At the top of the world the sun sets behind a mountain of snow. Travellers say that whoever climbs it can make anything at all, in eight bits.\nYou have walked for days to reach it.',
+      next: 'guide',
+    },
+    guide: {
+      picture: 'peak', pan: { from: [32, 96], to: [64, 160], ticks: 512 },
+      speaker: 'The Guide',
+      text: 'You have come a long way, traveller. Few reach the foot of APEX. What brings you here?',
+      choices: [
+        { text: 'I want to make a game.', go: 'game' },
+        { text: 'What is this place?', go: 'place', unless: 'asked' },
+        { text: 'I am only looking around.', go: 'look' },
+      ],
+    },
+    place: {
+      picture: 'peak', pan: { from: [64, 160], to: [0, 160], ticks: 512 }, set: 'asked',
+      speaker: 'The Guide',
+      text: 'This is APEX-8. Its paths lead down into dungeons, up through green hills, along dark corridors and out among the stars. Each one is drawn exactly the same on every machine that walks it.',
+      next: 'again',
+    },
+    again: {
+      picture: 'peak', pan: { from: [0, 160], to: [0, 160], ticks: 0 },
+      speaker: 'The Guide',
+      text: 'So. What brings you here?',
+      choices: [
+        { text: 'I want to make a game.', go: 'game' },
+        { text: 'What is this place?', go: 'place', unless: 'asked' },
+        { text: 'I am only looking around.', go: 'look' },
+      ],
+    },
+    game: {
+      picture: 'peak', pan: { from: [64, 160], to: [64, 199], ticks: 312 },
+      speaker: 'The Guide',
+      text: 'Then take what the mountain gives: a corridor to walk in, hills to run across, a dungeon to explore and a sky to fight in.\nAnd now a way to tell a story: a picture that moves slowly, like an old film, words beneath it, and choices that change what happens next.',
+      next: 'summit',
+    },
+    look: {
+      picture: 'peak', pan: { from: [0, 160], to: [0, 199], ticks: 312 },
+      speaker: 'The Guide',
+      text: 'Look all you like. The picture moves slowly, like an old film, and the words come a letter at a time. Press fire and they come all at once.',
+      next: 'summit',
+    },
+    summit: {
+      picture: 'peak', pan: { from: [32, 0], to: [32, 0], ticks: 0 },
+      speaker: 'The Mountain',
+      text: 'The sun goes down. The snow turns gold, then blue. Somewhere above you, a path begins.\nThe end. Press fire to begin again.',
+      end: true,
+    },
+  },
+});
+
+</script>
+<script>
+// Generated by c64/story/pictures.js from stories/mountain.js: do not edit.
+(function (root, pictures) {
+  if (typeof module === 'object' && module.exports) module.exports = pictures;
+  else (root.APEXPICTURES = root.APEXPICTURES || {})["mountain"] = pictures;
+})(typeof self !== 'undefined' ? self : this, {
+ "peak": {
+  "cw": 48,
+  "ch": 40,
+  "bg": 0,
+  "bitmap": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADUVAAAAAAAAVVUAAAAAAABVVQAAAAAAAFVVAAAAAAAAVVUAAAAAAABVVQAAAAAAAFVVAAAAAAAAXFQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAqNTUAAAAAAP9VVRUVFRUV1VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVWFhYWFhXVVUAAAAAAP9VVQAAAAAAqFxcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAq1dXVJSUlJeVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVXVVVVVVVVVXdVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVhYWFhbVVVVAAAAAPxUV1cAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/FRUVFZWVldVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVUBAQEBAQEBDAAAAAAAAAFTVlZWV1ZWV7lVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVlZWV1VVVVUAAACoXFRcXAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPNTU1NTUVFdVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVpgYGCwwMHBwQEBAd5qVFRUVFRUVlcBAQEBAQGB4FVVVVVVVakNVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVYWFtVVVVVVQAA8FBQUFBcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0GBgYGOjo19VVVVVX//1VVVVVVVf//VVVVVVVV//9VVVVVVVX//1VVVVVVVf//VVVVVVVVVVWvoKCg8ABAQAAAAAA/OpWVlZXV1VVVV1dXV1dXV1dwcHBcV1RXVwcHBgYGBgEAqqpVVVVV1dX//1VVVVVVVf//VVVVVVVV//9VVVVVVVX//1VVVVVVVaysUFdVVVVVAAAAcHBwcHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcHBwcHBwcHVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVddXYGBgYGBgAAAAAAADBgY1NTWVtdVVVVVVVVVVVVVVVlZWVlZXVVVVWVVVVZXl5QAAQEBATKmp1dUNDQ0NDQ1VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVcHBwcHBwcHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQMBAQEBAQ31VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVWWFhYWLyAgLAAAAADFRUVCfWppVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV6enpeVlZWVldXV1RXVVVVCwAAAABQUFBqGhoaGg0BAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVcH9VVVVVVVUAQEBAQEBAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAQAAAAAAAFVVMwAAAAAAVVUzAAAAAABVVTMAAAAAAFVVMwAAAAAAVVUzAAAAAABAQAAAAAAAAD8/lZWVlZWVVVVVVVVVVVVVVVVVVVVVVaqqXn19fX51VVVVVVVVVVVXV1VVVVVVVVVVtbW1tbWV8HBfV1dXV1cBAQAAAAAAAFVVMwAAAAAAVVUzAAAAAABVVTMAAAAAAFVVMwAAAAAAVVUzAAAAAABAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/dXV1dXV1TNVVVVVVVVVM1VVVVVVVVUzVVVVVVVVVSJVVVVVVVVXAJCQkJCQkHAABQUFBQUqL9WVlZWVlVZWVVVVVbWlpaVVVlZWV1drb9ZWVlZWVlZWVVVVVVVVVVVVVVVVVVVVVWpXVlZWV1VVVVVVVVVVpfXAcHBwcHBcVAAGBgYGBgYNM1VVVVVVVVUzVVVVVVVVVTNVVVVVVVVVM1VVVVVVVVUAfFZWVlZWVgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADV1dXVMwAAAFVVVVUzAAAAVVVVVTMAAABVVVVVMwAAAFRUVFQwAAAAAAAAAAMFBQU6Ojo6Ol1VVf7VldmVlVWVWlpaWlpXX1e1tbW1tVVVVVdXV1dXVVVVVVVVVVWtra1VVVVVVVVVVVVVVVVVV1dXpaWlpaX19fVUVFRUV1VVVQAAAAAAUFBQFRUVFQMAAABVVVVVMwAAAFVVVVUzAAAAVVVVVTMAAABXV1dXMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ+VlZWVlQAA31VVVVVVAADdVVVVVVUAAP5WVlZWVgAAAAAAAAABBQUFBQUFBfVVVVVVVVVVVVVVfX39ff1/X1dfX19fX19VVVVVVVVVVVVVVVVVVVVVW1tbW1tbW1tVVVVVVVVVVamptZWVlZWVX19VVVVVVVVVVZVVlZWVdVBQXFxcXFxXAAAAAAAAAEAAAJ9VldWVVQAA31VVVVVVAADfVVVVVVUAANxWVlZWVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADV1dXV1dXV1VVVVVVVVVVVVVVVVVVVX3DVQEBAQEACAg0NDQ0NDVVVVVVVVVVVVVX/9dXV1dXV1VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVW1pVVVVVVVVVlSXl5eXl5dXV1dXV1dXVVVVVVVVVVVVXV1dXV1dVVVVVVVVVVdXVQEBAQEBAf3+rAQEBAQECAFVVVVVVVfUFVVVVVVVVVVVXV1dUV1dXVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACVlSsCAwMDAlVVVVVWWFxcYGBgcLAAAAACAQUtlVVVVVVVVVVVVVVVVV9fX19fX1/VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf9XV1dXV1dXVVVVVVVVVVVvb2pVVVVVVZWV1VVVVVVVVVVVVVVVVVVVVVVVVVVVVX9/f39fVVVV1dXV1VVVVVUAAAAA/FdXVwkFCQUNAAAAVVVVVdU1NTVXV6iAgICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAQEAAAAAAFxcXAAAAAAAAAA/FRVVVVVVVVVVVVVVVVVVVVVVV1dX9fX19fVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVXV1dXV1dXV1VdXV1dXV1dXVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVXV1dVVVVVVQAAMFxcXFxcNTU1AAAAAABAQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEBVwPF9fVVVVVVVVVVVVVVVVVVVVVVV1dXV/399fVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV1dX//X19VVVVVXVVVVVVVVVVf39/f1VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVfX19fX19f/1VVVVVVVVVVVVVVVVVVVV9VVVVVVVVVQNDQ0ND09P0AAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAF39VVVVVVVVVVVVVVVVVVVVX1dXV1dXV1VVXV1dXV1fX/1VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVbv319dXV1dVVVVVVVVVVVVVVVVVVVVVVf1VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV9VVVVVVVVV9VVVVVVVVVVV1dXV1dXV1f9VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVXAQMB3VVVVVQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA11dXV1dXV1VVVVVVVVVV/f/X99f319VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVam7V1dXV1dVVVVVVVVVVVVVVVVVVVVVVX1/V1dXV1dVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV19XX1dfVVVaWlpaWlqVrVVVVVVVVdX1VVVVVVVVVVX//1dXV1dXV1VVVVVVVV9fVVVVVVVV1fVVVVVVVVVVVQDIVFRUVFRWAAAAAAAAAFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHBxUVFRUVFVVVV1VVVVVVampVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf19fX19fVVVVVVVVVVX//1VVVVVVVf//9dVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV/X19fX19VVfX19fX19VVVVVVVVVVVVVVXVVVVVVVVVfVVVVVVVVVVf19XV1dXVVVVVVVVVVX//1VVVVVVVVVVUFBQUFBQVVUAAAAAAABAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHBwcHBwAAAFVfX19fAAAA1VVVVRUAAABVVVVVVQAAAFVVVVUVAAAAVVVVVVUAAABVVVVVVQAAAFVVVVVVAAAAVVVVVVUAAABVVVVVVQAAAFVVVVVVAAAAVVVVVVUAAABVVVVVVQAAAFVVVVVVAAAAVVVVVVUAAABVVVVVVQAAAFVVVVVVAAAAVVVVVVUAAABVVVVVVQAAAFVVVVVVAAAAVVVVVVUAAABVVVVVVQAAAFVVVVVVAAAAVVVVVVUAAABVVVVVVQAAAFVVVVVVAAAAVVVVVVUAAABAQEBAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1JSUlAAAA/1VVVVUAAAD/VVVVVQAAAP9VVVVVAAAA/FZWVlYAAAAAAAAAAAAAAAAAAAAAAAAAqtXV1dUAAAD/VVVVVQAAAP9VVVVVAAAA/1VVVVUAAAD/VVVVVQAAAP9WVlZWAAAAAAAAAAAAAAABBwcHBwAAAP9VVVVVAAAA/1VVVVUAAAD/VVVVVQAAAP9VVVVVAAAA/1VVVVUAAACgXFhcWAAAAA81NTU1AAAA/1VVVVUAAAD8VFRUVAAAAAAAAAAAAAAAAAEBAQEAAAD/VVVVVQAAAP9VVVVVAAAAAEBAQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADV1dXVAAAAAFVVVVUAAAAAVVVVVQAAAABVVVVVAAAAAFVVVVUAAAAAcHBwcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPBQUFBSUlJdVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVlZWV1VVVVUAAACsWFhYWAAAAAAAAAAA1dXV1dXV1dVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVdXV1VVVVVVAAAAq1ZWVlYHBwcHBwcHB1VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVcXFxYWFhYWDU1NTU1NTU1VVVVVVVVVVVUVFRXVVVVVQAAAKBQXFBcAwMD6pWVlZVVVVVVVVVVVVVVVVVVVVVVQEBAQEDAwMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/1dXV1ZWVldVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVgYGBvVVVVVQAAAMBAQEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMBAQEBAQEF9VVVVVVVVVVVVVVVVVVVqrrV1dXV1dX//1VVVVVVVaqqV1dXV1dXVVVVVVVVVVVYXFVVVVVVVQDAQEBAQEBA1dXV1dXV1dVVVVVVVVVVVaqvtbW1tbW1qv9VVVVVVVWq/lZWVlZWXlVVVVVVVVVVV1dXVlZWVlYGBgbGxsbGxlVVVVVVVVVVVVVVVVVVVVX//1VVVVVVVf//VVVVVVVV//9VVVVVVVX09FRUVFRUVDo6BQUFBQUFVVXV1dXV1dVVVVVVVVVVVVBcVVVVVVVV1dVVVVVVVVVVVVVVVVVVVVVVenp6enp6wMBAQEBAQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADV1dXV1dXV1VVVVVVVVVVVVVVbW1tbW1v//1VVVVVVVaqqV1dXV1VXVVVVVVVVVVVVVVVVVVVVVcDAwNTU1NTUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEBAQEBAQFVVVVVVVVVVVVVVVVVVVVVcHBwcHBwcHAAAAAAAAAAAAEBAQEBAQEBVVVVVVVVVVVVVVVVVVVVVdDU0NTQ1NDU1dXV1dXV1dVVVVVVVVVVVXBwcHBwcHBwAAAAAAAAAEAJCQkJDQkNyVVVVVVVVVVVV1dXV1dXV1dLS0tLS0tLS1VVVVVVVVVVVVVVVVVVVVWAgID/VVVVVQAAAP9VVVVVAAAAq1dXV1cAAAAAAAAAAAUAAAAAAAAAV1dXVxdXFVVVVVVVVVW1pVVVVVVVVVVVVVVVVVVVVVVXVldWV1bq6nVUUFBQUFBQQAAAAAAHBwcAAAAAAFVVVQAAAAAAVVVVAAAAAABAQECVlZWVlZU/P1VVVVVV9///p6enp6dVVVUAgICAwFVVVQMDAwAzVVVVVVVVVVX3//9VVVVVVaqvb5SUlJSU1FRUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEBAQEBAQFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVdDU0NTQ1NDU1dXV1dXV1dVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV1dXV1dXqqrGxgbGBsYGBlVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV1dXV1dXV1cAAAAAAAAAAAAAAAAAAAAAAQEBAQEBAwP19fX19fVVVVVVVVVVVVVVVVVVVVVVVVWVmJSYlJT8/AAAAAAAAAAABwcHBwcHBwdVVVVVVVVVVVVVVVVVVVVVQEBAQHBwcHAWFhcAAAAAAFVVVX9/f3//////VVVVVVX///9VVVVVVf///1VVVVVV////VVVVVVWlpaXl5eTk5VRUVFQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEBAQEBAQFVVVVVVVVVVVVVVVVVVVVVVVVVVVX/6upVVVVVVf+qqlVVVVVVqv7+VVVVVVVVVVVVVVVVVVVVVdDU0NTQ1NDU1dXV1dXV1dVVVVVVVVVVVVVVVVVVam9vVVVVVVX/qqpVVVVVVf+qqlVVVVVV/qqqVVVVVVVVAAAHBwcHBwcHB1VVVVVVVVVVVVVVVVVVVVVVVVVVVVVBQFVVVVVVVREAVVVVVVVVAAAAAAAAAAAAAAAAAAAAAAAAAgICAtXV1dVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVXV1dXVVVVVQAAAABwYGBgBgcBBQEFAQX//1VVVVVVVf//VVVVVVVV0NBQ0FBQUNCVlZWVlZWfv1VVVVVVVf//Xl5eXl5e3l7/VVVVVVVAQKtVVVVVVQAAVVVVVVVV//9VVVVVVVX/f0BAQEBAQOjqAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEBAQEBAQFVVVVVVVVVVVVVVVVVVVVV1dXV1dXQ0NBVVVVVVQAAAFZWVlZWAwMDVVVVVVVVVVVVVVVVVVVVVdDU0NTQ1NDU1dXV1dXV1dVVVVVVVVVVVbW1tbW1tLCwVVVVVVUAAABVVVVVVQAAAFVVVVVVAAAAAAAAAAAAAAAHBwcHBwcHB1VVVVVVVVVVVVVVVVVVVVXAwKpVVVVVVQAA/1VVVVVVAAD/VVVVVVUAAKBcXFxQXAAALyUlJSUllZXVVVVVVVVVVVVVVVVVVVVVVV5aXlpeVVVV1dXV1dVVVVVVVVVVVWBgX1VVVVVVAgDAQEBAQEBVAAAAAAAAAFUAAAAAAAAAUAAAAAAAAADV1dXV1dXV1VVVVVVVVVVVXl5eV1VVVVWAgIB3VVVVVQAAAH9VVVVVVVVVVVVVVVVVVVVVVVVVVdXV1dTV1dXVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEBAwEBAQNVVVVVVVVVVVVVVVVVVVVVcHBwcEBAQEAAAAAAAAAAAAEBAQEBAQEBVVVVVVVVVVVVVVVVVVVVVdDU0NDQ0NDQ1dXV1dXV1dVVVVVVVVVVVXBwcHBwcHBwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHBwcHBwcHB1VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVcXFhYWFhYWDU1NTU1NTU1VVVVVVVVVVVVV1ZWVlZWVqX1VVBQUFBQv1ZWVlZWVlZVVVVVVVVVVVVVVVVVVVVVwMDAQEBAQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACVlRuXGycqAFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX1paWlpaWpXVVVVVVVRUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEBAQEBAQFVVVVVVVVVVVVVVVVVVVVVQEBAQEBAQEAAAAAAAAAAAAAAAAAAAAAAVVVVVVVVVVVVVVVVVVVVVVBAUFBQQFBAVVVVVVVVVVVVVVVVVVVVVVBQUFBQUFBQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADBQEBAQEBAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVUVFRUVFRUVAUFBQUFBQUFVVVVVVVVVVVVVVRUVVRUVFAAAAAAAAAAdwEBAQEBAQFVVVVVVVVVVVVVVVVVVVVVQEBAQEBAQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOpVFVUVVVVV/1VVVVVVVVX/VVVVVVVVVf9VVVVVVVVV/1VVVVVVVVW1VVVVVVVVVVDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "screen": "u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7t3d3d3d3d3d7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7eXd3d3d3d3d3end5u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7t5eHd3d3d3d3d3d3d4d7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u3d4d3d3d3d3u3h3d3d3eXm7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7d3d3d3d3d3jxFoZ4d3d3d3p3u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7uKp6qqqqqqepEfEe6ap6qqqqqnqru7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7uId3d3d3d48RYRHuNud3d3d3d3d7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u4h3d3d3d3joExERER7uaYd3d3d3d4i7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u4h3d3d3d4gbERExERHh7oh3d3d3d4i7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u6qqqqqpimMTHhNjERET4+6Kqqqqqqm7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u6qqqqqq7uHj4WFmFhER4e7uqqqqqqq7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u6mqqqJm7u7u7mZmYxFhZubuZqKqqqm7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u6qqqibu7mZmZmZmYxNmZmbu7oKqqqq7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u6Kooubu7mZmZmbuZmNhZmZmZu6oqqK7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7uyKq7u7uZmZmZu7uZmZmZmZmZu7uqiK7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u2bu7u5mZmZm7u5mZmZmZmZm7u7uZma7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7Zu7uZu5mZm7u7u5mZmZmZmZm7u7u7u67u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7vu7u5mZmZmbu7u7mZmZmZmZuZmZmbu7u7mZru7u7u7u7u7u7u7u7u7u7u7u7u7u2bu5mZmZmZmZu7uZmZmZmZmZmZmZmZmZu7u7ma7u7u7u7u7u7u7u7u7u7u7u7u7u2buZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmbu7u67u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7sdERERHLu7GxEREREdu7sRERERERsRERG7zBER/7u7u7t3d3d3d3e7u7u7u7u7uxEdERERHB+7ERERERERH7sRERERERYREREfHxER/7u7u3d4d3d3d3p3u7u7u7u73RERYWZhERwRERFhYWERE7EREWZmZmZhEREREREWZru7u3d3eGZnd3dmu7u7u7u73RERM7u7ERFmERERmRsREWsRERYRH7tmZhYRERZmZu7u7nl3p6aqd3pnu7u7u7u73RERERERERFmERERERERFrEREREREbu7ZhEREW67Zu7u7iaqd3d3d2pmu7u7u7u73RERFhYeERFmEREeFhYWZrsREWZmZru7HxEREREdY2ZmZnl3dmZrd3d2u7u7u7u73RERZmZuERFmERFhZmZmu7sRER8RER8bHBEWEREd9mZmZqqqpqaqqqpmu7u7u7u73RERM7u7ERFmERERu7u7u7sRERERERYRERZhYxERM7u7u6KqqqqqqqZqu7u7u7u7ZmZmZru7ZmZmZmZmu7u7u2ZmZmZmZmZmZmZmZu7u7ru7u7tsZmZmZmhmu7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7",
+  "colram": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsKBwcHBwcHCAsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCAkJBwcHBwcHCQkICwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsICQcHBwcKCgcHBwcJCQsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwkKBwcHBwcJCwkHBwcHCAoLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCQkHBwcHBwkIDgMJBwcHBwkJCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsJCAcHBwcHCQ8DDgYHCAcHBwcJCQsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsHBwcHBwcKDAMBAwELCAcHBwcHCAsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwoIBwcHBwkJBgEBAQMGCAkHBwcHCAgLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwgJCQkJCQgOAQEOAQ4DBggJCQkJCQgLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwkJCQkICQELAw4OAQEOAQYCCQkJCQILCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwkJCQkJBgMBBgMDAwEGBgYOCQkJCQkLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwgICAgGBg4GBgYGAQEODgMGBggICAgLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwkKAgoGDg4GBgYGAQYBBg4GBgoCCgkLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwgCCQMOBg4GBgYGBgEPBgYODgYCCAkLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwICBg4GDgYGBgYGBgYGBgYGBgYGCAILCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCw4GDgYOBgYOBgYOBgYGBgYOBg4GDgYLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLDg4GDgYGBgMGDgYGBgYGDg4GBg4ODgYLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsGBgYOBgYGAwYOBg4GBgYGDgMOBg4GBg4LBgsLCwsLCwsLCwsLCwsLCwsLCwsLCw4OAwYGBgYGDgYGDgYGBgYGBg4OBg4ODgYODg4LCwsLCwsLCwsLCwsLCwsLCwsLCw4GDgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYODg4LCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsPCwsLCwsLDwsLCwsLCwELCwsLCwkLCwsLDAsLDwsLCwsIBwcHBwgLCwsLCwsLCw8PAQEBDQsLDwEBAQENDAEBAQEBAQkLAQ8JDAEBAwsLCwkKBwcHBwkICwsLCwsLCQsBAwEOAQ8LDwEOAwMBDwYBAQEBAQELDgELDwEDAwsLCwkHBgcLBwcHCwsLCwsLDQEBBgsLAQEBDwEOCQkBAwEBAQ8PCwsGAw4BAQ4ODg4ODgIKBgsJCgYKCwsLCwsLDQEBAQEBAQEBDwEBAQEBAwYBAQEBDAsLDwYBAQELDg4OBgsHCgoKCgcGCwsLCwsLDQEBDg4GAQEBDwEGDg4OBgEBAQYGBgsLDAEBAQsPDg4ODgoKCAsICgoKCwsLCwsLDQEBAwYLAQEBDwEOBgYGCwEBAQYPDwkPDQEOAwEPCwYGBgkKCAgICgoKCwsLCwsLDwEBBgsLAQEBDwEOCwsLCwEBAQEBAQkLAQ4OAQEBDwsLCwYKCgoKCgwMCwsLCwsLBgYGBgsLBgYGBgYGCwsLCw4GBgYGBgYGBgYGDg4ODgsLCwsCDAwMDAQOCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsL"
+ }
+});
+
+</script>
+<script>
+/*
+ * APEX sound: the reference for SID music and sound effects. Integer maths only, so a 6502 driver
+ * that follows the same steps writes exactly the same SID registers every frame.
+ *
+ *   - one tick per frame; each tick sets all 25 SID registers (the register image)
+ *   - music: 3 voices, each playing patterns of 32 rows in its own order list (all the same length;
+ *     the song loops); a row lasts `speed` ticks. A row on a voice is a note (with its instrument, or
+ *     the voice's last), a release, or nothing (the note goes on)
+ *   - instruments: a waveform, ADSR, a pulse width that sweeps, an arpeggio (semitones added tick by
+ *     tick, round and round) and a gate length (ticks until release; 0 holds it). Or, for drums, a
+ *     table: per tick of the note a waveform and a note (the played note + n, or a fixed note), the
+ *     last held. An instrument can go through the filter
+ *   - a new note restarts hard: one tick with the gate off and the envelope's rates and sustain at 0
+ *     (so the SID's envelope counter comes round at once, and the note's attack starts on time: the
+ *     SID's ADSR bug), then the gate on (a table starts once it's on)
+ *   - the filter: one for the song, a resonant low-pass (or band or high) whose cutoff sweeps up and
+ *     down, over the voices playing instruments that use it
+ *   - a sound effect plays on its voice (its own `voice`, else the song's effectsVoice, voice 3 unless
+ *     it says) instead of the music, which goes on underneath; effects on different voices play at
+ *     once. An effect is steps, each a waveform (with its gate bit), a frequency that slides, ADSR, a
+ *     pulse width and a length in ticks. A new effect starts if none is playing on its voice or its
+ *     priority is at least the one's playing there
+ *   - the music can be turned off: while it is, the song stands still where it is and every voice is
+ *     released (it fades on its release); turned on, it goes on from there
+ *   - with two SIDs (a C64 Ultimate's, or a stereo SID cartridge: the second at $D420), the music
+ *     plays on the first and the effects on the second, each on its voice there, so they never
+ *     interrupt the music. A voice of the second SID with no effect keeps its last registers with the
+ *     gate off (the effect's release plays out); its filter is off and its volume full
+ *
+ * compile(def) turns a song and its effects (see sound/shmup.js) into tables; player(c, { sids }) makes a
+ * player for one SID or two; tick(c, p, effects, music) plays one tick, starting the effects listed
+ * (in order), with the music on unless music is false, and returns the register image: 25 bytes, or
+ * 50 with two SIDs (the second's after the first's). checksum(sum, image) folds an image into a running 16-bit checksum, which
+ * the C64 tests compare.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSOUND = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const ROWS = 32;
+  const WAVE = { tri: 0x10, saw: 0x20, pulse: 0x40, noise: 0x80 };
+  const PAL_CLOCK = 985248;
+  // SID frequency values for notes 0-95 (C-0 to B-7), A-4 (57) at 440 Hz on a PAL machine.
+  const FREQ = Array.from({ length: 96 }, (_, n) => Math.min(0xffff, Math.round((440 * 2 ** ((n - 57) / 12) * 16777216) / PAL_CLOCK)));
+  const NAMES = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];
+  const noteOf = s => {
+    const i = NAMES.indexOf(s.slice(0, 2)), oct = +s[2];
+    if (i < 0 || !(oct >= 0 && oct <= 7)) throw new Error(`not a note: ${s}`);
+    return oct * 12 + i;
+  };
+  // Row tokens in the tables: 0 nothing, 1 release, 2 + note (with the instrument in the next byte).
+  const NOTHING = 0, RELEASE = 1;
+  const FILTER_MODE = { low: 0x10, band: 0x20, high: 0x40 };
+
+  // def: { speed, instruments: { name: { wave, ad, sr, pw, pwSpeed, arp, gate } }, patterns: { name:
+  // 'C-3:inst . . == ...' (32 tokens) }, order: [[names] x 3], effects: { name: { priority, steps:
+  // [{ wave, gate, freq, slide, ad, sr, pw, ticks }] } } }
+  function compile(def) {
+    const insNames = Object.keys(def.instruments), ins = insNames.map(n => {
+      const i = def.instruments[n];
+      // a table step: [wave, note], the note + n or a fixed note ('C-3'): as tw (the waveform) and tn
+      // (a fixed note + $80, or n as a signed byte)
+      const table = (i.table || []).map(([w, n]) => [WAVE[w], typeof n === 'string' ? 0x80 | noteOf(n) : n & 0x7f]);
+      return { wave: WAVE[i.wave || 'pulse'], ad: i.ad, sr: i.sr, pw: i.pw || 0, pwSpeed: i.pwSpeed || 0, arp: i.arp && i.arp.length ? i.arp : [0], gate: i.gate || 0, table, filter: !!i.filter };
+    });
+    const patNames = Object.keys(def.patterns), patterns = patNames.map(n => {
+      const toks = def.patterns[n].trim().split(/\s+/);
+      if (toks.length !== ROWS) throw new Error(`pattern ${n}: ${toks.length} rows, not ${ROWS}`);
+      return toks.map(t => {
+        if (t === '.') return { op: NOTHING };
+        if (t === '==') return { op: RELEASE };
+        const [note, insName] = t.split(':');
+        const k = insName === undefined ? -1 : insNames.indexOf(insName);
+        if (insName !== undefined && k < 0) throw new Error(`pattern ${n}: no instrument ${insName}`);
+        return { op: 2, note: noteOf(note), ins: k };
+      });
+    });
+    const order = def.order.map(list => list.map(n => {
+      const k = patNames.indexOf(n);
+      if (k < 0) throw new Error(`no pattern ${n}`);
+      return k;
+    }));
+    if (order.length !== 3 || order.some(l => l.length !== order[0].length)) throw new Error('3 order lists of one length');
+    const effectsVoice = def.effectsVoice === undefined ? 2 : def.effectsVoice;
+    const effNames = Object.keys(def.effects || {}), effects = effNames.map(n => {
+      const e = def.effects[n];
+      return { priority: e.priority, voice: e.voice === undefined ? effectsVoice : e.voice, steps: e.steps.map(s => ({ ctrl: WAVE[s.wave] | (s.gate === false ? 0 : 1), freq: s.freq & 0xffff, slide: s.slide || 0, ad: s.ad, sr: s.sr, pw: s.pw || 0, ticks: s.ticks })) };
+    });
+    // the filter's cutoff (11 bits) tick by tick: a triangle from min to max and back over period ticks
+    const f = def.filter || { res: 0, min: 0, max: 0, period: 2 };
+    if (f.period < 2 || f.period > 256 || f.period & 1) throw new Error('filter period: an even number of ticks up to 256');
+    const half = f.period / 2, cut = Array.from({ length: f.period }, (_, k) => f.min + Math.floor(((f.max - f.min) * (k < half ? k : f.period - k)) / half));
+    const filter = { res: f.res, mode: FILTER_MODE[f.mode] || 0, cut };
+    return { speed: def.speed, ins, insNames, patterns, patNames, order, effects, effNames, filter, effectsVoice };
+  }
+
+  function player(c, opts = {}) {
+    return {
+      sids: opts.sids === 2 ? 2 : 1,
+      hold: [0, 1, 2].map(() => new Uint8Array(7)), // two SIDs: each effect voice's last registers
+      timer: 0, row: 0, pos: 0,
+      voices: [0, 1, 2].map(() => ({ ins: -1, note: 0, phase: 2, age: 0, arp: 0, pw: 0, tpos: 0 })),
+      fx: [0, 1, 2].map(() => ({ sfx: -1, step: 0, left: 0, freq: 0 })), ft: 0,
+    };
+  }
+
+  function startEffect(c, p, id) {
+    const f = p.fx[c.effects[id].voice];
+    if (f.sfx >= 0 && c.effects[id].priority < c.effects[f.sfx].priority) return;
+    f.sfx = id; f.step = 0;
+    const s = c.effects[id].steps[0];
+    f.left = s.ticks; f.freq = s.freq;
+  }
+
+  function tick(c, p, effects = [], music = true) {
+    for (const id of effects) startEffect(c, p, id);
+    // the music off: the song stands still, every voice released
+    if (!music) for (const vs of p.voices) vs.phase = 2;
+    // a new row on every voice
+    else if (p.timer === 0) {
+      for (let v = 0; v < 3; v++) {
+        const r = c.patterns[c.order[v][p.pos]][p.row], vs = p.voices[v];
+        if (r.op === RELEASE) vs.phase = 2;
+        else if (r.op >= 2) {
+          if (r.ins >= 0) vs.ins = r.ins;
+          if (vs.ins >= 0) Object.assign(vs, { note: r.note, phase: 0, age: 0, arp: 0, tpos: 0, pw: c.ins[vs.ins].pw });
+        }
+      }
+      if (++p.row === ROWS) { p.row = 0; if (++p.pos === c.order[0].length) p.pos = 0; }
+      p.timer = c.speed;
+    }
+    if (music) p.timer--;
+    // each voice's registers, then its state moves on
+    const stereo = p.sids === 2, R = new Uint8Array(25 * p.sids);
+    let route = 0;
+    for (let v = 0; v < 3; v++) {
+      const vs = p.voices[v], b = 7 * v;
+      if (vs.ins < 0) continue;
+      const ins = c.ins[vs.ins];
+      let wave = ins.wave, note = vs.note + ins.arp[vs.arp];
+      if (ins.table.length) {
+        const [tw, tn] = ins.table[Math.min(vs.tpos, ins.table.length - 1)];
+        wave = tw;
+        note = tn & 0x80 ? tn & 0x7f : vs.note + ((tn ^ 0x40) - 0x40); // (a fixed note, or + n)
+      }
+      const f = FREQ[Math.max(0, Math.min(95, note))];
+      if (stereo || p.fx[v].sfx < 0) {
+        R[b] = f & 255; R[b + 1] = f >> 8;
+        R[b + 2] = vs.pw & 255; R[b + 3] = vs.pw >> 8;
+        R[b + 4] = wave | (vs.phase === 1 ? 1 : 0);
+        R[b + 5] = vs.phase === 0 ? 0 : ins.ad; R[b + 6] = vs.phase === 0 ? 0 : ins.sr;
+        if (ins.filter) route |= 1 << v;
+      }
+      if (vs.phase !== 0 && vs.tpos < 255) vs.tpos++;
+      if (vs.phase === 0) vs.phase = 1;
+      else if (vs.phase === 1 && ins.gate && vs.age + 1 >= ins.gate) vs.phase = 2;
+      if (vs.age < 255) vs.age++;
+      if (++vs.arp === ins.arp.length) vs.arp = 0;
+      vs.pw = (vs.pw + ins.pwSpeed) & 0x0fff;
+    }
+    // the effects, each on its voice (of the second SID, if there are two)
+    for (let v = 0; v < 3; v++) {
+      const f = p.fx[v], b = (stereo ? 25 : 0) + 7 * v;
+      if (f.sfx < 0) {
+        if (stereo) { R.set(p.hold[v], b); R[b + 4] &= 0xfe; } // its last registers, the gate off
+        continue;
+      }
+      const e = c.effects[f.sfx], s = e.steps[f.step];
+      R[b] = f.freq & 255; R[b + 1] = f.freq >> 8;
+      R[b + 2] = s.pw & 255; R[b + 3] = s.pw >> 8;
+      R[b + 4] = s.ctrl; R[b + 5] = s.ad; R[b + 6] = s.sr;
+      if (stereo) p.hold[v].set(R.subarray(b, b + 7));
+      f.freq = (f.freq + s.slide) & 0xffff;
+      if (--f.left === 0) {
+        if (++f.step === e.steps.length) f.sfx = -1;
+        else { const n = e.steps[f.step]; f.left = n.ticks; f.freq = n.freq; }
+      }
+    }
+    // the filter, and the volume
+    const cut = c.filter.cut[p.ft];
+    if (++p.ft === c.filter.cut.length) p.ft = 0;
+    R[21] = cut & 7; R[22] = cut >> 3;
+    R[23] = (c.filter.res << 4) | route;
+    R[24] = c.filter.mode | 0x0f;
+    if (stereo) R[49] = 0x0f; // the second SID: no filter, full volume
+    return R;
+  }
+
+  const checksum = (sum, R) => {
+    for (const b of R) sum = ((((sum << 1) | (sum >> 15)) & 0xffff) + b) & 0xffff;
+    return sum;
+  };
+
+  return { ROWS, WAVE, FREQ, NOTHING, RELEASE, noteOf, compile, player, tick, checksum };
+});
+
+</script>
+<script>
+/*
+ * APEX SID: an emulation of the C64's sound chip, for hearing the games outside a C64 (the browser
+ * pages, WAV files). It plays the register image core/sound.js makes each frame (all 25 registers,
+ * written at once), so the music and effects sound as the C64's SID makes them, closely though not
+ * exactly (the C64 tests check the registers, not the sound):
+ *
+ *   - three voices, each a 24-bit phase accumulator adding its frequency every cycle (985248 a second,
+ *     PAL), giving a triangle, sawtooth, pulse (against the 12-bit pulse width) or noise (a 23-bit
+ *     shift register clocked by bit 19), and combinations of them as the bitwise AND (roughly); sync
+ *     and ring modulation from the voice before, the test bit
+ *   - an envelope per voice: attack, decay to the sustain level, release, at the SID's rates, decay and
+ *     release slowing as the level falls (its piecewise exponential), its rate counter never reset
+ *     (so the ADSR bug happens as on the chip); the gate starts and releases it
+ *   - the filter: a resonant state-variable filter (low, band and high pass, mixed by the mode bits)
+ *     over the voices routed to it, its cutoff following the 6581's curve; voice 3 can be cut from the
+ *     output; the master volume
+ *
+ * create(sampleRate) makes a chip; write(R) sets its 25 registers; render(out, at, n) adds n samples
+ * (-1..1) into out from at. Works in Node, in the browser (global APEXSID), and inside an
+ * AudioWorklet (APEXSID.source is this file's factory as text, to build one from).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSID = Object.assign(factory(), { source: '(' + factory.toString() + ')()' });
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const CLOCK = 985248;
+  // Cycles per envelope step for rates 0-15 (attack; decay and release use the same, slowed below).
+  const RATE = [9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251];
+  // Decay and release take 1, 2, 4, 8, 16 or 30 steps of the rate per level step as the level falls.
+  const slowdown = l => (l >= 0x5d ? 1 : l >= 0x36 ? 2 : l >= 0x1a ? 4 : l >= 0x0e ? 8 : l >= 0x06 ? 16 : 30);
+  const ATTACK = 0, DECAY = 1, RELEASE = 2;
+  // The output's scale: as loud as VICE's recordings of the same (test/sid-compare.js).
+  const LEVEL = 0.095;
+  // The 6581's filter cutoff in Hz for the 11-bit cutoff register, every $100 (roughly, as measured
+  // chips go): low and flat at first, then rising steeply. Between the points it is interpolated on a
+  // log scale.
+  const CUTOFF = [220, 230, 300, 520, 1000, 2200, 4500, 8000, 12000];
+  const cutoffHz = fc => {
+    const i = Math.min(7, fc >> 8), t = (fc & 255) / 256;
+    return CUTOFF[i] * (CUTOFF[i + 1] / CUTOFF[i]) ** t;
+  };
+
+  function create(sampleRate) {
+    const cps = CLOCK / sampleRate; // cycles a sample
+    const voices = [0, 1, 2].map(() => ({
+      acc: 0, freq: 0, pw: 0, ctrl: 0, ad: 0, sr: 0, noise: 0x7ffff8, gate: false,
+      env: 0, state: RELEASE, rc: 0, ec: 0, frac: 0,
+    }));
+    let cutoff = 0, res = 0, route = 0, mode = 0, volume = 0, voice3off = false;
+    let low = 0, band = 0; // the filter's state
+
+    function write(R) {
+      voices.forEach((v, k) => {
+        const b = 7 * k;
+        v.freq = R[b] | (R[b + 1] << 8);
+        v.pw = (R[b + 2] | (R[b + 3] << 8)) & 0x0fff;
+        const ctrl = R[b + 4], gate = !!(ctrl & 1);
+        if (gate && !v.gate) { v.state = ATTACK; v.ec = 0; }
+        if (!gate && v.gate) v.state = RELEASE;
+        v.gate = gate;
+        if (ctrl & 8) { v.acc = 0; v.noise = 0x7ffff8; } // the test bit: the oscillator held at 0
+        v.ctrl = ctrl;
+        v.ad = R[b + 5]; v.sr = R[b + 6];
+      });
+      cutoff = (R[21] & 7) | (R[22] << 3);
+      res = R[23] >> 4; route = R[23] & 7;
+      mode = R[24] & 0x70; volume = R[24] & 15; voice3off = !!(R[24] & 0x80);
+    }
+
+    // A voice's envelope moves on by `cycles`. As on the chip: a 15-bit rate counter counts cycles up
+    // to the rate's period and steps the envelope there; it is never reset, so a period shorter than
+    // the count so far waits for the counter to come round (up to 32768 cycles: the ADSR bug, which
+    // the driver's hard restart avoids). Decay and release step only every slowdown(level) of those.
+    function envelope(v, cycles) {
+      v.frac += cycles;
+      let c = Math.floor(v.frac);
+      v.frac -= c;
+      while (c > 0) {
+        const p = RATE[v.state === ATTACK ? v.ad >> 4 : v.state === DECAY ? v.ad & 15 : v.sr & 15];
+        const need = v.rc < p ? p - v.rc : 0x8000 - v.rc + p;
+        if (c < need) { v.rc = (v.rc + c) & 0x7fff; return; }
+        c -= need;
+        v.rc = 0;
+        if (v.state === ATTACK) {
+          if (++v.env >= 0xff) { v.env = 0xff; v.state = DECAY; v.ec = 0; }
+        } else if (!(v.state === DECAY && v.env <= (v.sr >> 4) * 17) && v.env > 0 && ++v.ec >= slowdown(v.env)) {
+          v.ec = 0;
+          v.env--;
+        }
+      }
+    }
+
+    // A voice's waveform, 12 bits, from its accumulator (and the voice before's, for ring modulation).
+    function wave(v, before) {
+      const c = v.ctrl, a = Math.floor(v.acc);
+      let out = 0xfff, any = false;
+      const and = w => { out &= w; any = true; };
+      if (c & 0x10) { // triangle: the top bit folds the ramp (or the voice before's, ring modulated)
+        const fold = (c & 4 ? (a ^ Math.floor(before.acc)) : a) & 0x800000;
+        and(((fold ? ~a : a) >> 11) & 0xfff);
+      }
+      if (c & 0x20) and(a >> 12);
+      if (c & 0x40) and((a >> 12) >= v.pw ? 0xfff : 0);
+      if (c & 0x80) { // noise: 8 bits of the shift register
+        const n = v.noise;
+        and((((n >> 20) & 1) << 11) | (((n >> 18) & 1) << 10) | (((n >> 14) & 1) << 9) | (((n >> 11) & 1) << 8) |
+          (((n >> 9) & 1) << 7) | (((n >> 5) & 1) << 6) | (((n >> 2) & 1) << 5) | ((n & 1) << 4));
+      }
+      return any ? out : 0x800;
+    }
+
+    function render(out, at, n) {
+      // the filter's coefficients for this stretch
+      const fc = cutoffHz(cutoff), f = 2 * Math.sin(Math.PI * Math.min(fc, sampleRate / 4) / sampleRate);
+      const q = 1.0 / (0.707 + res / 15 * 2.2);
+      for (let s = 0; s < n; s++) {
+        let direct = 0, filtered = 0;
+        for (let k = 0; k < 3; k++) {
+          const v = voices[k], before = voices[(k + 2) % 3];
+          if (!(v.ctrl & 8)) {
+            const step = v.freq * cps, old = v.acc, next = old + step;
+            // noise: its shift register clocks each time bit 19 of the accumulator goes up
+            if (v.ctrl & 0x80) for (let t = Math.floor(next / 0x100000) - Math.floor(old / 0x100000); t > 0; t--) {
+              const bit = ((v.noise >> 22) ^ (v.noise >> 17)) & 1;
+              v.noise = ((v.noise << 1) | bit) & 0x7fffff;
+            }
+            v.acc = next % 0x1000000;
+            // hard sync: the next voice restarts when this one's top bit rises
+            const after = voices[(k + 1) % 3];
+            if ((after.ctrl & 2) && Math.floor((next + 0x800000) / 0x1000000) > Math.floor((old + 0x800000) / 0x1000000)) after.acc = 0;
+          }
+          envelope(v, cps);
+          const o = ((wave(v, before) - 0x800) * v.env) / (0x800 * 0xff);
+          if (route & (1 << k)) filtered += o;
+          else if (!(k === 2 && voice3off)) direct += o;
+        }
+        // the state-variable filter, in two half steps a sample for stability
+        let hp = 0;
+        for (let r = 0; r < 2; r++) {
+          hp = filtered - low - q * band;
+          band += (f / 2) * hp;
+          low += (f / 2) * band;
+        }
+        const f2 = (mode & 0x10 ? low : 0) + (mode & 0x20 ? band : 0) + (mode & 0x40 ? hp : 0);
+        out[at + s] += ((direct + f2) * volume) / 15 * LEVEL;
+      }
+    }
+
+    return { write, render };
+  }
+
+  return { CLOCK, create };
+});
+
+</script>
+<script>
+// The Mountain's sound (core/sound.js): an original, calm chiptune for the story demo, and its effects.
+// D major, unhurried: a soft bass on the beat (voice 1, through a gentle low-pass), slow arpeggiated
+// chords (voice 2, which the effects borrow on one SID), and a high, sparse melody (voice 3).
+// D Bm G A.
+//
+// Patterns are 32 rows (two bars of sixteenths). Speed 6 makes a row 6 frames: 125 beats a minute,
+// a 31-second loop. The effects are the text's: a letter typed, a page turned, a choice moved, a
+// choice taken (stories/mountain.js sounds).
+(function (root, song) {
+  if (typeof module === 'object' && module.exports) module.exports = song;
+  else (root.APEXSONGS = root.APEXSONGS || {}).peak = song;
+})(typeof self !== 'undefined' ? self : this, {
+  speed: 6,
+  effectsVoice: 1,
+  filter: { res: 6, mode: 'low', min: 0x280, max: 0x600, period: 192 },
+  instruments: {
+    bass: { wave: 'tri', ad: 0x08, sr: 0x6a, gate: 6, filter: true },
+    maj: { wave: 'pulse', ad: 0x28, sr: 0x68, pw: 0x500, pwSpeed: 10, arp: [0, 4, 7, 12], gate: 10 },
+    min: { wave: 'pulse', ad: 0x28, sr: 0x68, pw: 0x500, pwSpeed: 10, arp: [0, 3, 7, 12], gate: 10 },
+    bell: { wave: 'tri', ad: 0x0a, sr: 0x0a, gate: 3 },
+  },
+  patterns: {
+    b1: 'D-2:bass . . . . . . . D-2 . . . . . . . B-1 . . . . . . . B-1 . . . . . . .',
+    b2: 'G-1:bass . . . . . . . G-1 . . . . . . . A-1 . . . . . . . A-1 . . . . . . .',
+    c1: 'D-3:maj . . . . . . . . . . . . . . . B-2:min . . . . . . . . . . . . . . .',
+    c2: 'G-2:maj . . . . . . . . . . . . . . . A-2:maj . . . . . . . . . . . . . . .',
+    m1: 'F#5:bell . . . A-5 . . . . . . . E-5 . . . D-5 . . . . . . . F#5 . . . . . . .',
+    m2: 'G-5:bell . . . B-5 . . . . . . . A-5 . . . E-5 . . . . . . . C#5 . . . . . . .',
+    r1: '. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .',
+  },
+  order: [
+    ['b1', 'b2', 'b1', 'b2', 'b1', 'b2', 'b1', 'b2'],
+    ['c1', 'c2', 'c1', 'c2', 'c1', 'c2', 'c1', 'c2'],
+    ['r1', 'r1', 'm1', 'm2', 'm1', 'm2', 'r1', 'r1'],
+  ],
+  // in priority order, lowest first
+  effects: {
+    type: { priority: 0, steps: [
+      { wave: 'noise', freq: 0x6000, ad: 0x00, sr: 0x00, ticks: 1 },
+      { wave: 'noise', gate: false, freq: 0x6000, ad: 0x00, sr: 0x00, ticks: 1 },
+    ] },
+    move: { priority: 1, steps: [
+      { wave: 'pulse', freq: 0x2800, ad: 0x00, sr: 0x40, pw: 0x800, ticks: 2 },
+      { wave: 'pulse', gate: false, freq: 0x2800, ad: 0x00, sr: 0x40, pw: 0x800, ticks: 1 },
+    ] },
+    more: { priority: 2, steps: [
+      { wave: 'tri', freq: 0x3000, ad: 0x00, sr: 0x66, ticks: 3 },
+      { wave: 'tri', freq: 0x4000, ad: 0x00, sr: 0x66, ticks: 4 },
+      { wave: 'tri', gate: false, freq: 0x4000, ad: 0x00, sr: 0x66, ticks: 1 },
+    ] },
+    choose: { priority: 3, steps: [
+      { wave: 'pulse', freq: 0x2400, ad: 0x00, sr: 0x88, pw: 0x800, ticks: 4 },
+      { wave: 'pulse', freq: 0x3600, ad: 0x00, sr: 0x88, pw: 0x800, ticks: 4 },
+      { wave: 'pulse', freq: 0x4800, ad: 0x00, sr: 0x88, pw: 0x800, ticks: 8 },
+      { wave: 'pulse', gate: false, freq: 0x4800, ad: 0x00, sr: 0x88, pw: 0x800, ticks: 1 },
+    ] },
+  },
+  EVENTS: { type: ['type'], more: ['more'], move: ['move'], choose: ['choose'] },
+});
+
+</script>
+<script>
+/*
+ * APEX audio for the browser pages: a game's sound, as the C64 makes it (by default as a C64 Ultimate
+ * with two SIDs does: the music on one, the effects on the other). Each tick the page tells it
+ * what the game did (the effects to start, whether the music plays); core/sound.js turns that into the
+ * SID's 25 registers, exactly as the C64's driver writes them, and core/sid.js plays them, in an
+ * AudioWorklet (built from APEXSID.source), or a ScriptProcessor where worklets can't run (pages opened
+ * from a file).
+ *
+ * Browsers start sound only after the player does something, so start() is called from the page's
+ * first key press, click or touch; until then the song still moves on, silently, so it is where it
+ * would be. M (the page's) mutes and unmutes.
+ *
+ *   const audio = APEXAUDIO.create(songDefinition, { sids: 2 })   two SIDs, as on a C64 Ultimate (the
+ *                                                                 default; 1 for a stock C64)
+ *   audio.tick(['shot', ...], musicOn)   once a game tick (50 a second), the effects by name
+ *   audio.start()                         from a user gesture; audio.toggleMute()
+ *
+ * Works in the browser (global APEXAUDIO, needing APEXSOUND and APEXSID).
+ */
+(function (root, factory) {
+  root.APEXAUDIO = factory(root.APEXSOUND, root.APEXSID);
+})(typeof self !== 'undefined' ? self : this, function (S, SID) {
+  'use strict';
+
+  const FPS = 50;
+  // The worklet: a queue of register frames, each played for 1/50 s of samples. A few frames of slack
+  // absorb the page's uneven ticks; too many (the page ran ahead) and the oldest go; none for half a second
+  // (the page stopped, say hidden) and the chip falls silent rather than hold a note.
+  const WORKLET = `
+const APEXSID = ${SID.source};
+class ApexSid extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.chips = [APEXSID.create(sampleRate), APEXSID.create(sampleRate)];
+    this.queue = [];
+    this.left = 0;
+    this.starved = 0;
+    this.port.onmessage = e => { this.queue.push(e.data); if (this.queue.length > 8) this.queue.splice(0, this.queue.length - 3); };
+  }
+  // A frame's registers: the first SID's, then the second's if there are two.
+  write(R) { this.chips[0].write(R); if (R.length > 25) this.chips[1].write(R.slice(25)); }
+  process(inputs, outputs) {
+    const out = outputs[0][0];
+    out.fill(0);
+    for (let i = 0; i < out.length;) {
+      if (this.left <= 0) {
+        if (this.queue.length) { this.write(this.queue.shift()); this.starved = 0; }
+        else if (++this.starved === 25) this.write(new Array(50).fill(0)); // the page stopped: silence
+        this.left += sampleRate / ${FPS};
+      }
+      const n = Math.min(out.length - i, Math.ceil(this.left));
+      for (const chip of this.chips) chip.render(out, i, n);
+      i += n;
+      this.left -= n;
+    }
+    for (let c = 1; c < outputs[0].length; c++) outputs[0][c].set(out);
+    return true;
+  }
+}
+registerProcessor('apex-sid', ApexSid);
+`;
+
+  function create(def, { sids = 2 } = {}) {
+    const c = S.compile(def), p = S.player(c, { sids });
+    let ctx = null, send = null, muted = false;
+
+    // The fallback: the same queue and chip on the page's own thread.
+    function scriptProcessor() {
+      const chips = [SID.create(ctx.sampleRate), SID.create(ctx.sampleRate)], queue = [];
+      const write = R => { chips[0].write(R); if (R.length > 25) chips[1].write(R.slice(25)); };
+      let left = 0, starved = 0;
+      const node = ctx.createScriptProcessor(2048, 0, 1);
+      node.onaudioprocess = e => {
+        const out = e.outputBuffer.getChannelData(0);
+        out.fill(0);
+        for (let i = 0; i < out.length;) {
+          if (left <= 0) {
+            if (queue.length) { write(queue.shift()); starved = 0; } else if (++starved === 25) write(new Array(50).fill(0));
+            left += ctx.sampleRate / FPS;
+          }
+          const n = Math.min(out.length - i, Math.ceil(left));
+          for (const chip of chips) chip.render(out, i, n);
+          i += n;
+          left -= n;
+        }
+      };
+      node.connect(ctx.destination);
+      send = R => { queue.push(R); if (queue.length > 12) queue.splice(0, queue.length - 5); };
+    }
+
+    function start() {
+      if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+      const Ctx = globalThis.AudioContext || globalThis.webkitAudioContext;
+      if (!Ctx) return;
+      ctx = new Ctx();
+      if (ctx.audioWorklet && globalThis.isSecureContext) {
+        const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
+        ctx.audioWorklet.addModule(url).then(() => {
+          const node = new AudioWorkletNode(ctx, 'apex-sid', { numberOfInputs: 0, outputChannelCount: [2] });
+          node.connect(ctx.destination);
+          send = R => node.port.postMessage(R);
+        }).catch(scriptProcessor);
+      } else scriptProcessor();
+    }
+
+    function tick(effects = [], music = true) {
+      const ids = effects.map(n => c.effNames.indexOf(n)).filter(k => k >= 0);
+      const R = S.tick(c, p, ids, music);
+      if (!send) return;
+      if (muted) R[24] &= 0xf0; // the volume to 0
+      send(Array.from(R));
+    }
+
+    return { start, tick, toggleMute: () => { muted = !muted; return muted; }, get muted() { return muted; } };
+  }
+
+  return { create };
+});
+
+</script>
+<script>window.LEVEL_TEXT = "// The Mountain: the story mode's demo (core/story.js). A traveller reaches the foot of APEX and meets\n// its guide. It pans over the APEX-8 badge's art, and shows pages, choices, a choice that only\n// appears until it is taken (a flag), and the start again at the end.\n(function (root, story) {\n  if (typeof module === 'object' && module.exports) module.exports = story;\n  else (root.APEXSTORIES = root.APEXSTORIES || {}).mountain = story;\n})(typeof self !== 'undefined' ? self : this, {\n  name: 'The Mountain',\n  song: 'peak',\n  sounds: { type: 'type', more: 'more', move: 'move', choose: 'choose' },\n  typeSpeed: 2,\n  pictures: {\n    // the badge's art, 48 x 40 cells (384 x 320 pixels): the sun, the mountain and the name\n    peak: { file: 'art/brand/apex8-source.png', crop: [0, 100, 1254, 1045], cells: [48, 40], saturation: 1.2, dither: 24 },\n  },\n  start: 'sunset',\n  scenes: {\n    sunset: {\n      picture: 'peak', pan: { from: [32, 0], to: [32, 96], ticks: 384 },\n      speaker: 'The Mountain',\n      text: 'At the top of the world the sun sets behind a mountain of snow. Travellers say that whoever climbs it can make anything at all, in eight bits.\\nYou have walked for days to reach it.',\n      next: 'guide',\n    },\n    guide: {\n      picture: 'peak', pan: { from: [32, 96], to: [64, 160], ticks: 512 },\n      speaker: 'The Guide',\n      text: 'You have come a long way, traveller. Few reach the foot of APEX. What brings you here?',\n      choices: [\n        { text: 'I want to make a game.', go: 'game' },\n        { text: 'What is this place?', go: 'place', unless: 'asked' },\n        { text: 'I am only looking around.', go: 'look' },\n      ],\n    },\n    place: {\n      picture: 'peak', pan: { from: [64, 160], to: [0, 160], ticks: 512 }, set: 'asked',\n      speaker: 'The Guide',\n      text: 'This is APEX-8. Its paths lead down into dungeons, up through green hills, along dark corridors and out among the stars. Each one is drawn exactly the same on every machine that walks it.',\n      next: 'again',\n    },\n    again: {\n      picture: 'peak', pan: { from: [0, 160], to: [0, 160], ticks: 0 },\n      speaker: 'The Guide',\n      text: 'So. What brings you here?',\n      choices: [\n        { text: 'I want to make a game.', go: 'game' },\n        { text: 'What is this place?', go: 'place', unless: 'asked' },\n        { text: 'I am only looking around.', go: 'look' },\n      ],\n    },\n    game: {\n      picture: 'peak', pan: { from: [64, 160], to: [64, 199], ticks: 312 },\n      speaker: 'The Guide',\n      text: 'Then take what the mountain gives: a corridor to walk in, hills to run across, a dungeon to explore and a sky to fight in.\\nAnd now a way to tell a story: a picture that moves slowly, like an old film, words beneath it, and choices that change what happens next.',\n      next: 'summit',\n    },\n    look: {\n      picture: 'peak', pan: { from: [0, 160], to: [0, 199], ticks: 312 },\n      speaker: 'The Guide',\n      text: 'Look all you like. The picture moves slowly, like an old film, and the words come a letter at a time. Press fire and they come all at once.',\n      next: 'summit',\n    },\n    summit: {\n      picture: 'peak', pan: { from: [32, 0], to: [32, 0], ticks: 0 },\n      speaker: 'The Mountain',\n      text: 'The sun goes down. The snow turns gold, then blue. Somewhere above you, a path begins.\\nThe end. Press fire to begin again.',\n      end: true,\n    },\n  },\n});\n";</script>
+<script>
+// The APEX story mode reference, playable: the same scenes, text and frames the C64 engine shows, at a
+// fixed 50 ticks a second, inside a C64-sized border, with its music.
+(async function () {
+  const story = APEXSTORIES.mountain, stored = APEXPICTURES.mountain;
+  const bytes = b64 => Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
+  const pics = Object.keys(story.pictures).map(id => {
+    const p = stored[id];
+    return { cw: p.cw, ch: p.ch, bg: p.bg, bitmap: bytes(p.bitmap), screen: bytes(p.screen), colram: bytes(p.colram) };
+  });
+  const c = APEXSTORY.compile(story, pics.map(p => [p.cw, p.ch]));
+  let state = APEXSTORY.start(c);
+  const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(320, 200);
+  const border = APEXSCII.PALETTE[APEXSTORYVIEW.BORDER];
+  const song = APEXSONGS[story.song];
+
+  // The sound (web/audio.js), from the first key press, click or touch; M mutes.
+  const audio = APEXAUDIO.create(song);
+  for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, () => audio.start());
+  addEventListener('keydown', e => { if (e.code === 'KeyM') audio.toggleMute(); });
+
+  // Input: keyboard, touch buttons and the first gamepad, combined into the engine's input bits.
+  const KEYS = { ArrowUp: 1, KeyW: 1, ArrowDown: 2, KeyS: 2, Space: 16, Enter: 16, ControlLeft: 16, ControlRight: 16 };
+  let keys = 0, touch = 0;
+  addEventListener('keydown', e => {
+    if (e.code === 'KeyR') state = APEXSTORY.start(c);
+    if (KEYS[e.code]) { keys |= KEYS[e.code]; e.preventDefault(); }
+  });
+  addEventListener('keyup', e => { if (KEYS[e.code]) keys &= ~KEYS[e.code]; });
+  addEventListener('blur', () => { keys = 0; touch = 0; });
+  for (const b of document.querySelectorAll('.pad button')) {
+    const bit = +b.dataset.bit;
+    const on = e => { e.preventDefault(); touch |= bit; b.classList.add('on'); };
+    const off = e => { e.preventDefault(); touch &= ~bit; b.classList.remove('on'); };
+    b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off);
+    b.addEventListener('pointercancel', off); b.addEventListener('pointerleave', off);
+  }
+  function pad() {
+    const g = navigator.getGamepads && [...navigator.getGamepads()].find(Boolean);
+    if (!g) return 0;
+    const y = g.axes[1] || 0, btn = i => g.buttons[i] && g.buttons[i].pressed;
+    return (y < -0.4 || btn(12) ? 1 : 0) | (y > 0.4 || btn(13) ? 2 : 0) | (btn(0) || btn(1) ? 16 : 0);
+  }
+
+  function draw() {
+    image.data.set(APEXSTORYVIEW.frame(c, pics, state).pixels);
+    ctx.fillStyle = border;
+    ctx.fillRect(0, 0, 384, 272);
+    ctx.putImageData(image, 32, 36);
+  }
+
+  // Fixed 50 Hz ticks; the screen shows the latest.
+  const TICK = 20;
+  let last = performance.now(), acc = 0;
+  function loop(now) {
+    acc = Math.min(acc + now - last, 200);
+    last = now;
+    let stepped = false;
+    while (acc >= TICK) {
+      APEXSTORY.play(c, state, keys | touch | pad());
+      audio.tick(state.events.flatMap(e => (c.sounds[e] ? [c.sounds[e]] : [])), true);
+      acc -= TICK;
+      stepped = true;
+    }
+    if (stepped) draw();
+    requestAnimationFrame(loop);
+  }
+  draw();
+  requestAnimationFrame(loop);
+})().catch(e => { document.getElementById('help').textContent = 'Could not start: ' + e.message; });
+</script>
+</body>
+</html>

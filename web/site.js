@@ -40,6 +40,13 @@ function png(rgba, file) {
   for (const b of gameInputs(level, 150).inputs) { PLAT.play(level, g, b); cam = PLAT.follow(level, g.p, cam); }
   png(VIEW.frame(level, map, g.p, cam, VIEW.objectSprites(g, cam)).pixels, path.join(img, 'side.png'));
 }
+// The story mode: the guide asking, the choices up.
+{
+  const STORY = require('../core/story.js'), VIEW = require('../c64/story/view.js'), { load } = require('../c64/story/build.js');
+  const s = load(), st = STORY.start(s.c);
+  for (let t = 0; t < 900 && !(st.scene === s.c.scenes.findIndex(x => x.id === 'guide') && st.phase === 'choose'); t++) STORY.play(s.c, st, t % 50 === 0 ? 16 : 0);
+  png(VIEW.frame(s.c, s.pics, st).pixels, path.join(img, 'story.png'));
+}
 // The others, from their videos (768x544: the screen is 640x400 at 64, 72).
 for (const name of ['shmup', 'crypt']) {
   const video = path.join(root, 'showcase', 'out', `${name}-run.mp4`);
@@ -55,7 +62,7 @@ fs.mkdirSync(path.join(docs, 'img'), { recursive: true });
 fs.mkdirSync(path.join(docs, 'c64'), { recursive: true });
 const menu = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8').replace(/\.\.\/c64\/out\//g, 'c64/');
 fs.writeFileSync(path.join(docs, 'index.html'), menu);
-for (const name of ['ray', 'side', 'crypt', 'shmup']) fs.copyFileSync(path.join(__dirname, 'out', `${name}-play.html`), path.join(docs, `${name}.html`));
+for (const name of ['ray', 'side', 'crypt', 'shmup', 'story']) fs.copyFileSync(path.join(__dirname, 'out', `${name}-play.html`), path.join(docs, `${name}.html`));
 for (const f of fs.readdirSync(img)) fs.copyFileSync(path.join(img, f), path.join(docs, 'img', f));
 for (const f of fs.readdirSync(path.join(root, 'c64', 'out'))) fs.copyFileSync(path.join(root, 'c64', 'out', f), path.join(docs, 'c64', f));
 fs.writeFileSync(path.join(docs, '.nojekyll'), '');

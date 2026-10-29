@@ -8,3 +8,4 @@ c64/sound/build/
 c64/picture/build/
 showcase/out/*.wav
 .claude/
+c64/story/build/

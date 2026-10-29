@@ -438,23 +438,41 @@ node test/profile.js "C:\path\to\GTK3VICE-3.10-win64" shmup sweep
 
 Music and sound effects for the SID, made the way the pictures are: `core/sound.js` is the reference, and the 6502 driver `c64/kit/sid.inc` sets exactly the same 25 SID registers on every tick. The test compares registers, not audio. The driver keeps them in RAM, and copies them to the SID once a frame. The test checks a running checksum of every tick's registers, and the last tick's, against the reference.
 
-- *music*: three voices, each playing 32-row patterns from its own order list. A row is a note, a release, or nothing. Instruments set the waveform, ADSR, a sweeping pulse width, an arpeggio and a gate length. A new note restarts hard: one tick with the gate off
+- *music*: three voices, each playing 32-row patterns from its own order list. A row is a note, a release, or nothing. Instruments set the waveform, ADSR, a sweeping pulse width, an arpeggio and a gate length. A new note restarts hard: one tick with the gate off and the ADSR at 0, so the SID's envelope counter comes round at once and the note's attack starts on time. Without the ADSR at 0 the chip's "ADSR bug" can hold an attack back by up to 33 ms, which on a short note loses it altogether
 - *drums*: an instrument can instead have a table, a waveform and a note for each tick (the note played plus some semitones, or a fixed note), so a kick is a fast pitch drop and a clap a burst of noise
 - *the filter*: a resonant low-pass (or band or high) whose cutoff sweeps up and down from a table, over the voices whose instruments use it
-- *effects*: steps of a waveform, a sliding frequency, ADSR and a length, played on one voice (chosen by the song) instead of the music, which goes on underneath. A new effect starts unless one of higher priority is playing
+- *effects*: steps of a waveform, a sliding frequency, ADSR and a length, each played on its own voice (the song's effects voice unless it names another) instead of the music, which goes on underneath. Effects on different voices play at once. A new effect starts unless one of higher priority is playing on its voice
+- *the music off*: the game can turn the music off. The song stands still, every voice fades on its release, and the effects have the voices to themselves. Turned on, the song goes on from where it stopped
 - `sound/shmup.js`: the Dreadnought's music, an original late-80s house track at 125 beats a minute in A minor. A four-on-the-floor kick with offbeat hats and claps, an octave-jumping bass through the sweeping filter, and arpeggiated chord stabs that give way to a hook. The effects borrow the stabs' voice, so firing never stops the beat. It loops every 31 seconds
+- `sound/crypt.js`: The Drowned Crypt's music, an original creeping cue in the manner of a 1920s silent film, in D minor at 75 beats a minute. A plucked bass walking chromatically into each change, stride chords on 2 and 4, and a melody that tiptoes up onto ghostly held notes. The hero's and creatures' effects are short and sit under the music. When the boss rises the music stops for its roar, moans, screeches and death shriek. `EVENTS` maps the game's events to effects
+
+### The SID in the browser
+
+`core/sid.js` emulates the SID, so the browser pages play the same sound. It doesn't need to be cycle-exact, because the C64 tests compare registers. It plays the register image `core/sound.js` makes each frame:
+
+- *voices*: three oscillators with 24-bit accumulators, giving triangle, sawtooth, pulse, noise from the 23-bit shift register, and combinations as their bitwise AND. Sync, ring modulation and the test bit work too
+- *envelopes*: as on the chip, a 15-bit rate counter that is never reset, so the ADSR bug happens, and a second counter that slows decay and release as the level falls
+- *the filter*: a resonant state-variable filter following the 6581's cutoff curve, then the volume
+
+`web/audio.js` runs it in an AudioWorklet, or a ScriptProcessor where worklets can't run (a page opened from a file). The page tells it each tick what the game did, and it starts on the first key press, click or touch, as browsers require. M mutes. The shooter and The Drowned Crypt pages use it.
+
+`test/sid-compare.js` sets the emulation against VICE's recording of the same music and effects, in 100 ms slices. For The Drowned Crypt, its loudness over time correlates 0.92 with VICE's and its spectra match 0.93, at the same level. For the Dreadnought it's 0.88 and 0.80; the 6581's filter is hard to model.
 
 | File | What it is |
 |------|------------|
 | `core/sound.js` | The reference player |
-| `c64/sound/` | A player program: the music, with the joystick (or a test's script) playing the effects |
-| `test/sound-check.js` | Plays the song for two loops, each effect alone, and effects piling up in VICE, and compares every tick's registers |
-| `showcase/sound-wav.js` | Records the player in VICE as `showcase/out/shmup-music.mp3` (and a WAV, not kept in git) |
+| `core/sid.js` | The SID emulation, for the browser and WAVs |
+| `web/audio.js` | Plays a game's sound in a browser page |
+| `c64/sound/` | A player program for a song (`node c64/sound/build.js crypt`): the music, with the joystick (or a test's script) playing the effects |
+| `test/sound-check.js` | For each song, plays it for two loops, each effect alone, effects piling up, and the music off and on, in VICE, and compares every tick's registers |
+| `test/sid-compare.js` | Compares the emulation's sound with VICE's recording |
+| `showcase/sound-wav.js` | Records the player in VICE as `showcase/out/<song>-music.mp3` (and a WAV, not kept in git) |
 
 ```bash
 node c64/sound/build.js
 node test/sound-check.js "C:\path\to\GTK3VICE-3.10-win64"
-node showcase/sound-wav.js "C:\path\to\GTK3VICE-3.10-win64"
+node showcase/sound-wav.js "C:\path\to\GTK3VICE-3.10-win64" --song crypt --seconds 58
+node test/sid-compare.js crypt 58
 ```
 
 ## Roadmap

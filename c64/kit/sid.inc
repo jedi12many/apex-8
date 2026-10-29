@@ -330,6 +330,11 @@ snd_voice:
     sta snd_ad
     lda INS_SR,y
     sta snd_sr
+    lda v_phase,x           ; a hard restart: the envelope's rates and sustain at 0 for its tick
+    bne :+
+    sta snd_ad
+    sta snd_sr
+:
     lda INS_FILT,y          ; through the filter?
     beq :+
     lda V_BIT,x

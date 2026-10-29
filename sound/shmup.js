@@ -7,7 +7,10 @@
 // Patterns are 32 rows (two bars of sixteenths): a note (with :instrument to change it), . (nothing:
 // the note goes on) or == (release). Speed 6 makes a row 6 frames: 125 beats a minute, a 31-second
 // loop.
-module.exports = {
+(function (root, song) {
+  if (typeof module === 'object' && module.exports) module.exports = song;
+  else (root.APEXSONGS = root.APEXSONGS || {}).shmup = song;
+})(typeof self !== 'undefined' ? self : this, {
   speed: 6,
   effectsVoice: 1,
   filter: { res: 12, mode: 'low', min: 0x180, max: 0x5c0, period: 192 },
@@ -67,4 +70,4 @@ module.exports = {
       { wave: 'noise', gate: false, freq: 0x0400, ad: 0x00, sr: 0xfa, ticks: 30 },
     ] },
   },
-};
+});

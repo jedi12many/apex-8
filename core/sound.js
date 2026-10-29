@@ -10,7 +10,9 @@
  *     tick, round and round) and a gate length (ticks until release; 0 holds it). Or, for drums, a
  *     table: per tick of the note a waveform and a note (the played note + n, or a fixed note), the
  *     last held. An instrument can go through the filter
- *   - a new note restarts hard: one tick with the gate off, then on (a table starts once it's on)
+ *   - a new note restarts hard: one tick with the gate off and the envelope's rates and sustain at 0
+ *     (so the SID's envelope counter comes round at once, and the note's attack starts on time: the
+ *     SID's ADSR bug), then the gate on (a table starts once it's on)
  *   - the filter: one for the song, a resonant low-pass (or band or high) whose cutoff sweeps up and
  *     down, over the voices playing instruments that use it
  *   - a sound effect plays on its voice (its own `voice`, else the song's effectsVoice, voice 3 unless
@@ -141,7 +143,7 @@
         R[b] = f & 255; R[b + 1] = f >> 8;
         R[b + 2] = vs.pw & 255; R[b + 3] = vs.pw >> 8;
         R[b + 4] = wave | (vs.phase === 1 ? 1 : 0);
-        R[b + 5] = ins.ad; R[b + 6] = ins.sr;
+        R[b + 5] = vs.phase === 0 ? 0 : ins.ad; R[b + 6] = vs.phase === 0 ? 0 : ins.sr;
         if (ins.filter) route |= 1 << v;
       }
       if (vs.phase !== 0 && vs.tpos < 255) vs.tpos++;

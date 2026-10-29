@@ -21,7 +21,7 @@
 <body>
 <canvas id="screen" width="384" height="272"></canvas>
 <div class="controls"><div class="pad" id="pad" aria-label="move"><div class="knob" id="knob"></div></div><div class="fire" id="fire" aria-label="fire">FIRE</div></div>
-<p class="help" id="help">Arrow keys or W / A / S / D to walk (two at once for diagonals) · hold Space to stand, aim and fire · R back to the title · gamepad works too</p>
+<p class="help" id="help">Arrow keys or W / A / S / D to walk (two at once for diagonals) · hold Space to stand, aim and fire · R back to the title · M mutes the sound · gamepad works too</p>
 <script src="../apexscii/apexscii.js"></script>
 <script src="../core/iso.js"></script>
 <script src="../c64/iso/view.js"></script>
@@ -29,6 +29,10 @@
 <script src="../c64/crypt/tiles.js"></script>
 <script src="../c64/crypt/sprites.js"></script>
 <script src="../c64/crypt/view.js"></script>
+<script src="../core/sound.js"></script>
+<script src="../core/sid.js"></script>
+<script src="../sound/crypt.js"></script>
+<script src="../web/audio.js"></script>
 <script>
 // APEX Drowned Crypt, the reference, playable: the same game and the same frames the C64 engine is to
 // draw, at a fixed 50 ticks a second, inside a C64-sized border.
@@ -44,6 +48,11 @@
   const image = ctx.createImageData(320, 200);
   const border = APEXSCII.PALETTE[APEXISOVIEW.COLORS.border];
   const hi = () => game.hi;
+
+  // The sound (web/audio.js), from the first key press, click or touch; M mutes.
+  const audio = APEXAUDIO.create(APEXSONGS.crypt);
+  for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, () => audio.start());
+  addEventListener('keydown', e => { if (e.code === 'KeyM') audio.toggleMute(); });
 
   // Input: keyboard, the touch pad and the first gamepad, as joystick bits (1 up, 2 down, 4 left, 8 right,
   // 16 fire).
@@ -97,6 +106,7 @@
     let stepped = false;
     while (acc >= TICK) {
       APEXCRYPT.tick(map, game, keys | touch | firing | gamepad());
+      audio.tick(game.events.flatMap(e => APEXSONGS.crypt.EVENTS[e] || []), APEXCRYPT.music(game));
       acc -= TICK;
       stepped = true;
     }

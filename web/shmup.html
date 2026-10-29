@@ -22,10 +22,14 @@
 <body>
 <canvas id="screen" width="384" height="272"></canvas>
 <div class="controls"><div class="pad" id="pad" aria-label="move"><div class="knob" id="knob"></div></div><button class="fire" id="fire" aria-label="fire">FIRE</button></div>
-<p class="help" id="help">Fire to start · arrow keys or W / A / S / D to fly · Space, Ctrl or K to fire (hold for autofire) · R for the title · gamepad works too</p>
+<p class="help" id="help">Fire to start · arrow keys or W / A / S / D to fly · Space, Ctrl or K to fire (hold for autofire) · R for the title · M mutes the sound · gamepad works too</p>
 <script src="../apexscii/apexscii.js"></script>
 <script src="../core/shmup.js"></script>
 <script src="../c64/shmup/view.js"></script>
+<script src="../core/sound.js"></script>
+<script src="../core/sid.js"></script>
+<script src="../sound/shmup.js"></script>
+<script src="../web/audio.js"></script>
 <script>
 // The APEX shoot-'em-up reference, playable: the same game and the same frames the C64 engine draws,
 // at a fixed 50 ticks a second, inside a C64-sized border.
@@ -36,6 +40,11 @@
   const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');
   const image = ctx.createImageData(320, 200);
   const border = APEXSCII.PALETTE[APEXSHMUPVIEW.COLORS.border];
+
+  // The sound (web/audio.js), from the first key press, click or touch; M mutes.
+  const audio = APEXAUDIO.create(APEXSONGS.shmup);
+  for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, () => audio.start());
+  addEventListener('keydown', e => { if (e.code === 'KeyM') audio.toggleMute(); });
 
   // Input: keyboard, the touch pad and fire button, and the first gamepad, as joystick bits
   // (1 up, 2 down, 4 left, 8 right, 16 fire).
@@ -90,6 +99,7 @@
     let stepped = false;
     while (acc >= TICK) {
       APEXSHMUP.tick(level, game, keys | touch | fire | gamepad());
+      audio.tick(game.events, true);
       acc -= TICK;
       stepped = true;
     }

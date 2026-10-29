@@ -13,7 +13,10 @@
 // themselves: a roar over a rumble as it rises, moans, a screech as it spits, the floor cracking and a
 // tentacle bursting up, a shriek over a collapse as it dies. EVENTS says which effects each of the
 // game's events (core/crypt.js) starts.
-module.exports = {
+(function (root, song) {
+  if (typeof module === 'object' && module.exports) module.exports = song;
+  else (root.APEXSONGS = root.APEXSONGS || {}).crypt = song;
+})(typeof self !== 'undefined' ? self : this, {
   speed: 10,
   effectsVoice: 1,
   filter: { res: 10, mode: 'low', min: 0x1c0, max: 0x480, period: 256 },
@@ -129,4 +132,4 @@ module.exports = {
     dead: ['dead'], moan: ['moan'], grasp: ['grasp'], rise: ['roar', 'rumble'], crack: ['crack'], spit: ['screech'],
     bossDies: ['shriek', 'collapse'],
   },
-};
+});

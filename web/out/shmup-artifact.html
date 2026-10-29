@@ -17,7 +17,7 @@
 
 <canvas id="screen" width="384" height="272"></canvas>
 <div class="controls"><div class="pad" id="pad" aria-label="move"><div class="knob" id="knob"></div></div><button class="fire" id="fire" aria-label="fire">FIRE</button></div>
-<p class="help" id="help">Fire to start · arrow keys or W / A / S / D to fly · Space, Ctrl or K to fire (hold for autofire) · R for the title · gamepad works too</p>
+<p class="help" id="help">Fire to start · arrow keys or W / A / S / D to fly · Space, Ctrl or K to fire (hold for autofire) · R for the title · M mutes the sound · gamepad works too</p>
 <script>
 /*
  * APEXSCII — PETSCII-style character sets for the Commodore 64, one per perspective:
@@ -1322,6 +1322,544 @@
 });
 
 </script>
+<script>
+/*
+ * APEX sound: the reference for SID music and sound effects. Integer maths only, so a 6502 driver
+ * that follows the same steps writes exactly the same SID registers every frame.
+ *
+ *   - one tick per frame; each tick sets all 25 SID registers (the register image)
+ *   - music: 3 voices, each playing patterns of 32 rows in its own order list (all the same length;
+ *     the song loops); a row lasts `speed` ticks. A row on a voice is a note (with its instrument, or
+ *     the voice's last), a release, or nothing (the note goes on)
+ *   - instruments: a waveform, ADSR, a pulse width that sweeps, an arpeggio (semitones added tick by
+ *     tick, round and round) and a gate length (ticks until release; 0 holds it). Or, for drums, a
+ *     table: per tick of the note a waveform and a note (the played note + n, or a fixed note), the
+ *     last held. An instrument can go through the filter
+ *   - a new note restarts hard: one tick with the gate off and the envelope's rates and sustain at 0
+ *     (so the SID's envelope counter comes round at once, and the note's attack starts on time: the
+ *     SID's ADSR bug), then the gate on (a table starts once it's on)
+ *   - the filter: one for the song, a resonant low-pass (or band or high) whose cutoff sweeps up and
+ *     down, over the voices playing instruments that use it
+ *   - a sound effect plays on its voice (its own `voice`, else the song's effectsVoice, voice 3 unless
+ *     it says) instead of the music, which goes on underneath; effects on different voices play at
+ *     once. An effect is steps, each a waveform (with its gate bit), a frequency that slides, ADSR, a
+ *     pulse width and a length in ticks. A new effect starts if none is playing on its voice or its
+ *     priority is at least the one's playing there
+ *   - the music can be turned off: while it is, the song stands still where it is and every voice is
+ *     released (it fades on its release); turned on, it goes on from there
+ *
+ * compile(def) turns a song and its effects (see sound/shmup.js) into tables; player(c) makes a
+ * player; tick(c, p, effects, music) plays one tick, starting the effects listed (in order), with
+ * the music on unless music is false, and returns the register image. checksum(sum, image) folds an image into a running 16-bit checksum, which
+ * the C64 tests compare.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSOUND = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const ROWS = 32;
+  const WAVE = { tri: 0x10, saw: 0x20, pulse: 0x40, noise: 0x80 };
+  const PAL_CLOCK = 985248;
+  // SID frequency values for notes 0-95 (C-0 to B-7), A-4 (57) at 440 Hz on a PAL machine.
+  const FREQ = Array.from({ length: 96 }, (_, n) => Math.min(0xffff, Math.round((440 * 2 ** ((n - 57) / 12) * 16777216) / PAL_CLOCK)));
+  const NAMES = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];
+  const noteOf = s => {
+    const i = NAMES.indexOf(s.slice(0, 2)), oct = +s[2];
+    if (i < 0 || !(oct >= 0 && oct <= 7)) throw new Error(`not a note: ${s}`);
+    return oct * 12 + i;
+  };
+  // Row tokens in the tables: 0 nothing, 1 release, 2 + note (with the instrument in the next byte).
+  const NOTHING = 0, RELEASE = 1;
+  const FILTER_MODE = { low: 0x10, band: 0x20, high: 0x40 };
+
+  // def: { speed, instruments: { name: { wave, ad, sr, pw, pwSpeed, arp, gate } }, patterns: { name:
+  // 'C-3:inst . . == ...' (32 tokens) }, order: [[names] x 3], effects: { name: { priority, steps:
+  // [{ wave, gate, freq, slide, ad, sr, pw, ticks }] } } }
+  function compile(def) {
+    const insNames = Object.keys(def.instruments), ins = insNames.map(n => {
+      const i = def.instruments[n];
+      // a table step: [wave, note], the note + n or a fixed note ('C-3'): as tw (the waveform) and tn
+      // (a fixed note + $80, or n as a signed byte)
+      const table = (i.table || []).map(([w, n]) => [WAVE[w], typeof n === 'string' ? 0x80 | noteOf(n) : n & 0x7f]);
+      return { wave: WAVE[i.wave || 'pulse'], ad: i.ad, sr: i.sr, pw: i.pw || 0, pwSpeed: i.pwSpeed || 0, arp: i.arp && i.arp.length ? i.arp : [0], gate: i.gate || 0, table, filter: !!i.filter };
+    });
+    const patNames = Object.keys(def.patterns), patterns = patNames.map(n => {
+      const toks = def.patterns[n].trim().split(/\s+/);
+      if (toks.length !== ROWS) throw new Error(`pattern ${n}: ${toks.length} rows, not ${ROWS}`);
+      return toks.map(t => {
+        if (t === '.') return { op: NOTHING };
+        if (t === '==') return { op: RELEASE };
+        const [note, insName] = t.split(':');
+        const k = insName === undefined ? -1 : insNames.indexOf(insName);
+        if (insName !== undefined && k < 0) throw new Error(`pattern ${n}: no instrument ${insName}`);
+        return { op: 2, note: noteOf(note), ins: k };
+      });
+    });
+    const order = def.order.map(list => list.map(n => {
+      const k = patNames.indexOf(n);
+      if (k < 0) throw new Error(`no pattern ${n}`);
+      return k;
+    }));
+    if (order.length !== 3 || order.some(l => l.length !== order[0].length)) throw new Error('3 order lists of one length');
+    const effectsVoice = def.effectsVoice === undefined ? 2 : def.effectsVoice;
+    const effNames = Object.keys(def.effects || {}), effects = effNames.map(n => {
+      const e = def.effects[n];
+      return { priority: e.priority, voice: e.voice === undefined ? effectsVoice : e.voice, steps: e.steps.map(s => ({ ctrl: WAVE[s.wave] | (s.gate === false ? 0 : 1), freq: s.freq & 0xffff, slide: s.slide || 0, ad: s.ad, sr: s.sr, pw: s.pw || 0, ticks: s.ticks })) };
+    });
+    // the filter's cutoff (11 bits) tick by tick: a triangle from min to max and back over period ticks
+    const f = def.filter || { res: 0, min: 0, max: 0, period: 2 };
+    if (f.period < 2 || f.period > 256 || f.period & 1) throw new Error('filter period: an even number of ticks up to 256');
+    const half = f.period / 2, cut = Array.from({ length: f.period }, (_, k) => f.min + Math.floor(((f.max - f.min) * (k < half ? k : f.period - k)) / half));
+    const filter = { res: f.res, mode: FILTER_MODE[f.mode] || 0, cut };
+    return { speed: def.speed, ins, insNames, patterns, patNames, order, effects, effNames, filter, effectsVoice };
+  }
+
+  function player(c) {
+    return {
+      timer: 0, row: 0, pos: 0,
+      voices: [0, 1, 2].map(() => ({ ins: -1, note: 0, phase: 2, age: 0, arp: 0, pw: 0, tpos: 0 })),
+      fx: [0, 1, 2].map(() => ({ sfx: -1, step: 0, left: 0, freq: 0 })), ft: 0,
+    };
+  }
+
+  function startEffect(c, p, id) {
+    const f = p.fx[c.effects[id].voice];
+    if (f.sfx >= 0 && c.effects[id].priority < c.effects[f.sfx].priority) return;
+    f.sfx = id; f.step = 0;
+    const s = c.effects[id].steps[0];
+    f.left = s.ticks; f.freq = s.freq;
+  }
+
+  function tick(c, p, effects = [], music = true) {
+    for (const id of effects) startEffect(c, p, id);
+    // the music off: the song stands still, every voice released
+    if (!music) for (const vs of p.voices) vs.phase = 2;
+    // a new row on every voice
+    else if (p.timer === 0) {
+      for (let v = 0; v < 3; v++) {
+        const r = c.patterns[c.order[v][p.pos]][p.row], vs = p.voices[v];
+        if (r.op === RELEASE) vs.phase = 2;
+        else if (r.op >= 2) {
+          if (r.ins >= 0) vs.ins = r.ins;
+          if (vs.ins >= 0) Object.assign(vs, { note: r.note, phase: 0, age: 0, arp: 0, tpos: 0, pw: c.ins[vs.ins].pw });
+        }
+      }
+      if (++p.row === ROWS) { p.row = 0; if (++p.pos === c.order[0].length) p.pos = 0; }
+      p.timer = c.speed;
+    }
+    if (music) p.timer--;
+    // each voice's registers, then its state moves on
+    const R = new Uint8Array(25);
+    let route = 0;
+    for (let v = 0; v < 3; v++) {
+      const vs = p.voices[v], b = 7 * v;
+      if (vs.ins < 0) continue;
+      const ins = c.ins[vs.ins];
+      let wave = ins.wave, note = vs.note + ins.arp[vs.arp];
+      if (ins.table.length) {
+        const [tw, tn] = ins.table[Math.min(vs.tpos, ins.table.length - 1)];
+        wave = tw;
+        note = tn & 0x80 ? tn & 0x7f : vs.note + ((tn ^ 0x40) - 0x40); // (a fixed note, or + n)
+      }
+      const f = FREQ[Math.max(0, Math.min(95, note))];
+      if (p.fx[v].sfx < 0) {
+        R[b] = f & 255; R[b + 1] = f >> 8;
+        R[b + 2] = vs.pw & 255; R[b + 3] = vs.pw >> 8;
+        R[b + 4] = wave | (vs.phase === 1 ? 1 : 0);
+        R[b + 5] = vs.phase === 0 ? 0 : ins.ad; R[b + 6] = vs.phase === 0 ? 0 : ins.sr;
+        if (ins.filter) route |= 1 << v;
+      }
+      if (vs.phase !== 0 && vs.tpos < 255) vs.tpos++;
+      if (vs.phase === 0) vs.phase = 1;
+      else if (vs.phase === 1 && ins.gate && vs.age + 1 >= ins.gate) vs.phase = 2;
+      if (vs.age < 255) vs.age++;
+      if (++vs.arp === ins.arp.length) vs.arp = 0;
+      vs.pw = (vs.pw + ins.pwSpeed) & 0x0fff;
+    }
+    // the effects, each on its voice
+    for (let v = 0; v < 3; v++) {
+      const f = p.fx[v];
+      if (f.sfx < 0) continue;
+      const e = c.effects[f.sfx], s = e.steps[f.step], b = 7 * v;
+      R[b] = f.freq & 255; R[b + 1] = f.freq >> 8;
+      R[b + 2] = s.pw & 255; R[b + 3] = s.pw >> 8;
+      R[b + 4] = s.ctrl; R[b + 5] = s.ad; R[b + 6] = s.sr;
+      f.freq = (f.freq + s.slide) & 0xffff;
+      if (--f.left === 0) {
+        if (++f.step === e.steps.length) f.sfx = -1;
+        else { const n = e.steps[f.step]; f.left = n.ticks; f.freq = n.freq; }
+      }
+    }
+    // the filter, and the volume
+    const cut = c.filter.cut[p.ft];
+    if (++p.ft === c.filter.cut.length) p.ft = 0;
+    R[21] = cut & 7; R[22] = cut >> 3;
+    R[23] = (c.filter.res << 4) | route;
+    R[24] = c.filter.mode | 0x0f;
+    return R;
+  }
+
+  const checksum = (sum, R) => {
+    for (const b of R) sum = ((((sum << 1) | (sum >> 15)) & 0xffff) + b) & 0xffff;
+    return sum;
+  };
+
+  return { ROWS, WAVE, FREQ, NOTHING, RELEASE, noteOf, compile, player, tick, checksum };
+});
+
+</script>
+<script>
+/*
+ * APEX SID: an emulation of the C64's sound chip, for hearing the games outside a C64 (the browser
+ * pages, WAV files). It plays the register image core/sound.js makes each frame (all 25 registers,
+ * written at once), so the music and effects sound as the C64's SID makes them, closely though not
+ * exactly (the C64 tests check the registers, not the sound):
+ *
+ *   - three voices, each a 24-bit phase accumulator adding its frequency every cycle (985248 a second,
+ *     PAL), giving a triangle, sawtooth, pulse (against the 12-bit pulse width) or noise (a 23-bit
+ *     shift register clocked by bit 19), and combinations of them as the bitwise AND (roughly); sync
+ *     and ring modulation from the voice before, the test bit
+ *   - an envelope per voice: attack, decay to the sustain level, release, at the SID's rates, decay and
+ *     release slowing as the level falls (its piecewise exponential), its rate counter never reset
+ *     (so the ADSR bug happens as on the chip); the gate starts and releases it
+ *   - the filter: a resonant state-variable filter (low, band and high pass, mixed by the mode bits)
+ *     over the voices routed to it, its cutoff following the 6581's curve; voice 3 can be cut from the
+ *     output; the master volume
+ *
+ * create(sampleRate) makes a chip; write(R) sets its 25 registers; render(out, at, n) adds n samples
+ * (-1..1) into out from at. Works in Node, in the browser (global APEXSID), and inside an
+ * AudioWorklet (APEXSID.source is this file's factory as text, to build one from).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.APEXSID = Object.assign(factory(), { source: '(' + factory.toString() + ')()' });
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const CLOCK = 985248;
+  // Cycles per envelope step for rates 0-15 (attack; decay and release use the same, slowed below).
+  const RATE = [9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251];
+  // Decay and release take 1, 2, 4, 8, 16 or 30 steps of the rate per level step as the level falls.
+  const slowdown = l => (l >= 0x5d ? 1 : l >= 0x36 ? 2 : l >= 0x1a ? 4 : l >= 0x0e ? 8 : l >= 0x06 ? 16 : 30);
+  const ATTACK = 0, DECAY = 1, RELEASE = 2;
+  // The output's scale: as loud as VICE's recordings of the same (test/sid-compare.js).
+  const LEVEL = 0.095;
+  // The 6581's filter cutoff in Hz for the 11-bit cutoff register, every $100 (roughly, as measured
+  // chips go): low and flat at first, then rising steeply. Between the points it is interpolated on a
+  // log scale.
+  const CUTOFF = [220, 230, 300, 520, 1000, 2200, 4500, 8000, 12000];
+  const cutoffHz = fc => {
+    const i = Math.min(7, fc >> 8), t = (fc & 255) / 256;
+    return CUTOFF[i] * (CUTOFF[i + 1] / CUTOFF[i]) ** t;
+  };
+
+  function create(sampleRate) {
+    const cps = CLOCK / sampleRate; // cycles a sample
+    const voices = [0, 1, 2].map(() => ({
+      acc: 0, freq: 0, pw: 0, ctrl: 0, ad: 0, sr: 0, noise: 0x7ffff8, gate: false,
+      env: 0, state: RELEASE, rc: 0, ec: 0, frac: 0,
+    }));
+    let cutoff = 0, res = 0, route = 0, mode = 0, volume = 0, voice3off = false;
+    let low = 0, band = 0; // the filter's state
+
+    function write(R) {
+      voices.forEach((v, k) => {
+        const b = 7 * k;
+        v.freq = R[b] | (R[b + 1] << 8);
+        v.pw = (R[b + 2] | (R[b + 3] << 8)) & 0x0fff;
+        const ctrl = R[b + 4], gate = !!(ctrl & 1);
+        if (gate && !v.gate) { v.state = ATTACK; v.ec = 0; }
+        if (!gate && v.gate) v.state = RELEASE;
+        v.gate = gate;
+        if (ctrl & 8) { v.acc = 0; v.noise = 0x7ffff8; } // the test bit: the oscillator held at 0
+        v.ctrl = ctrl;
+        v.ad = R[b + 5]; v.sr = R[b + 6];
+      });
+      cutoff = (R[21] & 7) | (R[22] << 3);
+      res = R[23] >> 4; route = R[23] & 7;
+      mode = R[24] & 0x70; volume = R[24] & 15; voice3off = !!(R[24] & 0x80);
+    }
+
+    // A voice's envelope moves on by `cycles`. As on the chip: a 15-bit rate counter counts cycles up
+    // to the rate's period and steps the envelope there; it is never reset, so a period shorter than
+    // the count so far waits for the counter to come round (up to 32768 cycles: the ADSR bug, which
+    // the driver's hard restart avoids). Decay and release step only every slowdown(level) of those.
+    function envelope(v, cycles) {
+      v.frac += cycles;
+      let c = Math.floor(v.frac);
+      v.frac -= c;
+      while (c > 0) {
+        const p = RATE[v.state === ATTACK ? v.ad >> 4 : v.state === DECAY ? v.ad & 15 : v.sr & 15];
+        const need = v.rc < p ? p - v.rc : 0x8000 - v.rc + p;
+        if (c < need) { v.rc = (v.rc + c) & 0x7fff; return; }
+        c -= need;
+        v.rc = 0;
+        if (v.state === ATTACK) {
+          if (++v.env >= 0xff) { v.env = 0xff; v.state = DECAY; v.ec = 0; }
+        } else if (!(v.state === DECAY && v.env <= (v.sr >> 4) * 17) && v.env > 0 && ++v.ec >= slowdown(v.env)) {
+          v.ec = 0;
+          v.env--;
+        }
+      }
+    }
+
+    // A voice's waveform, 12 bits, from its accumulator (and the voice before's, for ring modulation).
+    function wave(v, before) {
+      const c = v.ctrl, a = Math.floor(v.acc);
+      let out = 0xfff, any = false;
+      const and = w => { out &= w; any = true; };
+      if (c & 0x10) { // triangle: the top bit folds the ramp (or the voice before's, ring modulated)
+        const fold = (c & 4 ? (a ^ Math.floor(before.acc)) : a) & 0x800000;
+        and(((fold ? ~a : a) >> 11) & 0xfff);
+      }
+      if (c & 0x20) and(a >> 12);
+      if (c & 0x40) and((a >> 12) >= v.pw ? 0xfff : 0);
+      if (c & 0x80) { // noise: 8 bits of the shift register
+        const n = v.noise;
+        and((((n >> 20) & 1) << 11) | (((n >> 18) & 1) << 10) | (((n >> 14) & 1) << 9) | (((n >> 11) & 1) << 8) |
+          (((n >> 9) & 1) << 7) | (((n >> 5) & 1) << 6) | (((n >> 2) & 1) << 5) | ((n & 1) << 4));
+      }
+      return any ? out : 0x800;
+    }
+
+    function render(out, at, n) {
+      // the filter's coefficients for this stretch
+      const fc = cutoffHz(cutoff), f = 2 * Math.sin(Math.PI * Math.min(fc, sampleRate / 4) / sampleRate);
+      const q = 1.0 / (0.707 + res / 15 * 2.2);
+      for (let s = 0; s < n; s++) {
+        let direct = 0, filtered = 0;
+        for (let k = 0; k < 3; k++) {
+          const v = voices[k], before = voices[(k + 2) % 3];
+          if (!(v.ctrl & 8)) {
+            const step = v.freq * cps, old = v.acc, next = old + step;
+            // noise: its shift register clocks each time bit 19 of the accumulator goes up
+            if (v.ctrl & 0x80) for (let t = Math.floor(next / 0x100000) - Math.floor(old / 0x100000); t > 0; t--) {
+              const bit = ((v.noise >> 22) ^ (v.noise >> 17)) & 1;
+              v.noise = ((v.noise << 1) | bit) & 0x7fffff;
+            }
+            v.acc = next % 0x1000000;
+            // hard sync: the next voice restarts when this one's top bit rises
+            const after = voices[(k + 1) % 3];
+            if ((after.ctrl & 2) && Math.floor((next + 0x800000) / 0x1000000) > Math.floor((old + 0x800000) / 0x1000000)) after.acc = 0;
+          }
+          envelope(v, cps);
+          const o = ((wave(v, before) - 0x800) * v.env) / (0x800 * 0xff);
+          if (route & (1 << k)) filtered += o;
+          else if (!(k === 2 && voice3off)) direct += o;
+        }
+        // the state-variable filter, in two half steps a sample for stability
+        let hp = 0;
+        for (let r = 0; r < 2; r++) {
+          hp = filtered - low - q * band;
+          band += (f / 2) * hp;
+          low += (f / 2) * band;
+        }
+        const f2 = (mode & 0x10 ? low : 0) + (mode & 0x20 ? band : 0) + (mode & 0x40 ? hp : 0);
+        out[at + s] += ((direct + f2) * volume) / 15 * LEVEL;
+      }
+    }
+
+    return { write, render };
+  }
+
+  return { CLOCK, create };
+});
+
+</script>
+<script>
+// The Dreadnought's sound (core/sound.js): an original late-80s house track, and the shoot-'em-up's
+// effects. A four-on-the-floor kick with offbeat hats and claps on 2 and 4 (drum tables on voice 3),
+// an octave-jumping bass through a resonant low-pass whose cutoff sweeps (voice 1), and arpeggiated
+// chord stabs that give way to a hook (voice 2, which the effects borrow, so firing never stops the
+// beat). A minor, Am - F - G - E.
+//
+// Patterns are 32 rows (two bars of sixteenths): a note (with :instrument to change it), . (nothing:
+// the note goes on) or == (release). Speed 6 makes a row 6 frames: 125 beats a minute, a 31-second
+// loop.
+(function (root, song) {
+  if (typeof module === 'object' && module.exports) module.exports = song;
+  else (root.APEXSONGS = root.APEXSONGS || {}).shmup = song;
+})(typeof self !== 'undefined' ? self : this, {
+  speed: 6,
+  effectsVoice: 1,
+  filter: { res: 12, mode: 'low', min: 0x180, max: 0x5c0, period: 192 },
+  instruments: {
+    bass: { wave: 'saw', ad: 0x06, sr: 0x00, gate: 3, filter: true },
+    minor: { wave: 'pulse', ad: 0x05, sr: 0x00, pw: 0x500, pwSpeed: 40, arp: [0, 3, 7], gate: 3 },
+    major: { wave: 'pulse', ad: 0x05, sr: 0x00, pw: 0x500, pwSpeed: 40, arp: [0, 4, 7], gate: 3 },
+    hook: { wave: 'pulse', ad: 0x09, sr: 0x84, pw: 0x300, pwSpeed: 24, gate: 9 },
+    // drums: a pitch that falls fast (kick), noise (hat), noise then the kick's fall (clap)
+    kick: { ad: 0x00, sr: 0xf4, pw: 0x800, gate: 7,
+      table: [['pulse', 'F#3'], ['pulse', 'C#3'], ['tri', 'A-2'], ['tri', 'F-2'], ['tri', 'D-2'], ['tri', 'B-1'], ['tri', 'A-1']] },
+    hat: { ad: 0x02, sr: 0x00, gate: 2, table: [['noise', 'B-7']] },
+    clap: { ad: 0x00, sr: 0xf6, pw: 0x800, gate: 8,
+      table: [['noise', 'E-6'], ['noise', 'E-6'], ['noise', 'C-6'], ['pulse', 'C#3'], ['tri', 'A-2'], ['tri', 'F-2'], ['tri', 'D-2'], ['tri', 'B-1']] },
+  },
+  patterns: {
+    sil: '. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .',
+    // the bass: root, octave, root on the sixteenths
+    b1: 'A-1:bass . A-2 A-1 . A-1 A-2 . A-1 . A-2 A-1 . A-1 A-2 . F-1 . F-2 F-1 . F-1 F-2 . F-1 . F-2 F-1 . F-1 F-2 .',
+    b2: 'G-1:bass . G-2 G-1 . G-1 G-2 . G-1 . G-2 G-1 . G-1 G-2 . E-1 . E-2 E-1 . E-1 E-2 . E-1 . E-2 E-1 . E-1 E-2 .',
+    // chord stabs, off the beat
+    s1: '. . A-3:minor . . . A-3 . . A-3 . . A-3 . . . . . F-3:major . . . F-3 . . F-3 . . F-3 . . .',
+    s2: '. . G-3:major . . . G-3 . . G-3 . . G-3 . . . . . E-3:minor . . . E-3 . . E-3 . . E-3 . . .',
+    // the hook
+    h1: 'E-4:hook . . E-4 . . G-4 . A-4 . . G-4 . E-4 . . F-4 . . F-4 . . A-4 . C-5 . . A-4 . F-4 . .',
+    h2: 'D-4:hook . . D-4 . . G-4 . B-4 . . G-4 . D-4 . . E-4 . . E-4 . . G#4 . B-4 . . G#4 . E-4 . .',
+    // the drums: kick, hat, clap, hat on every beat; a clap roll to end the second
+    d1: 'C-1:kick . C-1:hat . C-1:clap . C-1:hat . C-1:kick . C-1:hat . C-1:clap . C-1:hat . C-1:kick . C-1:hat . C-1:clap . C-1:hat . C-1:kick . C-1:hat . C-1:clap . C-1:hat .',
+    d2: 'C-1:kick . C-1:hat . C-1:clap . C-1:hat . C-1:kick . C-1:hat . C-1:clap . C-1:hat . C-1:kick . C-1:hat . C-1:clap . C-1:hat . C-1:kick . C-1:clap . C-1:clap C-1:clap C-1:clap C-1:clap',
+  },
+  order: [
+    ['sil', 'b1', 'b1', 'b2', 'b1', 'b2', 'b1', 'b2'],
+    ['sil', 'sil', 's1', 's2', 's1', 'h2', 'h1', 's2'],
+    ['d1', 'd1', 'd1', 'd2', 'd1', 'd1', 'd1', 'd2'],
+  ],
+  // in priority order, lowest first
+  effects: {
+    shot: { priority: 0, steps: [
+      { wave: 'pulse', freq: 0x3000, slide: -0x300, ad: 0x00, sr: 0xa0, pw: 0x800, ticks: 5 },
+      { wave: 'pulse', gate: false, freq: 0x1800, ad: 0x00, sr: 0xa0, pw: 0x800, ticks: 1 },
+    ] },
+    enemyFire: { priority: 1, steps: [
+      { wave: 'tri', freq: 0x0c00, slide: 0x100, ad: 0x00, sr: 0xf0, ticks: 6 },
+      { wave: 'tri', gate: false, freq: 0x1200, ad: 0x00, sr: 0xf0, ticks: 1 },
+    ] },
+    hit: { priority: 2, steps: [
+      { wave: 'noise', freq: 0x4000, ad: 0x00, sr: 0xf0, ticks: 2 },
+      { wave: 'pulse', freq: 0x0800, ad: 0x00, sr: 0xf0, pw: 0x400, ticks: 2 },
+      { wave: 'pulse', gate: false, freq: 0x0800, ad: 0x00, sr: 0xf0, pw: 0x400, ticks: 1 },
+    ] },
+    explode: { priority: 3, steps: [
+      { wave: 'noise', freq: 0x1400, slide: -0x60, ad: 0x00, sr: 0xf9, ticks: 14 },
+      { wave: 'noise', gate: false, freq: 0x0900, slide: -0x20, ad: 0x00, sr: 0xf9, ticks: 10 },
+    ] },
+    death: { priority: 4, steps: [
+      { wave: 'noise', freq: 0x2000, slide: -0x50, ad: 0x00, sr: 0xfa, ticks: 40 },
+      { wave: 'noise', gate: false, freq: 0x0400, ad: 0x00, sr: 0xfa, ticks: 30 },
+    ] },
+  },
+});
+
+</script>
+<script>
+/*
+ * APEX audio for the browser pages: a game's sound, as the C64 makes it. Each tick the page tells it
+ * what the game did (the effects to start, whether the music plays); core/sound.js turns that into the
+ * SID's 25 registers, exactly as the C64's driver writes them, and core/sid.js plays them, in an
+ * AudioWorklet (built from APEXSID.source), or a ScriptProcessor where worklets can't run (pages opened
+ * from a file).
+ *
+ * Browsers start sound only after the player does something, so start() is called from the page's
+ * first key press, click or touch; until then the song still moves on, silently, so it is where it
+ * would be. M (the page's) mutes and unmutes.
+ *
+ *   const audio = APEXAUDIO.create(songDefinition)
+ *   audio.tick(['shot', ...], musicOn)   once a game tick (50 a second), the effects by name
+ *   audio.start()                         from a user gesture; audio.toggleMute()
+ *
+ * Works in the browser (global APEXAUDIO, needing APEXSOUND and APEXSID).
+ */
+(function (root, factory) {
+  root.APEXAUDIO = factory(root.APEXSOUND, root.APEXSID);
+})(typeof self !== 'undefined' ? self : this, function (S, SID) {
+  'use strict';
+
+  const FPS = 50;
+  // The worklet: a queue of register frames, each played for 1/50 s of samples. A few frames of slack
+  // absorb the page's uneven ticks; too many (the page ran ahead) and the oldest go; none for half a second
+  // (the page stopped, say hidden) and the chip falls silent rather than hold a note.
+  const WORKLET = `
+const APEXSID = ${SID.source};
+class ApexSid extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.sid = APEXSID.create(sampleRate);
+    this.queue = [];
+    this.left = 0;
+    this.starved = 0;
+    this.port.onmessage = e => { this.queue.push(e.data); if (this.queue.length > 8) this.queue.splice(0, this.queue.length - 3); };
+  }
+  process(inputs, outputs) {
+    const out = outputs[0][0];
+    out.fill(0);
+    for (let i = 0; i < out.length;) {
+      if (this.left <= 0) {
+        if (this.queue.length) { this.sid.write(this.queue.shift()); this.starved = 0; }
+        else if (++this.starved === 25) this.sid.write(new Array(25).fill(0)); // the page stopped: silence
+        this.left += sampleRate / ${FPS};
+      }
+      const n = Math.min(out.length - i, Math.ceil(this.left));
+      this.sid.render(out, i, n);
+      i += n;
+      this.left -= n;
+    }
+    for (let c = 1; c < outputs[0].length; c++) outputs[0][c].set(out);
+    return true;
+  }
+}
+registerProcessor('apex-sid', ApexSid);
+`;
+
+  function create(def) {
+    const c = S.compile(def), p = S.player(c);
+    let ctx = null, send = null, muted = false;
+
+    // The fallback: the same queue and chip on the page's own thread.
+    function scriptProcessor() {
+      const sid = SID.create(ctx.sampleRate), queue = [];
+      let left = 0, starved = 0;
+      const node = ctx.createScriptProcessor(2048, 0, 1);
+      node.onaudioprocess = e => {
+        const out = e.outputBuffer.getChannelData(0);
+        out.fill(0);
+        for (let i = 0; i < out.length;) {
+          if (left <= 0) {
+            if (queue.length) { sid.write(queue.shift()); starved = 0; } else if (++starved === 25) sid.write(new Array(25).fill(0));
+            left += ctx.sampleRate / FPS;
+          }
+          const n = Math.min(out.length - i, Math.ceil(left));
+          sid.render(out, i, n);
+          i += n;
+          left -= n;
+        }
+      };
+      node.connect(ctx.destination);
+      send = R => { queue.push(R); if (queue.length > 12) queue.splice(0, queue.length - 5); };
+    }
+
+    function start() {
+      if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+      const Ctx = globalThis.AudioContext || globalThis.webkitAudioContext;
+      if (!Ctx) return;
+      ctx = new Ctx();
+      if (ctx.audioWorklet && globalThis.isSecureContext) {
+        const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
+        ctx.audioWorklet.addModule(url).then(() => {
+          const node = new AudioWorkletNode(ctx, 'apex-sid', { numberOfInputs: 0, outputChannelCount: [2] });
+          node.connect(ctx.destination);
+          send = R => node.port.postMessage(R);
+        }).catch(scriptProcessor);
+      } else scriptProcessor();
+    }
+
+    function tick(effects = [], music = true) {
+      const ids = effects.map(n => c.effNames.indexOf(n)).filter(k => k >= 0);
+      const R = S.tick(c, p, ids, music);
+      if (!send) return;
+      if (muted) R[24] &= 0xf0; // the volume to 0
+      send(Array.from(R));
+    }
+
+    return { start, tick, toggleMute: () => { muted = !muted; return muted; }, get muted() { return muted; } };
+  }
+
+  return { create };
+});
+
+</script>
 <script>window.LEVEL_TEXT = "; Dreadnought\r\n; 120 rows of 20 tiles (16x16 pixels), the first row the end: played bottom to top, wrapping round.\r\n \r\n \r\n \r\n \r\n \r\n \r\n \r\n         d\r\n \r\n \r\n \r\n \r\n \r\n  s              s\r\n \r\n \r\n \r\n \r\n \r\n    d          d\r\n \r\n \r\n \r\n \r\n      ////////\r\n    ############\r\n   ##############\r\n  ################\r\n  ################\r\n  o#T##HHHHHH##T#o\r\n  ##|##HHHHHH##|##\r\n  #====HHHHHH====#\r\n  ##|##HHHHHH##|##\r\n  ##|##HHHHHH##|S#\r\n  ##|##HHHHHH##|##\r\n  oS|##########|#o\r\n  ##|##########|##\r\n  ##|####T#####|##\r\n  ##|##########|##\r\n  ##|##/    /##|##\r\n  #####/    /#####\r\n  o##T#/    /#T##o\r\n  #####/    /#####\r\n  #####/    /#####\r\n  #####/    /#####\r\n  #====/    /====#\r\n  #####/    /#####\r\n  o####/    /####o\r\n  #####/    /#####\r\n  ##T##/    /##T##\r\n  #####/    /#####\r\n  #####/ d  /#####\r\n  #####/    /#####\r\n  o####/    /####o\r\n  #OO##########OO#\r\n  #OO##########OO#\r\n  ################\r\n  #--------------#\r\n  #######T########\r\n  o##############o\r\n  ################\r\n  #==============#\r\n  #######OO#######\r\n  #######OO#######\r\n  ###T########T###\r\n  o##############o\r\n  ################\r\n  ################\r\n \r\n               d\r\n \r\n    s          s\r\n \r\n \r\n \r\n         d\r\n \r\n \r\n       ######\r\n      ########\r\n      ########\r\n     ##########\r\n     ##########\r\n     oT######To\r\n     #|######|#\r\n  d  #|######|#\r\n     #|######|#\r\n     o|##T###|o\r\n     #|######|#\r\n     #========#   s\r\n     ###HHHH###\r\n s   o##HHHH##o\r\n     ###HHHH###\r\n     ###HHHH###\r\n     ##########\r\n     o#T####T#o\r\n     ##########\r\n     ###====###\r\n     #OO####OO#\r\n     oOO####OOo\r\n     ##########\r\n      ########\r\n       //////\r\n        ////\r\n \r\n \r\n   s            s\r\n \r\n \r\n \r\n              d\r\n \r\n \r\n \r\n    d\r\n \r\n \r\n \r\n \r\n \r\n";</script>
 <script>
 // The APEX shoot-'em-up reference, playable: the same game and the same frames the C64 engine draws,
@@ -1333,6 +1871,11 @@
   const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');
   const image = ctx.createImageData(320, 200);
   const border = APEXSCII.PALETTE[APEXSHMUPVIEW.COLORS.border];
+
+  // The sound (web/audio.js), from the first key press, click or touch; M mutes.
+  const audio = APEXAUDIO.create(APEXSONGS.shmup);
+  for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, () => audio.start());
+  addEventListener('keydown', e => { if (e.code === 'KeyM') audio.toggleMute(); });
 
   // Input: keyboard, the touch pad and fire button, and the first gamepad, as joystick bits
   // (1 up, 2 down, 4 left, 8 right, 16 fire).
@@ -1387,6 +1930,7 @@
     let stepped = false;
     while (acc >= TICK) {
       APEXSHMUP.tick(level, game, keys | touch | fire | gamepad());
+      audio.tick(game.events, true);
       acc -= TICK;
       stepped = true;
     }

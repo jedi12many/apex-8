@@ -138,11 +138,34 @@
     if ([left, up].some(n => n && n.f === s.f && n.t === s.t && meets(n))) return 2;
     return s.f === 'R' && y & 1 ? 0 : 3;
   }
+  // Drawn tiles instead: a map can bring art (M.art), fat pixel grids for each look of tile, placed
+  // on the screen plane with each tile, so every character is cut from the drawn tiles under it.
+  //   floor, cracked: 16 x 16, the floor diamond, its top corner at the middle of the first row
+  //   wall, torch: { top: 16 x 16 (the same diamond, a wall's height up), left, right: 8 x 16 (the
+  //   faces, column across from the left as seen, row down from the top edge) }
+  // Rows are strings of '0'-'3' (other characters: 0). A floor pixel just below a wall's side is in
+  // its shadow (0), as with the textures.
+  function artShade(art, s, sx, sy, up) {
+    if (s.f === 'E') return 0;
+    if (s.f === 'G' && up && (up.f === 'L' || up.f === 'R')) return 0;
+    const [tx, ty] = s.t.split(',').map(Number);
+    const px = v => (v >= '0' && v <= '3' ? +v : 0);
+    const diamond = (rows, lift) => {
+      const c = Math.floor((sx - 16 * (tx - ty) + 16) / 2), r = Math.floor(sy - 8 * (tx + ty) + lift);
+      return px((rows[r] || '')[c]);
+    };
+    if (s.f === 'G') return diamond(art[s.look === 2 ? 'cracked' : 'floor'], 0);
+    const w = art[s.look === 4 ? 'torch' : 'wall'];
+    if (s.f === 'T') return diamond(w.top, WALL_H);
+    const c = Math.min(7, Math.floor(s.along * 8)), r = Math.min(15, Math.floor(WALL_H - s.h));
+    return px((s.f === 'L' ? w.left : w.right)[r][c]);
+  }
+
   // Half-lit: lit stone thinned to a checkerboard of fat pixels.
   const halfLit = (v, f, y) => (v === 3 && (f + y) & 1 ? 0 : v);
 
   // The character for a phase and pattern: 8 bytes, as itself and half-lit.
-  function draw(p, n) {
+  function draw(p, n, art) {
     const [ax, ay] = anchorOf(p, 0), lk = [n % 5, Math.floor(n / 5) % 5];
     const w = [Math.floor(n / 25) % 3, Math.floor(n / 75)].map(v => (v ? v + 2 : 1));
     const looks = [...lk, ...w];
@@ -150,7 +173,10 @@
     const s = [];
     for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) s.push(surface(look, ...sample(p, 0, f, y)));
     const v = [];
-    for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) v.push(shade(s[y * 4 + f], f, y, f ? s[y * 4 + f - 1] : null, y ? s[(y - 1) * 4 + f] : null));
+    for (let y = 0; y < 8; y++) for (let f = 0; f < 4; f++) {
+      const here = s[y * 4 + f], left = f ? s[y * 4 + f - 1] : null, up = y ? s[(y - 1) * 4 + f] : null;
+      v.push(art ? artShade(art, here, ...sample(p, 0, f, y), up) : shade(here, f, y, left, up));
+    }
     const bytes = half => Array.from({ length: 8 }, (_, y) => {
       let b = 0;
       for (let f = 0; f < 4; f++) b |= (half ? halfLit(v[y * 4 + f], f, y) : v[y * 4 + f]) << (6 - 2 * f);
@@ -174,7 +200,7 @@
     const chars = Array.from({ length: 256 }, () => new Uint8Array(8)), codes = new Int16Array(4 * PATTERNS).fill(-1);
     const byLook = new Map();
     for (const i of [...used].sort((a, b) => a - b)) {
-      const g = draw(Math.floor(i / PATTERNS), i % PATTERNS), key = g.full.join(',');
+      const g = draw(Math.floor(i / PATTERNS), i % PATTERNS, M.art), key = g.full.join(',');
       if (!byLook.has(key)) {
         const code = byLook.size;
         if (code >= 128) throw new Error(`${M.name}: more than 128 characters`);

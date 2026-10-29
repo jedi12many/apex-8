@@ -1,7 +1,7 @@
 /*
  * The C64 Crypt view: what the screen shows each frame of the game (core/crypt.js), exactly as the
- * engine is to show it. The dungeon is the iso view's (c64/iso/view.js), scrolled so the hero stays at
- * its centre; over it go the game's sprites, a status bar and the game's messages.
+ * engine is to show it. The dungeon is the iso view's (c64/iso/view.js), cut from the drawn tiles in
+ * tiles.js (withTiles(M) gives a map them), scrolled so the hero stays at its centre; over it go the game's sprites, a status bar and the game's messages.
  *
  * Sprites are multicolor, 12 fat pixels by 21 rows, sharing red ($D025) and white ($D026); each has
  * its own colour. The hero is an investigator in a hat and coat with a pistol, seen from the side,
@@ -16,13 +16,13 @@
  *
  * The status bar is the last 8 lines: hearts at the left, the score at the right.
  *
- * Works in Node and in the browser (global APEXCRYPTVIEW, needing APEXSCII, APEXISO, APEXISOVIEW and
- * APEXCRYPT).
+ * Works in Node and in the browser (global APEXCRYPTVIEW, needing APEXSCII, APEXISO, APEXISOVIEW,
+ * APEXCRYPT and APEXCRYPTTILES).
  */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('../../core/iso.js'), require('../iso/view.js'), require('../../core/crypt.js'));
-  else root.APEXCRYPTVIEW = factory(root.APEXISO, root.APEXISOVIEW, root.APEXCRYPT);
-})(typeof self !== 'undefined' ? self : this, function (ISO, IV, G) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('../../core/iso.js'), require('../iso/view.js'), require('../../core/crypt.js'), require('./tiles.js'));
+  else root.APEXCRYPTVIEW = factory(root.APEXISO, root.APEXISOVIEW, root.APEXCRYPT, root.APEXCRYPTTILES);
+})(typeof self !== 'undefined' ? self : this, function (ISO, IV, G, TILES) {
   'use strict';
 
   const SPRITE = { mc1: 2, mc2: 1 }; // red, white
@@ -160,7 +160,10 @@
 
   // ------------------------------------------------------------------ a frame
   const PAL = IV.PAL;
+  // A map with the crypt's drawn tiles (set once, before the iso view prepares its characters).
+  const withTiles = M => Object.assign(M, { art: M.art || TILES });
   function frame(M, g) {
+    withTiles(M);
     const out = new Uint8ClampedArray(320 * 200 * 4);
     const put = (x, y, c) => { if (x < 0 || x >= 320 || y < 0 || y >= 200) return; const i = (y * 320 + x) * 4; out[i] = c[0]; out[i + 1] = c[1]; out[i + 2] = c[2]; out[i + 3] = 255; };
     const sc = IV.background(M, g.hero, put);
@@ -201,5 +204,5 @@
     return { pixels: out, scroll: sc, sprites };
   }
 
-  return { SPRITE, COLOR, GAP, BAR_LINE, FRAMES, FRAME_NAMES, FONT, TEXT, lightStep, onScreen, objects, multiplex, frame };
+  return { SPRITE, COLOR, GAP, BAR_LINE, withTiles, FRAMES, FRAME_NAMES, FONT, TEXT, lightStep, onScreen, objects, multiplex, frame };
 });

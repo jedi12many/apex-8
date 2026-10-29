@@ -13,7 +13,7 @@ const pilot = require('./shmup-pilot.js');
 const args = process.argv.slice(2), secArg = args.indexOf('--seconds');
 const SECONDS = secArg >= 0 ? +args[secArg + 1] : 40;
 const level = G.parse(fs.readFileSync(path.join(__dirname, '..', 'levels', 'shmup', 's1.txt'), 'utf8'));
-const { inputs } = pilot.inputs(level, SECONDS * 50);
+const { inputs } = pilot.inputs(level, SECONDS * 50, 150); // (3 seconds of the title first)
 
 const PAL = APEXSCII.PALETTE.map(h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)));
 const FW = 384, FH = 272, frames = [];
@@ -35,4 +35,4 @@ fs.mkdirSync(path.dirname(out), { recursive: true });
 const ff = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${FW}x${FH}`, '-r', '25', '-i', '-',
   '-vf', 'scale=iw*2:ih*2:flags=neighbor', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', out], { input: Buffer.concat(frames), maxBuffer: 1 << 30 });
 if (ff.status) throw new Error('ffmpeg failed: ' + ff.stderr);
-console.log(`${path.relative(process.cwd(), out)}: ${frames.length} frames, ${(frames.length / 25).toFixed(1)} s; score ${game.score}, ships lost ${game.deaths}, at most ${most} sprites at once`);
+console.log(`${path.relative(process.cwd(), out)}: ${frames.length} frames, ${(frames.length / 25).toFixed(1)} s; score ${game.score}, ships lost ${game.deaths}, at most ${most} sprites at once (no sound: showcase/shmup-c64-video.js records the C64's)`);

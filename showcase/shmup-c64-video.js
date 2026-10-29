@@ -1,6 +1,8 @@
-// Records the C64 shoot-'em-up in VICE: the autopilot (showcase/shmup-pilot.js) flies the Dreadnought
-// through the engine's script input, with a screenshot of every second 50 Hz frame through VICE's
-// remote monitor, joined into a video. What you see is exactly what a C64 shows, at its real speed.
+// Records the C64 shoot-'em-up in VICE: the title for 3 seconds, then the autopilot
+// (showcase/shmup-pilot.js) flies the Dreadnought through the engine's script input, with a screenshot
+// of every second 50 Hz frame through VICE's remote monitor, joined into a video. A second run of the
+// same script records the SID, from the music's first sound, as the video's soundtrack. What you see
+// and hear is exactly what a C64 does, at its real speed.
 //
 //   node showcase/shmup-c64-video.js <path to VICE folder> [--seconds 40]
 //
@@ -20,7 +22,7 @@ if (!viceDir) { console.error('usage: node showcase/shmup-c64-video.js <VICE fol
 (async () => {
   const { exe } = findVice(viceDir);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-video-'));
-  build(dir, { script: runs(pilot.inputs(level, seconds * 50).inputs) });
+  build(dir, { script: runs(pilot.inputs(level, seconds * 50, 150).inputs) });
   const top = labels(path.join(dir, 'shmup.lbl')).irq_bottom.toString(16);
   const frames = path.join(dir, 'frames');
   fs.mkdirSync(frames);
@@ -52,11 +54,18 @@ if (!viceDir) { console.error('usage: node showcase/shmup-c64-video.js <VICE fol
     setTimeout(connect, 500);
   });
   vice.kill();
+  // the sound: the same program at its real speed, recorded, from its first sound (the music starts on
+  // the first frame)
+  const wav = path.join(dir, 'sound.wav');
+  spawnSync(exe, ['-default', '-sound', '-sounddev', 'dump', '-soundarg', path.join(dir, 'sid.dump'), '-soundrecdev', 'wav', '-soundrecarg', wav, '+confirmonexit',
+    '-autostartprgmode', '1', '-limitcycles', String(Math.round((seconds + 4) * 985248)), '-autostart', path.join(dir, 'shmup.prg')], { timeout: (seconds + 60) * 1000 });
   const out = path.join(__dirname, 'out', 'shmup-c64.mp4');
   fs.mkdirSync(path.dirname(out), { recursive: true });
-  const ff = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', '25', '-i', path.join(frames, 'f%05d.png'),
+  // (VICE's silent 'dump' sound device: the recorder needs a device running, and this one plays nothing)
+  const audio = fs.existsSync(wav) && fs.statSync(wav).size > 1000 ? ['-i', wav, '-af', 'silenceremove=start_periods=1:start_threshold=-60dB', '-c:a', 'aac', '-b:a', '160k', '-shortest'] : [];
+  const ff = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', '25', '-i', path.join(frames, 'f%05d.png'), ...audio,
     '-vf', 'scale=iw*2:ih*2:flags=neighbor', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', out]);
   if (ff.status) throw new Error('ffmpeg failed: ' + ff.stderr);
-  console.log(`${path.relative(process.cwd(), out)}: ${fs.readdirSync(frames).length} frames from VICE`);
+  console.log(`${path.relative(process.cwd(), out)}: ${fs.readdirSync(frames).length} frames from VICE${audio.length ? ', with its sound' : ' (no sound: VICE wrote no WAV)'}`);
   fs.rmSync(dir, { recursive: true, force: true });
 })().catch(e => { console.error(e.message); process.exit(1); });

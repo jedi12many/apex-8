@@ -10,7 +10,6 @@
   html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
   body { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; box-sizing: border-box; min-height: 100vh; touch-action: manipulation; }
   canvas { width: min(100%, 960px); aspect-ratio: 384 / 272; image-rendering: pixelated; background: #000; }
-  .status { font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
   .help { color: var(--dim); text-align: center; max-width: 960px; margin: 0; }
   .controls { display: none; width: min(100%, 480px); justify-content: space-between; align-items: center; }
   .pad { width: 144px; height: 144px; border-radius: 50%; background: var(--key); position: relative; user-select: none; -webkit-user-select: none; touch-action: none; }
@@ -22,9 +21,8 @@
 </head>
 <body>
 <canvas id="screen" width="384" height="272"></canvas>
-<div class="status" id="status">SCORE 0 · LOST 0</div>
 <div class="controls"><div class="pad" id="pad" aria-label="move"><div class="knob" id="knob"></div></div><button class="fire" id="fire" aria-label="fire">FIRE</button></div>
-<p class="help" id="help">Arrow keys or W / A / S / D to fly · Space, Ctrl or K to fire (hold for autofire) · R to restart · gamepad works too</p>
+<p class="help" id="help">Fire to start · arrow keys or W / A / S / D to fly · Space, Ctrl or K to fire (hold for autofire) · R for the title · gamepad works too</p>
 <script>
 /*
  * APEXSCII — PETSCII-style character sets for the Commodore 64, one per perspective:
@@ -715,9 +713,15 @@
  *   - positions are whole screen pixels, of each sprite's top-left corner; bullets are 1/16 pixel
  *   - one tick per 50 Hz frame; input is the joystick's bits: 1 up, 2 down, 4 left, 8 right, 16 fire
  *   - enemies: drones that snake down in columns of four, swoopers that dive, fire once and turn back,
- *     and ground turrets that ride the scrolling hull and fire aimed bullets
+ *     and ground turrets that ride the scrolling hull and fire aimed bullets (every 64 ticks, staggered
+ *     by their slot)
+ *   - a game: the title (the level scrolls by; fire, pressed from released, starts), play with 3
+ *     ships, and game over (OVER_FOR ticks, then the title again). The level never stops scrolling,
+ *     and a game starts wherever it is
+ *   - each tick lists what it heard in g.events, in order: 'shot', 'enemyFire', 'hit' (a turret
+ *     damaged), 'explode', 'death'; the sound plays them (sound/shmup.js)
  *
- * parse(text) reads a level; game(level) makes a game at its start; tick(level, g, input) plays one
+ * parse(text) reads a level; game(level) makes a game at its title; tick(level, g, input) plays one
  * frame.
  */
 (function (root, factory) {
@@ -732,6 +736,9 @@
   const SPACE = 0, PLATE = 1, VENT = 2, LAMP = 3, BASE = 4, DOME = 5, BLOCK = 6, PIPE_V = 7, PIPE_H = 8, HAZARD = 9;
   // Enemy slots' kinds.
   const FREE = 0, DRONE = 1, SWOOPER = 2, TURRET = 3, BOOM = 4;
+  // The game's modes.
+  const TITLE = 0, PLAY = 1, OVER = 2;
+  const LIVES = 3, OVER_FOR = 250;
   const SLOTS = { shots: 3, enemies: 12, bullets: 6 };
 
   // The ship: 2 pixels a frame in the 8 directions (by the joystick's bits), kept inside BOUNDS.
@@ -739,7 +746,7 @@
   const DIRS = [];
   DIRS[1] = [0, -SPEED]; DIRS[2] = [0, SPEED]; DIRS[4] = [-SPEED, 0]; DIRS[8] = [SPEED, 0];
   DIRS[5] = [-SPEED, -SPEED]; DIRS[9] = [SPEED, -SPEED]; DIRS[6] = [-SPEED, SPEED]; DIRS[10] = [SPEED, SPEED];
-  const BOUNDS = { x0: 8, x1: 288, y0: 24, y1: 172 };
+  const BOUNDS = { x0: 8, x1: 288, y0: 24, y1: 170 }; // (its lowest row just above the status bar)
   const START = { x: 148, y: 160 };
   const SHOT = { speed: 6, cool: 8 }; // a twin shot every 8 frames at most, 6 pixels a frame
   const DEAD_FOR = 64, INVULN = 120; // frames dead (the first 16 exploding), then frames untouchable
@@ -794,7 +801,8 @@
     return {
       camY: L.px - SCREEN_H, // the level line at the top of the screen
       t: 0,
-      player: { x: START.x, y: START.y, dead: 0, invuln: 0, cool: 0 },
+      mode: TITLE, lives: 0, over: 0, held: false, hi: 0, events: [],
+      player: { x: START.x, y: START.y, dead: 1, invuln: 0, cool: 0 }, // (dead: not in play)
       shots: Array.from({ length: SLOTS.shots }, () => ({ on: false, x: 0, y: 0 })),
       enemies: Array.from({ length: SLOTS.enemies }, () => ({ kind: FREE, x: 0, y: 0, bx: 0, vx: 0, vy: 0, t: 0, hp: 0, flash: 0, ground: false, phase: 0 })),
       bullets: Array.from({ length: SLOTS.bullets }, () => ({ on: false, x: 0, y: 0, vx: 0, vy: 0 })),
@@ -809,18 +817,35 @@
     const bx = e.x + 9, by = e.y + 7;
     const [vx, vy] = AIM[aim(p.x + 12 - (bx + 3), p.y + 11 - (by + 2))];
     Object.assign(b, { on: true, x: bx << 4, y: by << 4, vx, vy });
+    g.events.push('enemyFire');
   }
-  function explode(e) {
+  function explode(g, e) {
     Object.assign(e, { kind: BOOM, t: 0, flash: 0 });
+    g.events.push('explode');
   }
 
   function tick(L, g, input) {
     const p = g.player;
     g.t = (g.t + 1) & 0xffff;
+    g.events = [];
+
+    // the game: fire starts one from the title; game over ends in the title
+    const firing = !!(input & 16), pressed = firing && !g.held;
+    g.held = firing;
+    if (g.mode === TITLE && pressed) {
+      Object.assign(g, { mode: PLAY, score: 0, lives: LIVES });
+      Object.assign(p, { x: START.x, y: START.y, dead: 0, invuln: 0, cool: 0 });
+      for (const o of [...g.shots, ...g.bullets]) o.on = false;
+      for (const e of g.enemies) e.kind = FREE;
+    } else if (g.mode === OVER && --g.over === 0) {
+      g.mode = TITLE;
+      g.hi = Math.max(g.hi, g.score);
+    }
 
     // the ship, and its shots
     if (p.dead) {
-      if (--p.dead === 0) Object.assign(p, { x: START.x, y: START.y, invuln: INVULN, cool: 0 });
+      if (g.mode !== PLAY) { if (p.dead > 1) p.dead--; } // (it stays gone)
+      else if (--p.dead === 0) Object.assign(p, { x: START.x, y: START.y, invuln: INVULN, cool: 0 });
     } else {
       const d = DIRS[input & 15];
       if (d) {
@@ -833,11 +858,12 @@
     if (p.cool) p.cool--;
     if (!p.dead && input & 16 && !p.cool) {
       const s = g.shots.find(o => !o.on);
-      if (s) { Object.assign(s, { on: true, x: p.x, y: p.y - 8 }); p.cool = SHOT.cool; }
+      if (s) { Object.assign(s, { on: true, x: p.x, y: p.y - 8 }); p.cool = SHOT.cool; g.events.push('shot'); }
     }
 
     // the enemies
-    for (const e of g.enemies) {
+    for (let k = 0; k < g.enemies.length; k++) {
+      const e = g.enemies[k];
       if (!e.kind) continue;
       e.t++;
       switch (e.kind) {
@@ -856,7 +882,9 @@
         case TURRET:
           e.y++;
           if (e.flash) e.flash--;
-          if ((e.t & 63) === 31 && e.y >= 0 && e.y < 140) fire(g, e);
+          // every 64 ticks, each slot 8 ticks after the one before, so turrets that arrive together
+          // don't fire together
+          if (((e.t + 8 * k) & 63) === 31 && e.y >= 0 && e.y < 140) fire(g, e);
           if (e.y >= SCREEN_H) e.kind = FREE;
           break;
         case BOOM:
@@ -872,9 +900,10 @@
       if (x <= -6 || x >= 320 || y <= -6 || y >= SCREEN_H) b.on = false;
     }
 
-    // the level scrolls on a line, and the tile row now wholly above the screen's top lets in its spawns
+    // the level scrolls on a line, and in play the tile row now wholly above the screen's top lets in
+    // its spawns
     g.camY = (g.camY + L.px - 1) % L.px;
-    if ((g.camY & 15) === 15) {
+    if (g.mode === PLAY && (g.camY & 15) === 15) {
       for (const s of L.spawns[g.camY >> 4]) {
         if (s.kind === DRONE) {
           for (let k = 0; k < 4; k++) {
@@ -898,8 +927,8 @@
       for (const e of g.enemies) {
         if (e.kind < DRONE || e.kind > TURRET || e.y <= -21 || !hits(s.x, s.y, BOX.shot, e.x, e.y, BOX[e.kind])) continue;
         s.on = false;
-        if (--e.hp) e.flash = 3;
-        else { g.score += SCORE[e.kind]; explode(e); }
+        if (--e.hp) { e.flash = 3; g.events.push('hit'); }
+        else { g.score += SCORE[e.kind]; explode(g, e); }
         break;
       }
     }
@@ -907,14 +936,18 @@
     if (!p.dead && !p.invuln) {
       let hit = false;
       for (const b of g.bullets) if (b.on && hits(p.x, p.y, BOX.player, b.x >> 4, b.y >> 4, BOX.bullet)) { b.on = false; hit = true; }
-      for (const e of g.enemies) if ((e.kind === DRONE || e.kind === SWOOPER) && hits(p.x, p.y, BOX.player, e.x, e.y, BOX[e.kind])) { explode(e); hit = true; }
-      if (hit) { p.dead = DEAD_FOR; g.deaths++; }
+      for (const e of g.enemies) if ((e.kind === DRONE || e.kind === SWOOPER) && hits(p.x, p.y, BOX.player, e.x, e.y, BOX[e.kind])) { explode(g, e); hit = true; }
+      if (hit) {
+        p.dead = DEAD_FOR; g.deaths++;
+        g.events.push('death');
+        if (--g.lives === 0) { g.mode = OVER; g.over = OVER_FOR; }
+      }
     }
     return g;
   }
 
   return { TILE, WIDTH, SCREEN_H, SPACE, PLATE, VENT, LAMP, BASE, DOME, BLOCK, PIPE_V, PIPE_H, HAZARD, FREE, DRONE, SWOOPER, TURRET, BOOM, SLOTS,
-    DIRS, BOUNDS, START, SHOT, DEAD_FOR, INVULN, SCORE, HP, BOX, SWAY, AIM, aim, parse, tileAt, game, tick };
+    TITLE, PLAY, OVER, LIVES, OVER_FOR, DIRS, BOUNDS, START, SHOT, DEAD_FOR, INVULN, SCORE, HP, BOX, SWAY, AIM, aim, parse, tileAt, game, tick };
 });
 
 </script>
@@ -923,7 +956,8 @@
  * The C64 shoot-'em-up view: what the screen shows each frame, exactly as the engine is to show it.
  *
  * Multicolor characters, 40 columns by 24 rows, scrolled down a line a frame by the VIC's vertical fine
- * scroll. The level's tiles are 2x2 characters, drawn from each tile and its neighbours: armour panels
+ * scroll, all but the last 8 lines: a status bar that stays put (see barCodes). The level's tiles are
+ * 2x2 characters, drawn from each tile and its neighbours: armour panels
  * with lit and shaded rims, seams and rivets, some recessed; vents, lamps, pipes, hazard stripes, domes,
  * raised blocks of superstructure with lit windows along their fronts, turret bases, and the hull's
  * front face hanging below it over space. Behind it, two layers of stars drift slower than the hull,
@@ -1064,6 +1098,8 @@
       rows[R * 40 + c] = byLook.get(key);
     }
     for (let i = 0; i < STAR_CODES; i++) chars[STAR + i] = starGlyph(STAR + i, 0);
+    if (byLook.size > BAR) throw new Error(`${L.name}: more than ${BAR} characters`);
+    BAR_CHARS.forEach((ch, k) => { chars[BAR + k] = barGlyph(ch); });
     const P = { chars, count: byLook.size, rows };
     prepared.set(L, P);
     return P;
@@ -1121,8 +1157,71 @@
   }
   const COLOR = { ship: 14, shot: 7, [G.DRONE]: 10, [G.SWOOPER]: 5, [G.TURRET]: 2, flash: 1, bullet: 7, boom: 8 };
 
-  // What the game shows as sprites, in order: the ship, its shots, the enemies, their bullets.
-  // [{ x, y, frame, color }]
+
+  // ------------------------------------------------------------------ text
+  // A chunky font for the score and the titles: 3 x 5 fat pixels a character, drawn in the sprite's
+  // own colour with a dark grey shadow down and right. A character takes 4 fat pixels across (one
+  // byte of a sprite row), so a sprite holds 3; titles are drawn twice as tall.
+  const FONT = {
+    '0': '111 101 101 101 111', '1': '010 110 010 010 111', '2': '111 001 111 100 111', '3': '111 001 111 001 111',
+    '4': '101 101 111 001 001', '5': '111 100 111 001 111', '6': '111 100 111 101 111', '7': '111 001 010 010 010',
+    '8': '111 101 111 101 111', '9': '111 101 111 001 111', A: '010 101 111 101 101', D: '110 101 101 101 110',
+    E: '111 100 110 100 111', F: '111 100 110 100 100', G: '111 100 101 101 111', H: '101 101 111 101 101',
+    I: '111 010 010 010 111', M: '101 111 111 101 101', N: '110 101 101 101 101', O: '010 101 101 101 010',
+    P: '110 101 110 100 100', R: '110 101 110 101 101', S: '011 100 010 001 110', T: '111 010 010 010 010',
+    U: '101 101 101 101 111', V: '101 101 101 101 010', ' ': '000 000 000 000 000', '^': '010 010 111 111 101',
+  };
+  // A sprite image (21 rows of 12 fat pixels) of up to 3 characters, `tall` times as high.
+  function textImage(text, tall = 1) {
+    const rows = Array.from({ length: 21 }, () => new Array(12).fill(0));
+    [...text].forEach((ch, k) => {
+      const g = FONT[ch].split(' ');
+      for (let y = 0; y < 5 * tall; y++) for (let x = 0; x < 3; x++) if (g[Math.floor(y / tall)][x] === '1') {
+        rows[y][4 * k + x] = 2;
+        if (!(x < 2 && g[Math.floor((y + 1) / tall)] && g[Math.floor(y / tall)][x + 1] === '1')) { /* shadow below */ }
+      }
+    });
+    // shadows: down and right of each lit pixel, where nothing is lit
+    const lit = rows.map(r => r.map(v => v === 2));
+    for (let y = 0; y < 20; y++) for (let x = 0; x < 11; x++) if (lit[y][x] && !lit[y + 1][x + 1]) rows[y + 1][x + 1] = 3;
+    return rows;
+  }
+  const digits = (v, n) => String(v % 10 ** n).padStart(n, '0');
+  // ------------------------------------------------------------------ the status bar
+  // The last 8 lines of the screen (display lines 188-195) are a row of characters that doesn't
+  // scroll: a raster split makes the VIC start a new character row there whatever the fine scroll.
+  // It shows the score and the ships left in play and at game over, and the high score on the title,
+  // in the same chunky font as the titles: each character's 3 x 5 fat pixels in white (colour RAM),
+  // a dark grey shadow ($D022) down and right, a blank line above.
+  const BAR_LINE = 188;
+  const BAR_CHARS = [' ', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '^', 'H', 'I'];
+  const BAR = STAR - BAR_CHARS.length; // their codes
+  function barGlyph(ch) {
+    const g = FONT[ch].split(' '), px = Array.from({ length: 8 }, () => new Array(4).fill(0));
+    for (let y = 0; y < 5; y++) for (let x = 0; x < 3; x++) if (g[y][x] === '1') px[y + 1][x] = 3;
+    for (let y = 1; y < 7; y++) for (let x = 0; x < 3; x++) if (px[y][x] === 3 && px[y + 1][x + 1] !== 3) px[y + 1][x + 1] = 1;
+    return Uint8Array.from(px.map(r => (r[0] << 6) | (r[1] << 4) | (r[2] << 2) | r[3]));
+  }
+  // The bar's 40 character codes: the score at columns 1-6 and a ship per ship left at 36-38, or on
+  // the title HI and the high score in the middle.
+  const SCORE_COL = 1, SHIPS_COL = 36, HI_COL = 15;
+  function barCodes(g) {
+    const t = new Array(40).fill(' ');
+    const put = (col, text) => [...text].forEach((ch, k) => { t[col + k] = ch; });
+    if (g.mode === G.TITLE) put(HI_COL, 'HI ' + digits(g.hi, 6));
+    else { put(SCORE_COL, digits(g.score, 6)); put(SHIPS_COL, '^'.repeat(g.lives)); }
+    return t.map(ch => BAR + BAR_CHARS.indexOf(ch));
+  }
+
+  // What the game shows in words: per mode, [text, x, y, colour, tall].
+  const TEXT = {
+    title: [['DRE', 112, 70, 7, 2], ['ADN', 136, 70, 7, 2], ['OUG', 160, 70, 7, 2], ['HT ', 184, 70, 7, 2]],
+    press: [['PRE', 112, 110, 1, 1], ['SS ', 136, 110, 1, 1], ['FIR', 160, 110, 1, 1], ['E  ', 184, 110, 1, 1]],
+    over: [['GAM', 124, 88, 10, 2], ['E O', 148, 88, 10, 2], ['VER', 172, 88, 10, 2]],
+  };
+
+  // What the game shows as sprites, in order: the ship, its shots, the enemies, their bullets, then
+  // the words: the title (PRESS FIRE blinking) or GAME OVER. [{ x, y, frame or image, color }]
   function objects(g) {
     const out = [], p = g.player;
     if (!p.dead) {
@@ -1136,6 +1235,11 @@
       out.push({ x: e.x, y: e.y, frame, color: e.flash ? COLOR.flash : COLOR[e.kind] });
     }
     for (const b of g.bullets) if (b.on) out.push({ x: b.x >> 4, y: b.y >> 4, frame: 'bullet', color: COLOR.bullet });
+    const words = ([text, x, y, color, tall]) => out.push({ x, y, image: textImage(text, tall), color });
+    if (g.mode === G.TITLE) {
+      TEXT.title.forEach(words);
+      if (!(g.t & 16)) TEXT.press.forEach(words);
+    } else if (g.mode === G.OVER) TEXT.over.forEach(words);
     return out;
   }
 
@@ -1166,15 +1270,19 @@
         const code = P.rows[row * 40 + c], ch = code >= STAR ? starGlyph(code, g.t) : P.chars[code];
         for (let y = 0; y < 8; y++) {
           const Y = 8 * r + y + sc.ys - 3;
-          if (Y < 0 || Y >= 200) continue;
+          if (Y < 0 || Y >= BAR_LINE) continue;
           for (let x = 0; x < 8; x++) put(8 * c + x, Y, PAL[cols[(ch[y] >> (6 - 2 * (x >> 1))) & 3]]);
         }
       }
     }
+    barCodes(g).forEach((code, c) => {
+      const ch = P.chars[code];
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) put(8 * c + x, BAR_LINE + y, PAL[cols[(ch[y] >> (6 - 2 * (x >> 1))) & 3]]);
+    });
     // sprites, the highest hardware sprite first so the lowest ends up in front
     const sprites = multiplex(objects(g));
     for (const s of [...sprites].sort((a, b) => b.slot - a.slot)) {
-      const f = FRAMES[s.frame], scols = [null, SPRITE.mc1, s.color, SPRITE.mc2];
+      const f = s.image || FRAMES[s.frame], scols = [null, SPRITE.mc1, s.color, SPRITE.mc2];
       for (let r = 0; r < 21; r++) for (let c = 0; c < 12; c++) {
         const v = f[r][c];
         if (!v) continue;
@@ -1188,11 +1296,11 @@
     return { pixels: out, scroll: sc, sprites };
   }
 
-  return { COLORS, GAP, SPRITE, FRAME_NAMES, FRAMES, COLOR, STAR, STAR_CODES, NEAR, FAR, tilePixel, starCode, starOffsets, starGlyph, prepare, scroll, objects, multiplex, frame };
+  return { COLORS, GAP, SPRITE, FRAME_NAMES, FRAMES, COLOR, FONT, textImage, TEXT, BAR_LINE, BAR_CHARS, BAR, barGlyph, barCodes, SCORE_COL, SHIPS_COL, HI_COL, STAR, STAR_CODES, NEAR, FAR, tilePixel, starCode, starOffsets, starGlyph, prepare, scroll, objects, multiplex, frame };
 });
 
 </script>
-<script>window.LEVEL_TEXT = "; Dreadnought\n; 120 rows of 20 tiles (16x16 pixels), the first row the end: played bottom to top, wrapping round.\n \n \n \n \n \n \n \n         d\n \n \n \n \n \n  s              s\n \n \n \n \n \n    d          d\n \n \n \n \n      ////////\n    ############\n   ##############\n  ################\n  ################\n  o#T##HHHHHH##T#o\n  ##|##HHHHHH##|##\n  #====HHHHHH====#\n  ##|##HHHHHH##|##\n  ##|##HHHHHH##|S#\n  ##|##HHHHHH##|##\n  oS|##########|#o\n  ##|##########|##\n  ##|####T#####|##\n  ##|##########|##\n  ##|##/    /##|##\n  #####/    /#####\n  o##T#/    /#T##o\n  #####/    /#####\n  #####/    /#####\n  #####/    /#####\n  #====/    /====#\n  #####/    /#####\n  o####/    /####o\n  #####/    /#####\n  ##T##/    /##T##\n  #####/    /#####\n  #####/ d  /#####\n  #####/    /#####\n  o####/    /####o\n  #OO##########OO#\n  #OO##########OO#\n  ################\n  #--------------#\n  #######T########\n  o##############o\n  ################\n  #==============#\n  #######OO#######\n  #######OO#######\n  ###T########T###\n  o##############o\n  ################\n  ################\n \n               d\n \n    s          s\n \n \n \n         d\n \n \n       ######\n      ########\n      ########\n     ##########\n     ##########\n     oT######To\n     #|######|#\n  d  #|######|#\n     #|######|#\n     o|##T###|o\n     #|######|#\n     #========#   s\n     ###HHHH###\n s   o##HHHH##o\n     ###HHHH###\n     ###HHHH###\n     ##########\n     o#T####T#o\n     ##########\n     ###====###\n     #OO####OO#\n     oOO####OOo\n     ##########\n      ########\n       //////\n        ////\n \n \n   s            s\n \n \n \n              d\n \n \n \n    d\n \n \n \n \n \n";</script>
+<script>window.LEVEL_TEXT = "; Dreadnought\r\n; 120 rows of 20 tiles (16x16 pixels), the first row the end: played bottom to top, wrapping round.\r\n \r\n \r\n \r\n \r\n \r\n \r\n \r\n         d\r\n \r\n \r\n \r\n \r\n \r\n  s              s\r\n \r\n \r\n \r\n \r\n \r\n    d          d\r\n \r\n \r\n \r\n \r\n      ////////\r\n    ############\r\n   ##############\r\n  ################\r\n  ################\r\n  o#T##HHHHHH##T#o\r\n  ##|##HHHHHH##|##\r\n  #====HHHHHH====#\r\n  ##|##HHHHHH##|##\r\n  ##|##HHHHHH##|S#\r\n  ##|##HHHHHH##|##\r\n  oS|##########|#o\r\n  ##|##########|##\r\n  ##|####T#####|##\r\n  ##|##########|##\r\n  ##|##/    /##|##\r\n  #####/    /#####\r\n  o##T#/    /#T##o\r\n  #####/    /#####\r\n  #####/    /#####\r\n  #####/    /#####\r\n  #====/    /====#\r\n  #####/    /#####\r\n  o####/    /####o\r\n  #####/    /#####\r\n  ##T##/    /##T##\r\n  #####/    /#####\r\n  #####/ d  /#####\r\n  #####/    /#####\r\n  o####/    /####o\r\n  #OO##########OO#\r\n  #OO##########OO#\r\n  ################\r\n  #--------------#\r\n  #######T########\r\n  o##############o\r\n  ################\r\n  #==============#\r\n  #######OO#######\r\n  #######OO#######\r\n  ###T########T###\r\n  o##############o\r\n  ################\r\n  ################\r\n \r\n               d\r\n \r\n    s          s\r\n \r\n \r\n \r\n         d\r\n \r\n \r\n       ######\r\n      ########\r\n      ########\r\n     ##########\r\n     ##########\r\n     oT######To\r\n     #|######|#\r\n  d  #|######|#\r\n     #|######|#\r\n     o|##T###|o\r\n     #|######|#\r\n     #========#   s\r\n     ###HHHH###\r\n s   o##HHHH##o\r\n     ###HHHH###\r\n     ###HHHH###\r\n     ##########\r\n     o#T####T#o\r\n     ##########\r\n     ###====###\r\n     #OO####OO#\r\n     oOO####OOo\r\n     ##########\r\n      ########\r\n       //////\r\n        ////\r\n \r\n \r\n   s            s\r\n \r\n \r\n \r\n              d\r\n \r\n \r\n \r\n    d\r\n \r\n \r\n \r\n \r\n \r\n";</script>
 <script>
 // The APEX shoot-'em-up reference, playable: the same game and the same frames the C64 engine draws,
 // at a fixed 50 ticks a second, inside a C64-sized border.
@@ -1203,7 +1311,6 @@
   const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d');
   const image = ctx.createImageData(320, 200);
   const border = APEXSCII.PALETTE[APEXSHMUPVIEW.COLORS.border];
-  const status = document.getElementById('status');
 
   // Input: keyboard, the touch pad and fire button, and the first gamepad, as joystick bits
   // (1 up, 2 down, 4 left, 8 right, 16 fire).
@@ -1247,7 +1354,6 @@
     ctx.fillStyle = border;
     ctx.fillRect(0, 0, 384, 272);
     ctx.putImageData(image, 32, 36);
-    status.textContent = `SCORE ${game.score} · LOST ${game.deaths}`;
   }
 
   // Fixed 50 Hz ticks; the screen shows the latest.

@@ -14,9 +14,11 @@
 ; frame and leave it for the bottom-of-frame IRQ to show.
 ;
 ; Controls: joystick in port 2 (fire or up to jump), or A / D to run and W, Z or Space to jump;
-; R restarts. Assemble with c64/side/build.js.
+; R restarts. Assemble with c64/side/build.js. The machine set-up, scripts and timing come from the kit
+; (c64/kit/kit.inc).
 
 .include "gen.inc"
+.include "kit.inc"
 
 SCREEN_A = $0400
 SCREEN_B = $3000
@@ -79,11 +81,6 @@ xs2:     .res 1
 shift:   .res 1             ; the forest's shift as showing
 ready:   .res 1             ; 1: the next frame is worked out (p_*)
 applied: .res 1             ; 1: the bottom IRQ showed it
-counting: .res 1            ; 1 while missed frames count
-missed:  .res 2             ; frames that showed the same picture again because the next wasn't ready
-maxcyc:  .res 2             ; the most cycles from the bottom of a frame to the next frame being ready
-sptr:    .res 2             ; SCRIPT builds: the next (input, ticks) pair
-scount:  .res 1
 p_d018:  .res 1             ; the next frame
 p_xs0:   .res 1
 p_xs1:   .res 1
@@ -103,35 +100,9 @@ crs_far:   .res 2           ; per screen: the first column each band is drawn fr
 crs_hills: .res 2
 crs_level: .res 2
 
-.segment "LOADADDR"
-    .word $0801
-
-.segment "EXEHDR"           ; 10 SYS2061
-    .word @next, 10
-    .byte $9e, "2061", 0
-@next:
-    .word 0
-
 .segment "CODE"
 start:
-    sei
-    lda #$35                ; RAM in place of BASIC and the KERNAL; I/O stays
-    sta $01
-    lda #$7f                ; no CIA interrupts
-    sta $dc0d
-    sta $dd0d
-    lda $dc0d
-    lda $dd0d
-    lda #<nmi
-    sta $fffa
-    lda #>nmi
-    sta $fffb
-    lda #<irq_bottom
-    sta $fffe
-    lda #>irq_bottom
-    sta $ffff
-    lda #$0b                ; screen off while setting up
-    sta $d011
+    KIT_INIT irq_bottom
 
     lda #COL_BORDER
     sta $d020
@@ -173,18 +144,8 @@ start:
     sta $d026
     lda #SPR_COLOR
     sta $d027
-    ; CIA 1 timer A runs freely from each frame's bottom, timing the main loop
-    lda #$ff
-    sta $dc04
-    sta $dc05
-
+    ; (CIA 1 timer A runs freely from each frame's bottom, timing the main loop)
     lda #0
-    sta counting
-    sta missed
-    sta missed+1
-    sta maxcyc
-    sta maxcyc+1
-    sta scount
     sta cam
     sta cam+1
     lda #$ff
@@ -197,12 +158,7 @@ start:
     bpl :-
     lda #1                  ; the first frame goes to screen A
     sta cur
-.ifdef SCRIPT
-    lda #<SCRIPT_DATA
-    sta sptr
-    lda #>SCRIPT_DATA
-    sta sptr+1
-.endif
+    KIT_SCRIPT_START
     jsr reset_player
     jsr follow
     jsr view
@@ -214,8 +170,7 @@ start:
     lda #IRQ_BOTTOM + 2     ; start just after the bottom of a frame, so the first frame has a whole
 :   cmp $d012               ; frame's time like every other
     bne :-
-    lda #%00010001          ; and time it from there (the KERNAL left the timer on its own latch)
-    sta $dc0e
+    KIT_TIMER_START         ; and time it from there
     lda #IRQ_BOTTOM
     sta $d012
     lda #$1b                ; screen on, 25 rows, raster line bit 8 clear
@@ -232,49 +187,19 @@ main:
     lda #0
     sta applied
     jsr input
-    bcs script_done
-    jsr tick
+    bcc :+
+    jmp kit_park
+:   jsr tick
     jsr follow
     jsr view
     jmp main
 
-; SCRIPT builds stop here when the script ends; the last frame stays on the screen.
-script_done:
-    lda #0
-    sta counting
-script_park:
-    jmp script_park
-
-nmi:
-    rti
 
 ; ------------------------------------------------------------------ controls
 ; inp from the joystick in port 2 and the keyboard; C set when a SCRIPT build's script has ended.
 input:
 .ifdef SCRIPT
-    ldy #1                  ; SCRIPT builds: input sptr[0] for sptr[1] ticks, pairs until a 0 count
-    lda (sptr),y
-    bne :+
-    sec
-    rts
-:   dey
-    lda (sptr),y
-    sta inp
-    inc scount
-    lda scount
-    iny
-    cmp (sptr),y
-    bne :+
-    lda #0
-    sta scount
-    lda sptr
-    clc
-    adc #2
-    sta sptr
-    bcc :+
-    inc sptr+1
-:   clc
-    rts
+    jmp kit_script
 .else
     lda #0
     sta inp
@@ -1001,18 +926,13 @@ irq_bottom:
     sta $d022
     lda #FAR_MC2
     sta $d023
-    lda #%00010001          ; restart the frame timer
-    sta $dc0e
+    KIT_TIMER_START         ; restart the frame timer
     lda ready
     beq @late
     jsr apply
     jmp @scroll
 @late:
-    lda counting
-    beq @scroll
-    inc missed
-    bne @scroll
-    inc missed+1
+    KIT_LATE
 @scroll:
     lda xs0                 ; (the level's scroll is in $D016 until now)
     sta $d016
@@ -1125,10 +1045,6 @@ SOLIDHI:
 .repeat LEVEL_H, I
     .byte >(SOLID + I * 128)
 .endrepeat
-.ifdef SCRIPT
-SCRIPT_DATA:
-.include "script.inc"
-.endif
 
 .segment "SPRITES"
     .incbin "sprites.bin"

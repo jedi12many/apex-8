@@ -241,11 +241,9 @@
 
   // ------------------------------------------------------------------ a frame
   const PAL = APEXSCII.PALETTE.map(hx => [1, 3, 5].map(i => parseInt(hx.substr(i, 2), 16)));
-  // What the screen shows: { pixels (320x200 RGBA, the border drawn), scroll }.
-  function frame(M, h) {
-    const P = prepare(M), out = new Uint8ClampedArray(320 * 200 * 4);
-    const put = (x, y, c) => { const i = (y * 320 + x) * 4; out[i] = c[0]; out[i + 1] = c[1]; out[i + 2] = c[2]; out[i + 3] = 255; };
-    const sc = scroll(h);
+  // The dungeon around the hero h, lit, through put(x, y, rgb); returns the scroll.
+  function background(M, h, put) {
+    const P = prepare(M), sc = scroll(h);
     for (let r = 0; r < 25; r++) for (let c = 0; c < 39; c++) {
       const g = P.chars[P.codeAt(sc.cX + c, sc.cY + r) | (LIGHT_HALF[r * 40 + c] << 7)];
       const cols = [COLORS.bg, COLORS.mc1, COLORS.mc2, LIGHT_RAM[r * 40 + c]];
@@ -258,6 +256,13 @@
         }
       }
     }
+    return sc;
+  }
+  // What the screen shows: { pixels (320x200 RGBA, the border drawn), scroll }.
+  function frame(M, h) {
+    const out = new Uint8ClampedArray(320 * 200 * 4);
+    const put = (x, y, c) => { const i = (y * 320 + x) * 4; out[i] = c[0]; out[i + 1] = c[1]; out[i + 2] = c[2]; out[i + 3] = 255; };
+    const sc = background(M, h, put);
     // the hero: feet at HERO, centred across
     const f = FRAMES[spriteFrame(h)], scols = [null, SPRITE.mc1, SPRITE.color, SPRITE.mc2];
     for (let r = 0; r < 21; r++) for (let c = 0; c < 12; c++) {
@@ -269,5 +274,5 @@
   }
 
   return { WALL_H, COLS, ROWS, HERO, COLORS, LIGHT, LIGHT_RAM, LIGHT_HALF, REL, PATTERNS, lookAt,
-    phaseOf, anchorOf, patternOf, surface, prepare, scroll, SPRITE, FRAMES, spriteFrame, frame };
+    phaseOf, anchorOf, patternOf, surface, prepare, scroll, SPRITE, FRAMES, spriteFrame, PAL, background, frame };
 });

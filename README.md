@@ -423,11 +423,11 @@ Bullets aim at one of 16 directions, chosen by integer comparisons. A hit costs 
 | | PAL | NTSC |
 |---|---|---|
 | Sprites set up late, and frames lost any other way | 0 | 0 |
-| Frames late in the autopilot's run (2,400 ticks) | 0 | 18 (0.75%) |
-| Frames late in the sweep through a whole game (2,400 ticks) | 0 | 0 |
-| Slowest frame's own work (before copying ahead) | 75% of a frame | 89% |
+| Frames late in the autopilot's run (2,400 ticks) | 0 | 21 (0.9%) |
+| Frames late in the sweep through a whole game (2,400 ticks) | 0 | 3 (0.1%) |
+| Slowest frame's own work (before copying ahead) | 76% of a frame | 90% |
 
-On PAL, the machine it's made for, the whole game is never late. NTSC frames are 13% shorter, and in the autopilot's busiest stretch a frame there is shown twice now and then; the NTSC timing test reports that as a failure.
+On PAL, the machine it's made for, the whole game is never late. NTSC frames are 13% shorter, and in the busiest stretches a frame there is shown twice now and then (a little more since the SID driver plays effects on every voice); the NTSC timing test reports that as a failure.
 
 The timing test also times each whole script with VICE's stopwatch, so a frame lost any other way, such as an IRQ chain that misses the bottom of a frame, would show up too.
 
@@ -508,6 +508,31 @@ node test/sound-check.js "C:\path\to\GTK3VICE-3.10-win64"
 node showcase/sound-wav.js "C:\path\to\GTK3VICE-3.10-win64" --song crypt --seconds 58
 node test/sid-compare.js crypt 58
 ```
+
+## Playing on a C64 or C64 Ultimate
+
+`c64/out/apex-8.d81` holds everything that runs on a C64, behind a menu. It's a 1581 disk image, since the programs don't fit a 1541's. On a C64 Ultimate, copy it to a USB stick, open the stick in the Ultimate's menu, select the image and choose to mount and run it. On a C64 with a 1581 or an SD2IEC, use `LOAD"*",8` then `RUN`. Press a number to load a program. It runs at once; reset to get back to the menu.
+
+| Key | Program | Controls |
+|-----|---------|----------|
+| 1 | The raycaster, E1M1 | Joystick in port 2, or W/S to walk and A/D to turn |
+| 2 | The platformer, Green Hills | Joystick in port 2 (fire or up to jump), or A/D to run and W, Z or Space to jump; R restarts |
+| 3 | The dungeon, the Crypt | Joystick in port 2, or W/A/S/D (two at once for diagonals); R restarts |
+| 4 | The shooter, the Dreadnought | Joystick in port 2, or W/A/S/D and Space to fire (hold for autofire); fire starts, R restarts |
+| 5 | The shooter in the brick look | As 4 |
+| 6, 7 | The two songs on the sound player | Joystick directions and fire play the first five effects |
+| 8 | The APEX-8 splash | |
+
+Each program is also in `c64/out` as a `.prg`, which the Ultimate can run straight from its file browser.
+
+**Settings.** The engines are made and tested for a stock PAL C64: 50 frames a second, the CPU at 1 MHz, a 6581 SID. On a C64 Ultimate:
+
+- *video*: PAL. The engines also pass on NTSC, but run at 60 frames a second with 13% less time for each. The shooter is late now and then in its busiest stretch on NTSC.
+- *CPU*: no turbo. The engines time their raster splits and sprite multiplexing to the stock speed. A faster CPU hasn't been tested, and VICE can't emulate the Ultimate's turbo modes.
+- *SID*: a 6581, or UltiSID set to 6581. The music's filter settings were made for it; an 8580 sounds brighter.
+- *REU*: not used yet; it does no harm left on.
+
+`node c64/disk.js <VICE folder>` makes the disk again from the programs in `c64/out` (build them first). It uses VICE's `petcat` and `c1541`.
 
 ## The APEX-8 badge
 

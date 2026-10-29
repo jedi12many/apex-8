@@ -1,5 +1,6 @@
 // Builds the C64 shoot-'em-up with the kit (c64/kit/build.js):
-//   node c64/shmup/build.js      writes c64/out/shmup.prg (the Dreadnought, playable)
+//   node c64/shmup/build.js [--brick]   writes c64/out/shmup.prg (the Dreadnought, playable), or
+//                                        shmup-brick.prg in the brick look
 // build(dir, { script, defines }) returns a test build instead: it plays script, [[input bits,
 // ticks], ...], in place of the controls, then stops with that frame on the screen (at script_park).
 // The VICE test (test/shmup-check.js) compares those frames with the reference.
@@ -11,6 +12,8 @@ const { assemble, runs, writeOut } = require('../kit/build.js');
 
 const here = __dirname;
 const level = G.parse(fs.readFileSync(path.join(here, '..', '..', 'levels', 'shmup', 's1.txt'), 'utf8'));
+// --brick on the command line (this script's or a test's) builds the brick look (see view.js).
+if (process.argv.includes('--brick')) level.look = 'brick';
 
 // Assembles into dir and returns the PRG's bytes; dir also gets the memory map and a VICE label file.
 function build(dir = path.join(here, 'build', 'game'), opts = {}) {
@@ -45,5 +48,5 @@ module.exports = { level, build, runs, soundOf, song, PROFILE };
 
 if (require.main === module) {
   const dir = path.join(here, 'build', 'game');
-  writeOut('shmup', build(dir), dir);
+  writeOut(level.look ? `shmup-${level.look}` : 'shmup', build(dir), dir, undefined, 'shmup');
 }

@@ -8,7 +8,8 @@
 //                   stops with that frame on the screen (at script_park)
 //         defines   { NAME: value } more constants, e.g. { PROFILE: 1 }
 //   runs(inputs)    a list of inputs, one per tick, as [[bits, ticks], ...]
-//   writeOut(name, prg, dir, segments)   writes c64/out/<name>.prg and says how big it came out
+//   writeOut(name, prg, dir, segments, map)   writes c64/out/<name>.prg and says how big it came out
+//                                            (from dir/<map>.map, map defaulting to name)
 const fs = require('fs'), path = require('path'), { spawnSync } = require('child_process');
 
 const KIT = __dirname;
@@ -45,11 +46,11 @@ function runs(inputs) {
   return out;
 }
 
-function writeOut(name, prg, dir, segments = ['CODE']) {
+function writeOut(name, prg, dir, segments = ['CODE'], map = name) {
   const out = path.join(KIT, '..', 'out');
   fs.mkdirSync(out, { recursive: true });
   fs.writeFileSync(path.join(out, `${name}.prg`), prg);
-  const mapFile = fs.readFileSync(path.join(dir, `${name}.map`), 'utf8');
+  const mapFile = fs.readFileSync(path.join(dir, `${map}.map`), 'utf8');
   const seg = n => (mapFile.match(new RegExp(`^${n}\\s+(\\w+)\\s+(\\w+)\\s+(\\w+)`, 'm')) || []).slice(1).join(' ');
   console.log(`c64/out/${name}.prg: ${prg.length} bytes; ${segments.map(n => `${n} ${seg(n)}`).join(', ')}`);
 }

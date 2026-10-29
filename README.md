@@ -392,6 +392,8 @@ On PAL, the machine it's made for, the whole game is never late. NTSC frames are
 
 The timing test also times each whole script with VICE's stopwatch, so a frame lost any other way, such as an IRQ chain that misses the bottom of a frame, would show up too.
 
+**The brick look.** Build with `--brick` (`node c64/shmup/build.js --brick` writes `c64/out/shmup-brick.prg`) and the Dreadnought is built from toy bricks: APEXSCII's Brick theme (its `brick-stud` texture) gives a stud a character on the armour and the raised blocks, lit white on the upper left and shaded on the lower right, and the recessed panels become flat tiles. Only the character set changes, so the engine and its timing are the same; `test/shmup-check.js` and `showcase/shmup-c64-video.js` take `--brick` too (the video goes to `showcase/out/shmup-c64-brick.mp4`).
+
 ```bash
 node showcase/shmup.js
 node web/bundle.js

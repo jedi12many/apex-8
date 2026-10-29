@@ -6,7 +6,7 @@
  * 2x2 characters, drawn from each tile and its neighbours: armour panels
  * with lit and shaded rims, seams and rivets, some recessed; vents, lamps, pipes, hazard stripes, domes,
  * raised blocks of superstructure with lit windows along their fronts, turret bases, and the hull's
- * front face hanging below it over space. Behind it, two layers of stars drift slower than the hull,
+ * front face hanging below it over space; or, in the brick look, studded toy bricks. Behind it, two layers of stars drift slower than the hull,
  * in characters redrawn each frame. Colour RAM never changes: one value for the whole screen.
  *
  * Everything that moves is a hardware sprite, more of them than the VIC's eight: a multiplexer gives
@@ -40,9 +40,15 @@
   // one in seven recessed (dark, with a shadow along its top and left).
   const wrapY = (L, ty) => ((ty % L.h) + L.h) % L.h;
   const recessed = (L, tx, ty) => ((tx >> 1) * 5 + (wrapY(L, ty) >> 1) * 3) % 7 === 0;
+  // The brick look (L.look 'brick') builds the hull from toy bricks: APEXSCII's brick-stud texture, a
+  // stud a character, its plate in the hull grey, lit in white and shaded in dark grey; a recessed
+  // panel is a flat tile instead.
+  const STUD = APEXSCII.MC_SETS['brick-stud'].T, STUD_SHADE = [0, 3, 1, 2];
+  const stud = (X, Y) => STUD_SHADE[STUD(X, Y)];
   function plate(L, tx, ty, X, Y) {
     const right = tx & 1, bottom = wrapY(L, ty) & 1;
     if ((X === 7 && right) || (Y === 15 && bottom)) return 1; // seams
+    if (L.look === 'brick') return recessed(L, tx, ty) ? 2 : stud(X, Y);
     if (recessed(L, tx, ty)) return (Y === 0 && !bottom) || (X === 0 && !right) ? 0 : 1;
     if (X === (right ? 6 : 1) && Y === (bottom ? 13 : 2)) return 1; // rivets at the panel's corners
     return 2;
@@ -60,7 +66,7 @@
       case G.BLOCK:
         if ((Y === 0 && up !== G.BLOCK) || (X === 0 && at(-1, 0) !== G.BLOCK)) return 3;
         if (X === 7 && at(1, 0) !== G.BLOCK) return 1;
-        return (Y & 3) === 3 ? 1 : 2; // deck plating
+        return L.look === 'brick' ? stud(X, Y) : (Y & 3) === 3 ? 1 : 2; // deck plating, or studs
       case G.DOME: {
         // the dome's quarter from its neighbours, lit from the top left, casting a shadow down and right
         const px = 16 * (at(-1, 0) === G.DOME) + 2 * X + 1, py = 16 * (up === G.DOME) + Y + 0.5;

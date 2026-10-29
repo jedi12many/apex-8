@@ -4,9 +4,9 @@
 // same script records the SID, from the music's first sound, as the video's soundtrack. What you see
 // and hear is exactly what a C64 does, at its real speed.
 //
-//   node showcase/shmup-c64-video.js <path to VICE folder> [--seconds 40]
+//   node showcase/shmup-c64-video.js <path to VICE folder> [--seconds 40] [--brick]
 //
-// Writes showcase/out/shmup-c64.mp4. Needs cc65, VICE and ffmpeg.
+// Writes showcase/out/shmup-c64.mp4, or shmup-c64-brick.mp4 in the brick look. Needs cc65, VICE and ffmpeg.
 const fs = require('fs'), os = require('os'), path = require('path'), net = require('net');
 const { spawn, spawnSync } = require('child_process');
 const { findVice, labels } = require('../test/vice-lib.js');
@@ -59,7 +59,7 @@ if (!viceDir) { console.error('usage: node showcase/shmup-c64-video.js <VICE fol
   const wav = path.join(dir, 'sound.wav');
   spawnSync(exe, ['-default', '-sound', '-sounddev', 'dump', '-soundarg', path.join(dir, 'sid.dump'), '-soundrecdev', 'wav', '-soundrecarg', wav, '+confirmonexit',
     '-autostartprgmode', '1', '-limitcycles', String(Math.round((seconds + 4) * 985248)), '-autostart', path.join(dir, 'shmup.prg')], { timeout: (seconds + 60) * 1000 });
-  const out = path.join(__dirname, 'out', 'shmup-c64.mp4');
+  const out = path.join(__dirname, 'out', `shmup-c64${level.look ? '-' + level.look : ''}.mp4`);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   // (VICE's silent 'dump' sound device: the recorder needs a device running, and this one plays nothing)
   const audio = fs.existsSync(wav) && fs.statSync(wav).size > 1000 ? ['-i', wav, '-af', 'silenceremove=start_periods=1:start_threshold=-60dB', '-c:a', 'aac', '-b:a', '160k', '-shortest'] : [];

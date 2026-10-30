@@ -633,6 +633,8 @@ node test/picture-check.js "C:\path\to\GTK3VICE-3.10-win64"
 
 ## Roadmap
 
+Planned next, to revisit after testing on real hardware: games as EasyFlash cartridge images (for a Kung Fu Flash or a C64 Ultimate), and flipping between engines mid-game, such as from the dungeon to a story-mode conversation and back. See [design/cartridge-and-flips.md](design/cartridge-and-flips.md).
+
 The raycaster is a renderer so far. These are what a game built on it would need, in a sensible order. None is planned yet.
 
 1. **Doors:** door tiles drawn as a thin wall in the middle of the tile, sliding open, with a state per door (opening, open, closing) and collision while shut. Rays that reach a door tile take one more step. Locked doors need keys.

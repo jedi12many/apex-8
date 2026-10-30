@@ -12,10 +12,12 @@
  * angle it is turned by (degrees, clockwise), each frame a step between them. Frames are window-sized
  * (40 x 15 cells), and listed as pictures id#0, id#1, ... (pictureList).
  * A scene is:
- *   { picture, pan: { from: [x, y], to: [x, y], ticks }, or steps: { frames, every, reverse },
+ *   { picture, pan: { from: [x, y], to: [x, y], ticks }, or steps: { frames, every, reverse, still },
  *     speaker, text, then one of: choices: [{ text, go, set, if, unless }], next: scene id, end: true }
  * steps play a run of frames, one every `every` ticks (at least STEP_GAP), backwards if reverse: a zoom
- * played backwards is a pull-back.
+ * played backwards is a pull-back. Frames need an REU on a C64; without one (start(c, { reu: false }))
+ * a scene's steps show its still instead, { picture, at: [x, y] }: that picture held at that pan (or
+ * the window stays dark if it has none).
  *
  * The picture shows in a window 304 pixels wide (the 38-column screen) and 113 lines high; pan
  * positions are the picture's pixel (hires x, line) at the window's top-left corner, x counted from
@@ -83,7 +85,14 @@
         const st = sc.steps, base = picIds.indexOf(`${st.frames}#0`);
         if (base < 0) throw new Error(`${where}: no frames "${st.frames}"`);
         if (!(st.every >= STEP_GAP)) throw new Error(`${where}: steps must be at least ${STEP_GAP} ticks apart`);
-        steps = { base, count: story.pictures[st.frames].frames.count, every: st.every, reverse: !!st.reverse };
+        steps = { base, count: story.pictures[st.frames].frames.count, every: st.every, reverse: !!st.reverse, still: -1, at: [0, 0] };
+        if (st.still) {
+          steps.still = picIds.indexOf(st.still.picture);
+          if (steps.still < 0 || list[steps.still].k >= 0) throw new Error(`${where}: the still must be a picture that isn't frames`);
+          steps.at = st.still.at || [0, 0];
+          const [cw, ch] = sizes[steps.still];
+          if (steps.at[0] < 0 || steps.at[0] > cw * 8 - 320 || steps.at[1] < 0 || steps.at[1] > ch * 8 - VIEW_H) throw new Error(`${where}: the still's place is outside its picture`);
+        }
       }
       const pic = steps ? steps.base + (steps.reverse ? steps.count - 1 : 0) : picIds.indexOf(sc.picture);
       if (pic < 0) throw new Error(`${where}: no picture "${sc.picture}"`);
@@ -137,8 +146,9 @@
 
   // A story's state: the scene, its page, the letters shown, what it waits for, the choice, the pan
   // (8.8 pixels) and its tick, the flags, the button held, a scene change's dark ticks, and the clock.
-  function start(c) {
-    const s = { scene: -1, page: 0, shown: 0, wait: 0, phase: 'type', sel: 0, x8: 0, y8: 0, t: 0, flags: 0, held: 0, blank: 0, clock: 0, events: [] };
+  // reu: false for a C64 without an REU (steps show their stills).
+  function start(c, { reu = true } = {}) {
+    const s = { scene: -1, page: 0, shown: 0, wait: 0, phase: 'type', sel: 0, x8: 0, y8: 0, t: 0, flags: 0, held: 0, blank: 0, clock: 0, reu, events: [] };
     enter(c, s, c.start, true);
     return s;
   }
@@ -147,6 +157,7 @@
   function picture(c, s) {
     const sc = c.scenes[s.scene], st = sc.steps;
     if (!st) return sc.picture;
+    if (!s.reu) return st.still;
     const f = Math.min(st.count - 1, Math.floor(s.t / st.every));
     return st.base + (st.reverse ? st.count - 1 - f : f);
   }
@@ -157,6 +168,7 @@
     s.page = 0; s.shown = 0; s.wait = 0; s.sel = 0; s.t = 0;
     s.phase = 'type';
     s.x8 = sc.x0 * 256; s.y8 = sc.y0 * 256;
+    if (sc.steps && !s.reu) { s.x8 = sc.steps.at[0] * 256; s.y8 = sc.steps.at[1] * 256; }
     if (sc.set >= 0) s.flags |= 1 << sc.set;
     // A new picture, or a jump to another cell of this one: dark while the window is readied.
     if (first || picture(c, s) !== oldPic || cellOf(s.x8, s.y8) !== cellOf(old.x8, old.y8)) s.blank = BLANK;

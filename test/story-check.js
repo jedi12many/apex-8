@@ -3,7 +3,8 @@
 // typing, pages, the choices and their selection, scene changes, the pan at every fine scroll, and
 // every frame of the zoom, the pull-back and the turn); then times the run (no late frames) and checks
 // every tick's SID registers, on one SID and two. VICE starts the REU with the frames (the story's REU
-// image); a last check loads them from files instead (drive 8), and finds none without an REU.
+// image). Then the scenes with steps again without an REU, where they show their stills; and a last
+// check loads the frames from files instead (drive 8), and finds none without an REU.
 //
 //   node test/story-check.js <path to VICE folder> [--quick] [--timing] [--ntsc | --model <name>]
 const path = require('path');
@@ -35,6 +36,7 @@ const inputs = [];
     STORY.play(s.c, st, b);
   }
 }
+const afterNoReu = n => { const st = STORY.start(s.c, { reu: false }); for (const b of inputs.slice(0, n)) STORY.play(s.c, st, b); return st; };
 const after = n => { const st = STORY.start(s.c); for (const b of inputs.slice(0, n)) STORY.play(s.c, st, b); return st; };
 
 // Stop at fixed ticks, and the first ticks of each phase and fine scroll seen.
@@ -54,6 +56,22 @@ const cases = [...stops].sort((a, b) => a - b).map(n => ({
   want: () => VIEW.frame(s.c, s.pics, after(n)).pixels,
 }));
 
+// without an REU: the first ticks of each scene with steps, and a little into it
+const noReu = [];
+{
+  const st = STORY.start(s.c), seen = new Set();
+  inputs.forEach((b, n) => {
+    STORY.play(s.c, st, b);
+    const sc = s.c.scenes[st.scene];
+    if (sc.steps && !seen.has(st.scene)) { seen.add(st.scene); noReu.push(n + 1, n + 20); }
+  });
+}
+const casesNoReu = noReu.map(n => ({
+  name: `tick ${n}, no REU`, ticks: n,
+  prg: () => build(path.join(o.scratch, 'b'), { script: runs(inputs.slice(0, n)) }, s),
+  want: () => VIEW.frame(s.c, s.pics, afterNoReu(n)).pixels,
+}));
+
 const timing = [{ name: 'run', ticks: RUN, build: () => { const d = path.join(o.scratch, 't'); build(d, { script: runs(inputs), defines: { SND_NOSUM: 1 } }, s); return { prg: path.join(d, 'story.prg'), lbl: path.join(d, 'story.lbl') }; } }];
 const sound = [1, 2].map(sids => ({
   name: sids === 2 ? 'run, 2 SIDs' : 'run', ticks: RUN,
@@ -63,6 +81,7 @@ const sound = [1, 2].map(sids => ({
 
 (async () => {
   let failures = o.timingOnly ? 0 : await kit.checkFrames(o, o.quick ? cases.filter((c, i) => i % 4 === 0) : cases, { border: VIEW.BORDER, width: 10 });
+  if (!o.quick) failures += o.timingOnly ? 0 : await kit.checkFrames({ ...o, vice: { ...o.vice, reu: false } }, casesNoReu, { border: VIEW.BORDER, width: 18 });
   failures += await kit.checkTiming(o, timing);
   failures += await kit.checkSound(o, sound);
   if (!o.quick) {

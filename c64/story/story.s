@@ -16,7 +16,8 @@
 ;
 ; Zooms, pull-backs and turns are runs of frames (window-sized pictures) in the REU, which the engine
 ; loads at start-up from files on its disk and copies into the hidden buffer by DMA, a few lines at a
-; time away from the split. Without an REU, the window stays dark while they play.
+; time away from the split. Without an REU, a scene's steps show its still: a picture held at a pan
+; (or a dark window, if it has none).
 ;
 ; Memory: $0400 bitmap screen A, $2000 bitmap A (bank 0); $4000 text screen, $4800 the font (bank 1);
 ; $4C00 code and data; $8400 bitmap screen B, $A000 bitmap B (bank 2); picture rows wherever is left
@@ -742,7 +743,19 @@ enter:
     sta yp
     lda SC_Y0HI,x
     sta yp+1
-    lda SC_PAGE0,x
+    lda SC_STEPN,x          ; steps without the frames: the still's place
+    beq :+
+    lda haveframes
+    bne :+
+    lda SC_SXLO,x
+    sta xp
+    lda SC_SXHI,x
+    sta xp+1
+    lda SC_SYLO,x
+    sta yp
+    lda SC_SYHI,x
+    sta yp+1
+:   lda SC_PAGE0,x
     sta pgx
     lda SC_SET,x
     jsr set_flag
@@ -776,7 +789,14 @@ cell:
     sta cnew
     lda SC_STEPN,y          ; steps: the frame (from the last, backwards)
     beq @pan
-    lda SC_REV,y
+    lda haveframes          ; (without the frames: the still, if any, as a pan)
+    bne :+
+    lda SC_STILL,y
+    cmp #$ff
+    beq @pan
+    sta cnew
+    jmp @pan
+:   lda SC_REV,y
     beq :+
     lda SC_STEPN,y
     sec
@@ -1176,6 +1196,8 @@ look:
     cmp fcy
     bne @take
     ldx scene               ; no: steps: the next frame, if there is one
+    lda haveframes
+    beq @pan
     lda SC_STEPN,x
     beq @pan
     sec

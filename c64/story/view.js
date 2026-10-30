@@ -51,12 +51,12 @@
   }
 
   // A frame: 320 x 200 RGBA. pics: the story's pictures (c64/story/pictures.js decode), in its order.
-  // Without an REU (reu false) the C64 has no frames, and the window stays dark while steps play.
-  function frame(c, pics, s, { reu = true } = {}) {
+  // (A story played without an REU shows its steps' stills, or a dark window if they have none.)
+  function frame(c, pics, s) {
     const px = new Uint8ClampedArray(320 * 200 * 4);
     const set = (x, y, k) => px.set([...PAL[k], 255], (y * 320 + x) * 4);
     const k = STORY.picture(c, s), pic = pics[k], { x: panX, y: panY } = STORY.pan(s);
-    const dark = s.blank || (!reu && c.frames[k]);
+    const dark = s.blank || k < 0;
     for (let y = 0; y < WIN_END; y++) for (let x = 0; x < 320; x++) {
       if (y < WIN_TOP || x < 7 || x >= 311 || dark) { set(x, y, y < WIN_TOP || x < 7 || x >= 311 ? BORDER : BG); continue; }
       const ix = panX + x, iy = panY + y - WIN_TOP, cell = (iy >> 3) * pic.cw + (ix >> 3);

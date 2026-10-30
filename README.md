@@ -506,7 +506,7 @@ To play on a C64 or in VICE, load `c64/out/story.prg` with `LOAD"*",8,1`, then `
 
 **Zooms, pull-backs and turns.** A C64 can't scale or rotate a bitmap in real time, so these are runs of frames made ahead of time. A picture can be `frames: { count, from, to }`, each of from and to a point in the image to keep at the window's middle, the image's width to show and an angle (degrees, clockwise). The converter crops, turns and scales each frame from the image, the width stepping evenly in scale so a zoom moves at a steady rate. A scene with `steps: { frames, every, reverse }` shows them one after another, a frame every `every` ticks (3 at least); played in reverse, a zoom is a pull-back from the same frames. The Mountain zooms up to its summit, pulls back, and turns the world at the end.
 
-Frames are window-sized, 6000 bytes each, too many for the C64's memory, so they live in an REU. A frame comes into the hidden window by DMA, a few lines at a time away from the split, in about a frame. At start-up the engine looks in the REU for the frames (a signature after them); if they aren't there it loads them from files on its disk (`mountain.f00`, ...). That takes a while on a stock drive (each 6000-byte file is several seconds at the KERNAL's speed), so `c64/out/story/mountain.reu` holds them as an REU image: VICE takes it with `-reuimage`, and a C64 Ultimate can preload it into its REU at start-up (its REU settings), so the frames are there at once. Without an REU the window stays dark while frames play.
+Frames are window-sized, 6000 bytes each, too many for the C64's memory, so they live in an REU. A frame comes into the hidden window by DMA, a few lines at a time away from the split, in about a frame. At start-up the engine looks in the REU for the frames (a signature after them); if they aren't there it loads them from files on its disk (`mountain.f00`, ...). That takes a while on a stock drive (each 6000-byte file is several seconds at the KERNAL's speed), so `c64/out/story/mountain.reu` holds them as an REU image: VICE takes it with `-reuimage`, and a C64 Ultimate can preload it into its REU at start-up (its REU settings), so the frames are there at once. On a stock C64, without an REU, a scene's steps show its still instead: `steps: { ..., still: { picture, at: [x, y] } }`, a picture already in memory held at that pan (or a dark window if it has none). Everything else, the pans, the text and the choices, plays the same either way.
 
 ```bash
 node c64/story/pictures.js mountain
@@ -598,7 +598,7 @@ node test/sid-compare.js crypt 58
 | 5 | The shooter in the brick look | As 4 |
 | 6, 7, 8, 9 | The Dreadnought's, the Drowned Crypt's, Green Hills' and the Cell Block's songs on the sound player | Joystick directions and fire play the first five effects |
 | 0 | The APEX-8 splash | |
-| S | The story mode, the Mountain (its zooms and turns need an REU: it loads them from the disk, or preload `mountain.reu`) | Fire (or space or return) to go on; joystick up and down, or W and S, to pick a choice |
+| S | The story mode, the Mountain (its zooms and turns need an REU: it loads them from the disk, or preload `mountain.reu`; without one it shows stills there) | Fire (or space or return) to go on; joystick up and down, or W and S, to pick a choice |
 
 Each program is also in `c64/out` as a `.prg`, which the Ultimate can run straight from its file browser.
 

@@ -24,7 +24,7 @@
 
   const MOVE_SPEED = 6;             // 8.8 tiles per tick
   const HEADING_STEP = 4;           // the player's angle is always a multiple of this
-  const WALL_RADIUS = 96;           // the player keeps 3/8 of a tile from walls on each axis
+  const WALL_RADIUS = 64;           // the player keeps a quarter of a tile from walls on each axis
   const OBJ_RADIUS = 128;           // and half a tile from a barrel's or guard's centre, on one axis at least
   const PICK_RADIUS = 96;           // treasure this near on both axes is picked up
   const COOL = 16, FLASH = 6, HIT = 12;

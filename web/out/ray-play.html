@@ -962,7 +962,7 @@
 
   const MOVE_SPEED = 6;             // 8.8 tiles per tick
   const HEADING_STEP = 4;           // the player's angle is always a multiple of this
-  const WALL_RADIUS = 96;           // the player keeps 3/8 of a tile from walls on each axis
+  const WALL_RADIUS = 64;           // the player keeps a quarter of a tile from walls on each axis
   const OBJ_RADIUS = 128;           // and half a tile from a barrel's or guard's centre, on one axis at least
   const PICK_RADIUS = 96;           // treasure this near on both axes is picked up
   const COOL = 16, FLASH = 6, HIT = 12;
@@ -1896,9 +1896,9 @@
 </script>
 <script>
 // The Cell Block's sound (core/sound.js): an original, brooding chiptune for the raycaster, and its
-// effects. A minor, slow: a pulsing low drone (voice 1, through a dark low-pass that slowly opens and
+// effects. A minor, slow: a pulsing low drone (voice 1, through a low-pass that slowly opens and
 // closes), a heartbeat kick and a distant ticking hat (voice 2, which the effects borrow on one SID),
-// and a sparse, uneasy lead that rises and falls over a semitone (voice 3).
+// and a sparse, soft lead that falls through the chords (voice 3).
 // Am F Am E.
 //
 // Patterns are 32 rows (two bars of sixteenths). Speed 7 makes a row 7 frames: about 107 beats a
@@ -1910,14 +1910,14 @@
 })(typeof self !== 'undefined' ? self : this, {
   speed: 7,
   effectsVoice: 1,
-  filter: { res: 12, mode: 'low', min: 0x180, max: 0x480, period: 256 },
+  filter: { res: 5, mode: 'low', min: 0x300, max: 0x600, period: 256 },
   instruments: {
     drone: { wave: 'saw', ad: 0x2a, sr: 0xa9, gate: 12, filter: true },
     pulse: { wave: 'pulse', ad: 0x05, sr: 0x35, pw: 0x300, pwSpeed: 16, gate: 2, filter: true },
     kick: { ad: 0x00, sr: 0xf5, pw: 0x800, gate: 4,
       table: [['pulse', 'C-3'], ['tri', 'A-2'], ['tri', 'F-2'], ['tri', 'D-2'], ['tri', 'A-1']] },
     tick: { ad: 0x00, sr: 0x00, gate: 1, table: [['noise', 'A-7']] },
-    lead: { wave: 'pulse', ad: 0x4a, sr: 0x6a, pw: 0x180, pwSpeed: 12, gate: 10 },
+    lead: { wave: 'tri', ad: 0x4a, sr: 0x68, gate: 10 },
   },
   patterns: {
     // the drone: a long root, then low pulses on the beat
@@ -1926,11 +1926,11 @@
     l3: 'E-1:drone . . . . . . . . . . . . . . . E-1:pulse . . . E-1 . . . G#1 . . . B-1 . . .',
     // the heartbeat: two beats close together, then the ticking
     h1: 'C-1:kick . . C-1:kick . . . . C-1:tick . . . C-1:tick . . . C-1:kick . . C-1:kick . . . . C-1:tick . . . C-1:tick . . .',
-    // the lead: long notes that slip a semitone
-    m1: 'E-4:lead . . . . . . . F-4 . . . . . . . E-4 . . . . . . . . . . . C-4 . . .',
-    m2: 'D-4:lead . . . . . . . C-4 . . . . . . . A-3 . . . . . . . . . . . . . . .',
-    m3: 'B-3:lead . . . . . . . C-4 . . . . . . . B-3 . . . . . . . G#3 . . . . . . .',
-    m4: 'A-3:lead . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .',
+    // the lead: long notes falling through the chords
+    m1: 'E-4:lead . . . . . . . C-4 . . . . . . . A-3 . . . . . . . . . . . . . . .',
+    m2: 'C-4:lead . . . . . . . A-3 . . . . . . . F-3 . . . . . . . . . . . . . . .',
+    m3: 'E-4:lead . . . . . . . C-4 . . . . . . . A-3 . . . . . . . E-3 . . . . . . .',
+    m4: 'B-3:lead . . . . . . . G#3 . . . . . . . E-3 . . . . . . . . . . . . . . .',
     // silence, for the lead's first time round
     r1: '. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .',
   },

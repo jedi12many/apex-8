@@ -28,6 +28,29 @@ SPRPTR   = SPRITES / 64
 IRQ_LINE = 250              ; below the 24-row display
 HALF     = LIGHT + 1000     ; per screen character: $80 where the light is half-lit
 
+.ifdef TITLE_BG
+; n bytes from src to dst, written with $01 = bank
+.macro MOVE src, dst, n, bank
+    lda #<(src)
+    sta cptr
+    lda #>(src)
+    sta cptr+1
+    lda #<(dst)
+    sta dptr
+    lda #>(dst)
+    sta dptr+1
+    lda #<(n)
+    sta jv
+    lda #>(n)
+    sta jv+1
+    lda #$35
+    sta t0
+    lda #bank
+    sta t1
+    jsr move
+.endmacro
+.endif
+
 .segment "ZEROPAGE"
 hx:      .res 2             ; the hero, 8.8 tiles
 hy:      .res 2
@@ -80,6 +103,9 @@ p_d018:  .res 1             ; the next frame
 p_d016:  .res 1
 p_d011:  .res 1
 p_ptr:   .res 1
+.ifdef TITLE_BG
+held:    .res 1             ; on the title, fire's bit last frame
+.endif
 .ifdef DARK_COLOR
 cig:     .res 1             ; 1: the hero's light burns
 cigheld: .res 1             ; the key's bit last tick, so one press is one change
@@ -92,6 +118,86 @@ p_col:   .res 1
 .segment "CODE"
 start:
     KIT_INIT irq
+.ifdef TITLE_BG
+    KIT_SCRIPT_START
+    MOVE FIX_B, $d000, 1000, $34 ; the picture's place: screen, then colours, then bitmap
+    MOVE FIX_B + 1000, $d400, 1000, $34
+    MOVE FIX_B + 2000, $e000, 8000, $34
+    jsr make_fix_b
+    lda $dd02               ; the VIC's bank is ours to choose
+    ora #3
+    sta $dd02
+
+; The title: the picture, in VIC bank 3, until fire. (Back here on R, from the game's main loop.)
+show_title:
+    sei
+    lda #0
+    sta $d01a
+    sta $d015
+    lda #1
+    sta $d019
+    lda #$0b
+    sta $d011
+    lda inp
+    and #16
+    sta held
+    lda #$34                ; colour RAM, from under the I/O
+    sta t0
+    lda #<$d400
+    sta cptr
+    lda #>$d400
+    sta cptr+1
+    lda #<$d800
+    sta dptr
+    lda #>$d800
+    sta dptr+1
+    lda #<1000
+    sta jv
+    lda #>1000
+    sta jv+1
+    lda #$35
+    sta t1
+    jsr move
+    lda $dd00
+    and #$fc
+    sta $dd00
+    lda #COL_BORDER
+    sta $d020
+    lda #TITLE_BG
+    sta $d021
+    lda #$48                ; screen $D000, bitmap $E000
+    sta $d018
+    lda #$10                ; multicolor, 38 columns as the game has
+    sta $d016
+    lda #$33                ; bitmap, screen on, 24 rows
+    sta $d011
+@wait:
+    lda #IRQ_LINE
+:   cmp $d012
+    bne :-
+:   cmp $d012
+    beq :-
+    jsr input
+    bcc :+
+    jmp kit_park
+:   lda inp
+    and #16
+    tax
+    beq :+
+    lda held
+    beq begin
+:   stx held
+    jmp @wait
+
+begin:
+    lda #$0b
+    sta $d011
+    lda $dd00
+    ora #3
+    sta $dd00
+    lda #0
+    sta $d018
+.endif
     lda #COL_BORDER
     sta $d020
     lda #COL_BG
@@ -135,7 +241,9 @@ start:
     sta front
     lda #$80                ; (no screen drawn yet: a whole redraw)
     sta fcx
+.ifndef TITLE_BG
     KIT_SCRIPT_START
+.endif
     jsr reset_hero
     jsr view
     jsr apply
@@ -164,7 +272,14 @@ main:
     jsr input
     bcc :+
     jmp kit_park
-:   jsr tick
+:
+.ifdef TITLE_BG
+    bit inp                 ; R: back to the title
+    bvc :+
+    jmp show_title
+:
+.endif
+    jsr tick
 .ifdef DARK_COLOR
     jsr light
 .endif
@@ -181,8 +296,19 @@ input:
     sta $dc00
     lda $dc00
     eor #$ff
-    and #15
+    and #31                 ; (with fire, bit 16)
     sta inp
+.ifdef TITLE_BG
+    lda #%01111111          ; keyboard row 7: space (bit 4)
+    sta $dc00
+    lda $dc01
+    and #$10
+    bne :+
+    lda inp
+    ora #16
+    sta inp
+:
+.endif
     lda #%11111101          ; keyboard row 1: W (bit 1), A (2), S (5)
     sta $dc00
     lda $dc01
@@ -230,10 +356,98 @@ input:
 :   lda t0
     and #2
     beq :+
+.ifdef TITLE_BG
+    lda inp                 ; R: the title
+    ora #64
+    sta inp
+.else
     jsr reset_hero          ; R: start again
     lda #$80
     sta fcx
+.endif
 :   clc
+    rts
+.endif
+
+.ifdef TITLE_BG
+; ------------------------------------------------------------------ the title's start-up
+; jv bytes from cptr to dptr, reading with $01 = t0 and writing with $01 = t1.
+move:
+    ldy #0
+@copy:
+    lda t0
+    sta $01
+    lda (cptr),y
+    ldx t1
+    stx $01
+    sta (dptr),y
+    iny
+    bne :+
+    inc cptr+1
+    inc dptr+1
+:   lda jv
+    bne :+
+    dec jv+1
+:   dec jv
+    lda jv
+    ora jv+1
+    bne @copy
+    lda #$35
+    sta $01
+    rts
+
+; fix_*_b from fix_*_a: units of lda abs,x / eor # / sta abs,x with the other screen, and rts.
+make_fix_b:
+    lda #<fix_0_a
+    sta cptr
+    lda #>fix_0_a
+    sta cptr+1
+    lda #<FIX_B
+    sta dptr
+    lda #>FIX_B
+    sta dptr+1
+@next:
+    ldy #0
+    lda (cptr),y
+    sta (dptr),y
+    ldx #1
+    cmp #$60
+    beq @on
+:   iny
+    lda (cptr),y
+    sta (dptr),y
+    cpy #7
+    bne :-
+    ldy #2
+    jsr @screen
+    ldy #7
+    jsr @screen
+    ldx #8
+@on:
+    txa
+    clc
+    adc cptr
+    sta cptr
+    bcc :+
+    inc cptr+1
+:   txa
+    clc
+    adc dptr
+    sta dptr
+    bcc :+
+    inc dptr+1
+:   lda dptr
+    cmp #<(FIX_B + FIX_B_SIZE)
+    bne @next
+    lda dptr+1
+    cmp #>(FIX_B + FIX_B_SIZE)
+    bne @next
+    rts
+@screen:
+    lda (dptr),y
+    clc
+    adc #>SCREEN_B - >SCREEN_A
+    sta (dptr),y
     rts
 .endif
 
@@ -1032,3 +1246,8 @@ LOOKS:   .incbin "looks.bin"
 LIGHT:   .incbin "light.bin"
 .include "copy.inc"
 .include "fix.inc"
+
+.ifdef TITLE_BG
+FIX_B:   .incbin "title.bin"   ; until start-up moves it, and fix_*_b takes its place
+.assert FIX_B + FIX_B_SIZE <= $d000, error, "fix_*_b runs into the I/O"
+.endif

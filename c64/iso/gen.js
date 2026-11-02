@@ -17,6 +17,11 @@
 // VIC's bank and not at $1000-$1FFF, and leaving the memory map (its cfg) to fit }. It can also have a
 // light the hero carries, as dark: { color }: key C (input bit 32) puts it out and lights it again, and
 // with it out the screen goes black and the hero shows as one shape of that colour.
+//
+// A game can have a title picture, as title: a Koala picture's 10001 bytes (no load address). The game
+// then starts on it and fire (joystick or space, input bit 16) starts play; R (bit 64) goes back to it.
+// The picture lives in RAM at $D000-$FF3F, which a program can't load into directly, so it travels in
+// title.bin in the space fix_*_b will use: start-up moves it up, then makes fix_*_b from fix_*_a.
 const fs = require('fs'), path = require('path');
 const ISO = require('../../core/iso.js');
 const VIEW = require('./view.js');
@@ -25,7 +30,7 @@ const VIEW = require('./view.js');
 // opposite direction from X = D.
 const DIRS = [[1, 0], [0, 1], [1, 1], [-1, 1]];
 
-function gen(M, outDir, { hero, dark } = {}) {
+function gen(M, outDir, { hero, dark, title } = {}) {
   fs.mkdirSync(outDir, { recursive: true });
   if (M.w > 64 || M.h > 64) throw new Error('map too big for the C64 engine (64 x 64 tiles at most)');
   for (let i = 0; i < M.w; i++) for (const [x, y] of [[i, 0], [i, M.h - 1], [0, i], [M.w - 1, i]])
@@ -67,7 +72,7 @@ function gen(M, outDir, { hero, dark } = {}) {
   fs.writeFileSync(path.join(outDir, 'sprites.bin'), sprites);
 
   // code maps: row ay + OFFY, byte phase * 64 + ax + OFFX
-  const cmap = Buffer.alloc(64 * 256);
+  const cmap = Buffer.alloc((ay1 - ay0 + 2) * 256);
   for (let ay = ay0; ay <= ay1; ay++) for (let ax = ax0; ax <= ax1; ax++) for (let p = 0; p < 4; p++) {
     const r = VIEW.REL[p], lk = i => VIEW.lookAt(M, ax + r[i][0], ay + r[i][1]), wall = l => (l >= 3 ? l - 2 : 0);
     const n = lk(0) + 5 * lk(1) + 25 * wall(lk(2)) + 75 * wall(lk(3)), code = P.codes[p * VIEW.PATTERNS + n];
@@ -83,6 +88,11 @@ function gen(M, outDir, { hero, dark } = {}) {
   const light = Buffer.alloc(2000);
   for (let i = 0; i < 1000; i++) { light[i] = VIEW.LIGHT_RAM[i] + 8; light[1000 + i] = VIEW.LIGHT_HALF[i] << 7; }
   fs.writeFileSync(path.join(outDir, 'light.bin'), light);
+
+  if (title) {
+    if (title.length !== 10001) throw new Error('the title must be a Koala picture of 10001 bytes');
+    fs.writeFileSync(path.join(outDir, 'title.bin'), Buffer.concat([title.subarray(8000, 10000), title.subarray(0, 8000)]));
+  }
 
   // ---------------------------------------------------------------- code
   // copy_<dx>_<dy>_<to>: screen <to> = the other screen shifted, so character (r, c) comes from
@@ -115,6 +125,7 @@ function gen(M, outDir, { hero, dark } = {}) {
   // by D, each pair the other way round). Dark characters look the same either way, so a pair is
   // skipped when both are dark.
   const fix = [], fixCounts = {};
+  let fixSize = 0;
   DIRS.forEach(([dx, dy], k) => {
     const D = 40 * dy + dx, list = [];
     for (let r = 0; r < 25; r++) for (let c = 0; c < 39; c++) {
@@ -124,12 +135,14 @@ function gen(M, outDir, { hero, dark } = {}) {
       if (VIEW.LIGHT_HALF[o] !== VIEW.LIGHT_HALF[s] && (VIEW.LIGHT_RAM[o] || VIEW.LIGHT_RAM[s])) list.push(o);
     }
     fixCounts[`${dx},${dy}`] = list.length;
-    for (const scr of ['A', 'B']) {
+    if (title) { fix.push(`fix_${k}_b = FIX_B + ${fixSize}`); fixSize += list.length * 8 + 1; }
+    for (const scr of title ? ['A'] : ['A', 'B']) {
       fix.push(`fix_${k}_${scr.toLowerCase()}:`);
       for (const o of list) fix.push(`    lda SCREEN_${scr}+${o},x`, '    eor #$80', `    sta SCREEN_${scr}+${o},x`);
       fix.push('    rts', '');
     }
   });
+  if (title) fix.push(`FIX_B_SIZE = ${fixSize}`);
   fs.writeFileSync(path.join(outDir, 'fix.inc'), fix.join('\n') + '\n');
 
   // col_<screen>_<even|odd>: column X of the screen, from the state line() left (ax, cptr) and the two
@@ -158,6 +171,7 @@ function gen(M, outDir, { hero, dark } = {}) {
     SPR_MC1: hero ? hero.sprite.mc1 : VIEW.SPRITE.mc1, SPR_MC2: hero ? hero.sprite.mc2 : VIEW.SPRITE.mc2, SPR_COLOR: hero ? hero.sprite.color : VIEW.SPRITE.color,
     ...(hero ? { HERO_VIEWS: views.length, START_VIEW: hero.startView * 6, SPRITES: hero.at } : {}),
     ...(dark ? { DARK_COLOR: dark.color } : {}),
+    ...(title ? { TITLE_BG: title[10000] } : {}),
   };
   const inc = Object.entries(C).map(([k, v]) => `${k} = ${v}`);
   // movement per joystick bits (0 where the bits are no direction), and which way the hero faces

@@ -18,6 +18,9 @@
  * pairs are fixed colours: $D021 black (void, floor joints), $D022 white (torch flames, which glow in
  * the dark), $D023 dark grey (mortar, so walls stay faintly visible in the dark).
  *
+ * The light off (background(..., dark) true): colour RAM, $D022 and $D023 all black, so the dungeon
+ * doesn't show at all, and the game draws only what it can sense in the dark.
+ *
  * Works in Node and in the browser (global APEXISOVIEW, needing APEXSCII and APEXISO).
  */
 (function (root, factory) {
@@ -267,9 +270,14 @@
 
   // ------------------------------------------------------------------ a frame
   const PAL = APEXSCII.PALETTE.map(hx => [1, 3, 5].map(i => parseInt(hx.substr(i, 2), 16)));
-  // The dungeon around the hero h, lit, through put(x, y, rgb); returns the scroll.
-  function background(M, h, put) {
+  // The dungeon around the hero h, lit (or with dark, the light off: all black), through put(x, y,
+  // rgb); returns the scroll.
+  function background(M, h, put, dark = false) {
     const P = prepare(M), sc = scroll(h);
+    if (dark) {
+      for (let Y = 0; Y < 200; Y++) for (let X = 0; X < 320; X++) put(X, Y, PAL[COLORS.bg]);
+      return sc;
+    }
     for (let r = 0; r < 25; r++) for (let c = 0; c < 39; c++) {
       const g = P.chars[P.codeAt(sc.cX + c, sc.cY + r) | (LIGHT_HALF[r * 40 + c] << 7)];
       const cols = [COLORS.bg, COLORS.mc1, COLORS.mc2, LIGHT_RAM[r * 40 + c]];

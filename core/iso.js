@@ -10,7 +10,9 @@
  *   - the hero walks the 8 screen directions at one speed, and only on floor
  *
  * parse(text) reads a map; hero(map) makes a hero at its start; tick(map, h, input) moves it one
- * frame; screen(h) is where it stands in screen pixels.
+ * frame; screen(h) is where it stands in screen pixels. lightMap(map, r) is which tiles a torch lights:
+ * one byte a tile, 1 where a wall with a torch is within r tiles along both axes (a table a 6502 port
+ * looks up by the hero's tile).
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -81,8 +83,19 @@
     return h;
   }
 
+  // Which tiles the torches light: 1 where a wall with a torch is within r tiles along both axes.
+  function lightMap(M, r) {
+    const lit = new Uint8Array(M.w * M.h);
+    for (let ty = 0; ty < M.h; ty++) for (let tx = 0; tx < M.w; tx++) {
+      if (tileAt(M, tx, ty) !== WALL || !decoAt(M, tx, ty)) continue;
+      for (let y = Math.max(0, ty - r); y <= Math.min(M.h - 1, ty + r); y++)
+        for (let x = Math.max(0, tx - r); x <= Math.min(M.w - 1, tx + r); x++) lit[y * M.w + x] = 1;
+    }
+    return lit;
+  }
+
   // Where the hero stands on the screen's isometric plane, in whole pixels.
   const screen = h => ({ x: (h.x - h.y) >> 4, y: (h.x + h.y) >> 5 });
 
-  return { TILE, VOID, FLOOR, WALL, RADIUS, DIRS, parse, tileAt, decoAt, clear, hero, tick, screen };
+  return { TILE, VOID, FLOOR, WALL, RADIUS, DIRS, parse, tileAt, decoAt, clear, hero, tick, screen, lightMap };
 });

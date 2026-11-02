@@ -23,9 +23,23 @@
  *   - every creature and the boss dead wins; no hearts left loses; either shows its message for END_FOR ticks, then
  *     the title. Fire (pressed, not held) on the title starts a game
  *
- * parse(text) reads a map; game(M) makes a game on its title; tick(M, g, input) plays one frame and
- * lists what happened in g.events (for the sound); music(g) is whether the music plays: not while the
- * boss is up.
+ *
+ * Stealth, if the game is made with { stealth: true } (The Investigator plays this way; the Drowned
+ * Crypt doesn't):
+ *   - input bit 32 (pressed, not held) lights the hero's cigarette or puts it out. It starts lit
+ *   - the hero is in light (g.lit) while the cigarette burns, within TORCH tiles of a wall with a
+ *     torch (ISO.lightMap), or while the boss is up (its chamber lights). Out of the light g.dark is
+ *     set: the view shows only the living (LIVING), as shapes, through walls
+ *   - a creature notices the hero only when it is within WAKE of him and he is in light, or he fires
+ *     (the muzzle flash) or shoots it. It comes for him while it sees him (c.sees), and when it loses
+ *     him goes to where it last saw him (c.gx, c.gy) and waits
+ *   - the tentacle: fire pressed with a creature within REACH (each axis) lashes it from under the
+ *     coat instead of shooting (LASH.time ticks, then LASH.cool before the next shot or lash). A
+ *     creature that can't see him dies outright; one that can takes one hit, as from a bullet
+ *
+ * parse(text) reads a map; game(M, opts) makes a game on its title; tick(M, g, input) plays one frame
+ * and lists what happened in g.events (for the sound); music(g) is whether the music plays: not while
+ * the boss is up.
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./iso.js'));
@@ -43,6 +57,9 @@
   const HP = [0, 3, 2], SCORE = [0, 100, 50];
   const RADIUS = 64;                       // a creature's square on the floor, as the hero's
   const DYING = 16;
+  // Stealth (see the top). LIVING[kind]: whether darkvision sees it (the drowned are undead).
+  const LIVING = [false, false, true];
+  const TORCH = 2, REACH = 224, LASH = { time: 8, cool: 20 };
   // How close (each axis, 8.8 tiles) a bullet must come to a creature to hit it, and a creature to
   // the hero to hurt it.
   const HIT = 96, TOUCH = 112;
@@ -86,19 +103,26 @@
   }
 
   const centre = t => t * ISO.TILE + ISO.TILE / 2;
-  function creatures(M) {
-    return M.spawns.map(s => ({ kind: s.kind, x: centre(s.x), y: centre(s.y), hp: HP[s.kind], awake: false,
-      t: 0, flash: 0, dying: 0, facing: 1, moving: false }));
+  function creatures(M, stealth) {
+    return M.spawns.map(s => Object.assign({ kind: s.kind, x: centre(s.x), y: centre(s.y), hp: HP[s.kind], awake: false,
+      t: 0, flash: 0, dying: 0, facing: 1, moving: false }, stealth ? { sees: false, gx: 0, gy: 0 } : {}));
   }
   function bossOf(M) {
     return M.boss ? { state: SLEEP, x: centre(M.boss.x), y: centre(M.boss.y), t: 0, hp: BOSS.hp, flash: 0 } : { state: GONE, t: 0 };
   }
-  function game(M) {
+  // A hero at the start; with stealth, its cigarette lit.
+  function heroOf(M, stealth) {
+    return Object.assign(ISO.hero(M), { hearts: HEARTS, invuln: 0, aim: 8, cool: 0 }, stealth ? { cig: true, lash: 0, lashAt: null } : {});
+  }
+  function game(M, opts = {}) {
+    const stealth = !!opts.stealth;
+    if (stealth && !M.light) M.light = ISO.lightMap(M, TORCH);
     return {
       mode: TITLE, t: 0, held: false, end: 0, score: 0, hi: 0, events: [],
-      hero: Object.assign(ISO.hero(M), { hearts: HEARTS, invuln: 0, aim: 8, cool: 0 }),
+      ...(stealth ? { stealth, cigHeld: false, lit: true, dark: false } : {}),
+      hero: heroOf(M, stealth),
       bullets: Array.from({ length: SLOTS.bullets }, () => ({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0 })),
-      creatures: creatures(M),
+      creatures: creatures(M, stealth),
       boss: bossOf(M),
       spits: Array.from({ length: SLOTS.spits }, () => ({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0 })),
       grasp: { on: false, x: 0, y: 0, t: 0 },
@@ -120,9 +144,12 @@
     const firing = !!(input & 16), pressed = firing && !g.held;
     g.held = firing;
 
+    const cig = !!(input & 32), lighter = cig && !g.cigHeld;
+    if (g.stealth) g.cigHeld = cig;
+
     if (g.mode === TITLE) {
       if (pressed) {
-        Object.assign(g, { mode: PLAY, score: 0, hero: Object.assign(ISO.hero(M), { hearts: HEARTS, invuln: 0, aim: 8, cool: 0 }), creatures: creatures(M), boss: bossOf(M) });
+        Object.assign(g, { mode: PLAY, score: 0, hero: heroOf(M, g.stealth), creatures: creatures(M, g.stealth), boss: bossOf(M) });
         for (const b of [...g.bullets, ...g.spits]) b.on = false;
         g.grasp.on = false;
         g.events.push('start');
@@ -130,6 +157,7 @@
       return g;
     }
     if (g.mode !== PLAY) {
+      if (g.stealth) { g.lit = true; g.dark = false; }
       ISO.tick(M, h, 0);
       if (--g.end === 0) { g.mode = TITLE; g.hi = Math.max(g.hi, g.score); }
       return g;
@@ -147,12 +175,38 @@
     }
     if (h.invuln) h.invuln--;
     if (h.cool) h.cool--;
+    let flash = false;
+    if (g.stealth) {
+      // the cigarette, and the light he stands in
+      if (lighter) { h.cig = !h.cig; g.events.push(h.cig ? 'light' : 'snuff'); }
+      const up = B.state === RISE || B.state === FIGHT || B.state === SINK;
+      g.lit = h.cig || !!M.light[(h.y >> 8) * M.w + (h.x >> 8)] || up;
+      g.dark = !g.lit;
+      // the tentacle, at a creature within reach
+      if (h.lash) h.lash--;
+      if (pressed && !h.cool) {
+        let near = null, far = REACH;
+        for (const c of g.creatures) {
+          const d = Math.max(Math.abs(c.x - h.x), Math.abs(c.y - h.y));
+          if (c.hp && !c.dying && d < far) { far = d; near = c; }
+        }
+        if (near) {
+          const sdx = (near.x - h.x) - (near.y - h.y);
+          if (sdx) h.facing = sdx > 0 ? 1 : -1;
+          Object.assign(h, { lash: LASH.time, lashAt: { x: near.x, y: near.y }, cool: LASH.cool });
+          g.events.push('lash');
+          if (!near.sees || !--near.hp) { near.hp = 0; near.dying = DYING; g.score += SCORE[near.kind]; g.events.push('kill'); }
+          else { near.flash = 4; near.awake = near.sees = true; near.gx = h.x; near.gy = h.y; g.events.push('hit'); }
+        }
+      }
+    }
     if (firing && !h.cool) {
       const b = g.bullets.find(o => !o.on);
       if (b) {
         const d = ISO.DIRS[h.aim];
         Object.assign(b, { on: true, x: h.x, y: h.y, vx: BULLET.speed * d[0], vy: BULLET.speed * d[1], life: BULLET.life });
         h.cool = COOL;
+        flash = true;
         g.events.push('shot');
       }
     }
@@ -170,10 +224,17 @@
       c.t = (c.t + 1) & 0xff;
       if (c.flash) c.flash--;
       if (c.dying) { c.dying--; continue; }
-      if (!c.awake && Math.abs(h.x - c.x) < WAKE && Math.abs(h.y - c.y) < WAKE) { c.awake = true; c.t = 0; g.events.push('wake'); }
+      const near = Math.abs(h.x - c.x) < WAKE && Math.abs(h.y - c.y) < WAKE;
+      let gx = h.x, gy = h.y;
+      if (g.stealth) {
+        // it sees him only in the light, or by his muzzle flash; else it goes to where it saw him last
+        c.sees = near && (g.lit || flash);
+        if (c.sees) { c.gx = h.x; c.gy = h.y; if (!c.awake) { c.awake = true; c.t = 0; g.events.push('wake'); } }
+        gx = c.gx; gy = c.gy;
+      } else if (!c.awake && near) { c.awake = true; c.t = 0; g.events.push('wake'); }
       if (!c.awake) continue;
       const speed = c.kind === DROWNED ? 6 : (c.t & 31) < 8 ? 20 : 0;
-      const x0 = c.x, y0 = c.y, dx = toward(c.x, h.x, speed), dy = toward(c.y, h.y, speed);
+      const x0 = c.x, y0 = c.y, dx = toward(c.x, gx, speed), dy = toward(c.y, gy, speed);
       if (dx && clear(M, c.x + dx, c.y)) c.x += dx;
       if (dy && clear(M, c.x, c.y + dy)) c.y += dy;
       const sdx = (c.x - x0) - (c.y - y0);
@@ -232,6 +293,7 @@
         if (!c.hp || Math.abs(b.x - c.x) >= HIT || Math.abs(b.y - c.y) >= HIT) continue;
         b.on = false;
         c.awake = true;
+        if (g.stealth) { c.gx = h.x; c.gy = h.y; }
         if (--c.hp) { c.flash = 4; g.events.push('hit'); }
         else { c.dying = DYING; g.score += SCORE[c.kind]; g.events.push('kill'); }
         break;
@@ -254,5 +316,5 @@
   const music = g => g.boss.state === SLEEP || g.boss.state === GONE;
 
   return { music, TITLE, PLAY, WIN, OVER, DROWNED, SPAWN, HEARTS, INVULN, END_FOR, SLOTS, COOL, BULLET, WAKE, HP, SCORE,
-    RADIUS, DYING, HIT, TOUCH, SLEEP, RISE, FIGHT, SINK, GONE, BOSS, AIM, aim, parse, game, tick };
+    RADIUS, DYING, HIT, TOUCH, LIVING, TORCH, REACH, LASH, SLEEP, RISE, FIGHT, SINK, GONE, BOSS, AIM, aim, parse, game, tick };
 });

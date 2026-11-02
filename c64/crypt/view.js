@@ -9,6 +9,12 @@
  * fish-men, the spawn tentacled eyes; the boss is six sprites (sprites.js). A creature out of the torchlight shows dimmed, and in the dark
  * only its eyes, glowing.
  *
+ * Darkvision (a stealth game with g.dark set, see core/crypt.js): the dungeon is black (the iso view
+ * with the light off), and only the living show, each a shape all in one colour (red for evil), the
+ * hero a dark grey one; bullets, spit and the undead don't show. A shape is a hi-res sprite: each fat
+ * pixel of the image as two pixels in the sprite's colour. The tentacle lashing from the coat is
+ * lash0 then lash1, black with a dark grey core (a dark grey shape in the dark).
+ *
  * More sprites than the VIC's eight: as in the shooter, the objects are sorted by Y and the n-th one
  * shown gets a hardware sprite, here 7 - (n mod 8), so that the lower on the screen (nearer) an object
  * is, the more it is in front. An object starting less than GAP lines below the last one on its hardware
@@ -28,7 +34,9 @@
 
   const SPRITE = SP.COLORS;
   // Own colours. A creature out of the light is dim; hit, it flashes white.
-  const COLOR = { hero: 15, drowned: 5, spawn: 4, boss: 3, spit: 13, dim: 11, flash: 1, bullet: 7 };
+  const COLOR = { hero: 15, drowned: 5, spawn: 4, boss: 3, spit: 13, dim: 11, flash: 1, bullet: 7, lash: 11 };
+  // Darkvision's colours: the hero's shape, and each creature's by its alignment.
+  const SENSED = { hero: 11, evil: 2, good: 5, neutral: 1 };
   const GAP = 24;
   const BAR_LINE = 188;
 
@@ -49,12 +57,14 @@
   // Where a point on the floor shows on the screen, with the hero's feet at IV.HERO.
   const onScreen = (h, o) => { const s = ISO.screen(o), c = ISO.screen(h); return { x: s.x - c.x + IV.HERO.x, y: s.y - c.y + IV.HERO.y }; };
   // What the game shows as sprites, in order: the hero, its bullets, the creatures.
-  // [{ x, y (the sprite's top left), frame, color, flip }]
+  // [{ x, y (the sprite's top left), frame, color, flip, shape (darkvision: all one colour) }]
   function objects(g) {
+    if (g.dark) return sensed(g);
     const out = [], h = g.hero;
     const feet = (o, frame, color, flip = false, lift = 0) => { const s = onScreen(h, o); out.push({ x: s.x - 12, y: s.y - 20 - lift, frame, color, flip }); };
     if (g.mode === G.OVER) feet(h, 'hero_dead', COLOR.hero, h.facing < 0);
     else if (!(h.invuln & 4)) feet(h, `hero_${heroView(h.aim)}_${IV.spriteFrame(h)}`, COLOR.hero, h.facing < 0);
+    if (h.lash) out.push(lash(h, COLOR.lash, false));
     for (const b of g.bullets) if (b.on) feet(b, 'bullet', COLOR.bullet, false, 10);
     for (const c of g.creatures) {
       if (!c.hp && !c.dying) continue;
@@ -76,6 +86,25 @@
     // its tentacle: the floor cracking (blinking), then bursting up and lashing
     const gr = g.grasp;
     if (gr.on && (gr.t >= G.BOSS.warn || gr.t & 4)) feet(gr, gr.t < G.BOSS.warn ? 'grasp0' : gr.t < G.BOSS.warn + 8 ? 'grasp1' : 'grasp2', COLOR.boss);
+    return out;
+  }
+  // The tentacle: from the hero's coat toward what it lashes, the short lash then the long one.
+  function lash(h, color, shape) {
+    const s = onScreen(h, h), a = onScreen(h, h.lashAt), left = a.x < s.x;
+    return { x: s.x - 12 + (left ? -14 : 14), y: s.y - 20, frame: h.lash > G.LASH.time / 2 ? 'lash0' : 'lash1', color, flip: left, shape };
+  }
+  // What darkvision senses: the hero's shape, the tentacle, and the living creatures' shapes.
+  function sensed(g) {
+    const out = [], h = g.hero;
+    const feet = (o, frame, color, flip = false) => { const s = onScreen(h, o); out.push({ x: s.x - 12, y: s.y - 20, frame, color, flip, shape: true }); };
+    if (!(h.invuln & 4)) feet(h, `hero_${heroView(h.aim)}_${IV.spriteFrame(h)}`, SENSED.hero, h.facing < 0);
+    if (h.lash) out.push(lash(h, SENSED.hero, true));
+    for (const c of g.creatures) {
+      if ((!c.hp && !c.dying) || !G.LIVING[c.kind]) continue;
+      const name = c.kind === G.DROWNED ? 'drowned' : 'spawn';
+      if (c.dying) feet(c, c.dying > G.DYING / 2 ? 'splat0' : 'splat1', SENSED.evil);
+      else feet(c, name + (c.awake ? (c.t >> 3) & 1 : 0), c.flash ? COLOR.flash : SENSED.evil, c.facing < 0);
+    }
     return out;
   }
   // The boss's pose: rising out of its pit (rise0-3), sinking back, its maw gaping round each spit,
@@ -150,10 +179,10 @@
       for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++) if (x < 7 || x >= 311 || y < 4 || y >= 196) put(x, y, PAL[IV.COLORS.border]);
       return { pixels: out, scroll: null, sprites: [] };
     }
-    const sc = IV.background(M, g.hero, put);
+    const sc = IV.background(M, g.hero, put, !!g.dark);
     const sprites = multiplex(objects(g));
     for (const s of [...sprites].reverse()) {
-      const f = FRAMES[s.frame], cols = [null, SPRITE.mc1, s.color, SPRITE.mc2];
+      const f = FRAMES[s.frame], cols = s.shape ? [null, s.color, s.color, s.color] : [null, SPRITE.mc1, s.color, SPRITE.mc2];
       for (let r = 0; r < 21; r++) for (let c = 0; c < 12; c++) {
         const v = f[r][s.flip ? 11 - c : c];
         if (v) for (const dx of [0, 1]) put(s.x + 2 * c + dx, s.y + r, PAL[cols[v]]);
@@ -196,5 +225,5 @@
     return { pixels: out, scroll: sc, sprites };
   }
 
-  return { SPRITE, COLOR, GAP, BAR_LINE, withTiles, setTitle, FRAMES, FRAME_NAMES, FONT, TEXT, lightStep, onScreen, objects, multiplex, frame };
+  return { SPRITE, COLOR, SENSED, GAP, BAR_LINE, withTiles, setTitle, FRAMES, FRAME_NAMES, FONT, TEXT, lightStep, onScreen, objects, multiplex, frame };
 });

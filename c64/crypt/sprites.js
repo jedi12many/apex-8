@@ -208,6 +208,13 @@
     ['.k........k.', '..ka.kk.ak..', 'kaaakaakaaak', 'kaaaaaaaaaak', '.kkkkkkkkkk.'],
   ];
   const BULLET = ['.....ss.....', '.....aa.....'];
+  // The tentacle lashing from under his coat at the waist, drawn going right from the coat's edge:
+  // short, then at full stretch with its tip curling.
+  const BLANK = '............';
+  const LASH = [
+    ['kkk.........', 'aaak........', 'kkk.........', ...Array(8).fill(BLANK)],
+    ['.........kk.', 'kkkkkkkkkaak', 'aaaaaaaaaakk', 'kkkkkkkkkk..', ...Array(7).fill(BLANK)],
+  ];
 
   // In the dark only the eyes show: the eye pixels (s) of a frame's first rows, glowing, nothing else.
   const eyes = (rows, upTo) => rows.map((r, y) => (y < upTo ? r.replace(/[^s]/g, '.') : '............'));
@@ -225,6 +232,7 @@
   for (const [pose, rows] of Object.entries(BOSS)) parts(rows).forEach((p, k) => { IMAGES[`boss_${pose}_${k}`] = p; });
   IMAGES.spit = SPIT;
   GRASP.forEach((r, k) => { IMAGES['grasp' + k] = r; });
+  LASH.forEach((r, k) => { IMAGES['lash' + k] = r; });
 
   // Each image as 21 rows of 12 values (0 clear, 1 black, 2 own colour, 3 light red).
   const FRAMES = {};

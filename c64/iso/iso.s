@@ -18,7 +18,9 @@
 
 SCREEN_A = $0400
 SCREEN_B = $3000
+.ifndef SPRITES
 SPRITES  = $3400
+.endif
 CHARSET  = $3800
 D018_A   = $1e              ; screen $0400, characters $3800
 D018_B   = $ce              ; screen $3000, characters $3800
@@ -30,6 +32,7 @@ HALF     = LIGHT + 1000     ; per screen character: $80 where the light is half-
 hx:      .res 2             ; the hero, 8.8 tiles
 hy:      .res 2
 facing:  .res 1             ; 0 right, 1 left
+hview:   .res 1             ; a game's hero with views: the view, times 6
 frm:     .res 1             ; walk cycle, 0-15
 moving:  .res 1
 inp:     .res 1             ; joystick bits: 1 up, 2 down, 4 left, 8 right
@@ -228,6 +231,10 @@ reset_hero:
     sta facing
     sta frm
     sta moving
+.ifdef HERO_VIEWS
+    lda #START_VIEW
+    sta hview
+.endif
     rts
 
 ; One frame: step along x, then along y, each only if the hero's square stays on floor.
@@ -293,6 +300,13 @@ tick:
     lda cly+1
     sta hy+1
 @face:
+.ifdef HERO_VIEWS
+    lda DIR_VIEW,x          ; the view it shows, unless no direction is held
+    cmp #$ff
+    beq :+
+    sta hview
+:
+.endif
     lda DIR_FACE,x          ; 1 right, 2 left, 0 as before
     beq @moved
     sec
@@ -537,6 +551,10 @@ view:
     adc #3
 :   clc
     adc #SPRPTR
+.ifdef HERO_VIEWS
+    clc
+    adc hview
+.endif
     sta p_ptr
 
     lda #1

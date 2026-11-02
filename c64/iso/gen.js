@@ -11,7 +11,10 @@
 //   looks.bin    the map's tiles (looks), rows of 64
 //   light.bin    per screen character: colour RAM (1000 bytes), then the half-lit bit as $80 (1000)
 //
-// gen(map, dir) writes the files; build.js assembles them.
+// gen(map, dir) writes the files; build.js assembles them. A game can bring its own hero as hero: {
+// sprite: { mc1, mc2, color }, views: [{ stand, walk1, walk2 }] (21 rows of 12 values each), viewOf:
+// (joystick bits) => the view that direction shows, startView, at: the address of its images, in the
+// VIC's bank and not at $1000-$1FFF, and leaving the memory map (its cfg) to fit }.
 const fs = require('fs'), path = require('path');
 const ISO = require('../../core/iso.js');
 const VIEW = require('./view.js');
@@ -20,7 +23,7 @@ const VIEW = require('./view.js');
 // opposite direction from X = D.
 const DIRS = [[1, 0], [0, 1], [1, 1], [-1, 1]];
 
-function gen(M, outDir) {
+function gen(M, outDir, { hero } = {}) {
   fs.mkdirSync(outDir, { recursive: true });
   if (M.w > 64 || M.h > 64) throw new Error('map too big for the C64 engine (64 x 64 tiles at most)');
   for (let i = 0; i < M.w; i++) for (const [x, y] of [[i, 0], [i, M.h - 1], [0, i], [M.w - 1, i]])
@@ -49,15 +52,16 @@ function gen(M, outDir) {
   // ---------------------------------------------------------------- data files
   fs.writeFileSync(path.join(outDir, 'charset.bin'), Buffer.concat(P.chars.map(g => Buffer.from(g))));
 
-  const order = ['stand', 'walk1', 'walk2'], sprites = Buffer.alloc(6 * 64);
-  order.forEach((name, f) => [false, true].forEach((mirror, m) => {
-    const rows = VIEW.FRAMES[name];
+  // per view: stand, walk, walk, then the same mirrored
+  const order = ['stand', 'walk1', 'walk2'], views = hero ? hero.views : [VIEW.FRAMES], sprites = Buffer.alloc(views.length * 6 * 64);
+  views.forEach((frames, n) => order.forEach((name, f) => [false, true].forEach((mirror, m) => {
+    const rows = frames[name];
     for (let r = 0; r < 21; r++) for (let b = 0; b < 3; b++) {
       let v = 0;
       for (let i = 0; i < 4; i++) v = (v << 2) | rows[r][mirror ? 11 - (4 * b + i) : 4 * b + i];
-      sprites[(f + 3 * m) * 64 + r * 3 + b] = v;
+      sprites[(n * 6 + f + 3 * m) * 64 + r * 3 + b] = v;
     }
-  }));
+  })));
   fs.writeFileSync(path.join(outDir, 'sprites.bin'), sprites);
 
   // code maps: row ay + OFFY, byte phase * 64 + ax + OFFX
@@ -149,7 +153,8 @@ function gen(M, outDir) {
     // the sprite: x = HERO.x - 12 + 24; y register one line above its first line
     SPR_X: H.x - 12 + 24, SPR_Y: 51 + H.y - 20 - 1,
     COL_BORDER: VIEW.COLORS.border, COL_BG: VIEW.COLORS.bg, COL_MC1: VIEW.COLORS.mc1, COL_MC2: VIEW.COLORS.mc2,
-    SPR_MC1: VIEW.SPRITE.mc1, SPR_MC2: VIEW.SPRITE.mc2, SPR_COLOR: VIEW.SPRITE.color,
+    SPR_MC1: hero ? hero.sprite.mc1 : VIEW.SPRITE.mc1, SPR_MC2: hero ? hero.sprite.mc2 : VIEW.SPRITE.mc2, SPR_COLOR: hero ? hero.sprite.color : VIEW.SPRITE.color,
+    ...(hero ? { HERO_VIEWS: views.length, START_VIEW: hero.startView * 6, SPRITES: hero.at } : {}),
   };
   const inc = Object.entries(C).map(([k, v]) => `${k} = ${v}`);
   // movement per joystick bits (0 where the bits are no direction), and which way the hero faces
@@ -159,6 +164,8 @@ function gen(M, outDir) {
     dx.push(d[0] & 255); dy.push(d[1] & 255); face.push(s > 0 ? 1 : s < 0 ? 2 : 0);
   }
   inc.push('.segment "RODATA"', `DIR_X: .byte ${dx.join(',')}`, `DIR_Y: .byte ${dy.join(',')}`, `DIR_FACE: .byte ${face.join(',')}`);
+  // the view each direction shows, times 6 ($FF: as before)
+  if (hero) inc.push(`DIR_VIEW: .byte ${Array.from({ length: 16 }, (_, b) => (ISO.DIRS[b] ? hero.viewOf(b) * 6 : 255)).join(',')}`);
   fs.writeFileSync(path.join(outDir, 'gen.inc'), inc.join('\n') + '\n');
   return { P, C, fixCounts, anchors: [ax0, ax1, ay0, ay1] };
 }

@@ -327,7 +327,7 @@ To play on a C64 or in VICE, load `c64/out/iso.prg` with `LOAD"*",8,1`, then `RU
 
 | File | What it is |
 |------|------------|
-| `core/iso.js` | Maps, and the hero's movement and collision, in integer maths |
+| `core/iso.js` | Maps, the hero's movement and collision, and which tiles torches light, in integer maths |
 | `c64/iso/view.js` | What the C64 screen shows each frame |
 | `levels/iso/d1.txt` | The Crypt: nine rooms and their corridors on a 48×48 map, with wall torches and cracked flagstones |
 | `showcase/iso-pilot.js` | An autopilot that tours the rooms along shortest paths |
@@ -344,6 +344,10 @@ To play on a C64 or in VICE, load `c64/out/iso.prg` with `LOAD"*",8,1`, then `RU
 - *half-lit characters*: every character also exists half-lit, with its lit stone thinned to a checkerboard, as codes 128–255. Bit 7 of each screen code picks the half-lit one, in rings fixed on the screen
 
 Together they make five steps from full light to dark, blended across the rings with a 2×2 ordered dither. The other bit pairs are fixed colours. Black is void and floor joints. White is torch flames, so torches glow in the dark. Dark grey is mortar, so outside the light the walls still show faintly as grey outlines. On the C64 the half-lit bit costs an `and` and an `ora` per character when the screen shifts.
+
+**The light off, and torchlight.** Two things a game can use for stealth, as [The Investigator](https://github.com/jedi12many/the-investigator) does:
+- `background(map, hero, put, true)` draws the dungeon with the light off: colour RAM, $D022 and $D023 all black, so nothing shows, and the game draws only what its hero can sense in the dark
+- `ISO.lightMap(map, r)` is which tiles the wall torches light: one byte a tile, 1 where a torch is within r tiles along both axes, so a game looks up whether the hero stands in light by his tile
 
 **Movement.** One tick per 50 Hz frame, in 1/256 tile:
 - walking: the eight joystick directions at one speed, 2 pixels a frame across the screen and 1 up and down
@@ -376,19 +380,11 @@ node showcase/iso-c64-video.js "C:\path\to\GTK3VICE-3.10-win64"
 
 A demo of what the dungeon engine can make: a small action game in the browser, with a C64 version still to come. An investigator in a long raincoat clears a drowned crypt with a pistol. Drowned fish-men shamble at him, tentacled spawn lurch at him in bursts, and in a chamber at the end the Mother of the Deep rips up out of the floor. It spits, sends tentacles up under his feet, and takes 24 shots to sink. Out of the torchlight a creature shows only its glowing eyes. Holding fire plants his feet so he can aim in all 8 directions.
 
-**Stealth** (`game(map, { stealth: true })`, off in the Drowned Crypt; [The Investigator](https://github.com/jedi12many/the-investigator) plays this way):
-
-- **The cigarette:** a key (input bit 32) lights it or puts it out. While he is in light (the cigarette, within 2 tiles of a torch, or the boss's chamber once it rises) the game plays as above. Out of the light, darkvision: the dungeon goes black (the iso view with its light off) and only the living show, as shapes all one colour, through walls. The spawn show red; the drowned are undead and don't show at all, nor do bullets.
-- **Creatures notice him only by light:** in range and in light, or when he fires. One that loses him goes to where it last saw him and waits.
-- **The tentacle:** fire pressed beside a creature lashes it from under his coat instead of firing. It kills a creature that can't see him outright; one that can takes one hit.
-
-`test/crypt-stealth-check.js` checks these rules.
-
 The dungeon is cut from drawn tiles here, not the textures (`M.art`, see `c64/iso/view.js`): a floor, a cracked floor, a wall and a torch wall drawn as pixel grids and placed with each tile, so every character is cut from the drawings. It uses 59 characters. The boss is six sprites drawn from shaded, outlined shapes. The music stops while it is up (see Sound).
 
 | File | What it is |
 |------|------------|
-| `core/crypt.js` | The game's reference: the creatures, the pistol, the boss, hearts and score, and stealth |
+| `core/crypt.js` | The game's reference: the creatures, the pistol, the boss, hearts and score |
 | `levels/iso/c1.txt` | The map: four rooms, their corridors and the boss's chamber |
 | `c64/crypt/` | Its view (`view.js`), drawn tiles (`tiles.js`) and sprites (`sprites.js`) |
 | `sound/crypt.js` | Its music and effects |

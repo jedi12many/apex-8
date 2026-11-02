@@ -265,8 +265,7 @@ reset_hero:
     rts
 
 .ifdef DARK_COLOR
-; After the hero moves: input bit 32 changes the light, once a press; then it is dark unless the light
-; burns or a torch lights the hero's tile.
+; Input bit 32 changes the light, once a press; it is dark while the light is out.
 light:
     lda inp
     and #32
@@ -282,21 +281,6 @@ light:
     ldx #0
     lda cig
     bne @set
-    lda hy+1                ; the hero's tile in LOOKS: bit 7 if a torch lights it
-    lsr
-    lsr
-    clc
-    adc #>LOOKS
-    sta lp+1
-    lda hy+1
-    and #3
-    lsr
-    ror
-    ror
-    sta lp                  ; (row & 3) * 64
-    ldy hx+1
-    lda (lp),y
-    bmi @set
     ldx #$40
 @set:
     stx darkbit
@@ -450,14 +434,12 @@ clear:
     sta lp                  ; (row & 3) * 64
     ldy tx0
     lda (lp),y
-    and #$7f                ; (bit 7: a torch lights it)
     sec
     sbc #1
     cmp #2
     bcs @done
     ldy tx1
     lda (lp),y
-    and #$7f
     sec
     sbc #1
     cmp #2

@@ -4,11 +4,12 @@
 ; Include it after kit.inc, with the song's tables (sound.inc, from c64/kit/sidgen.js) on the
 ; include path.
 ;
-;   snd_init        silence, and the song from its start, the music on; one SID or two (snd_detect,
-;                   unless the build sets SND_STEREO to 0 or 1)
-;   snd_detect      snd_stereo = 1 if there is a second SID at SND_SID2 ($D420 unless the build says):
-;                   the music then plays on the first and the effects on the second, as the
-;                   reference's two-SID player does
+;   snd_init        silence, and the song from its start, the music on. One SID, unless the build sets
+;                   SND_STEREO to 1 (the music on the first, the effects on the second at SND_SID2, as
+;                   the reference's two-SID player does), or SND_DETECT (snd_detect decides)
+;   snd_detect      SND_DETECT builds: snd_stereo = 1 if the second SID seems to be there. Not for
+;                   release: a C64 Ultimate fooled it, and with the second's registers landing on the
+;                   first the music is lost
 ;   snd_stereo      0 one SID, 1 two
 ;   snd_music       0 turns the music off (the song stands still, every voice released), else on
 ;
@@ -70,8 +71,11 @@ snd_init:
 .ifdef SND_STEREO
     lda #SND_STEREO
     sta snd_stereo
-.else
+.elseif .defined(SND_DETECT)
     jsr snd_detect
+.else
+    lda #0
+    sta snd_stereo
 .endif
     lda #25
     ldx snd_stereo
@@ -112,6 +116,7 @@ snd_init:
 ; A second SID at SND_SID2? Without one, those addresses are the first SID again (the I/O area repeats
 ; it every $20 bytes). So: hold the second's voice 3 by its test bit, run the first's as a fast
 ; sawtooth, and read the second's voice 3 output: always 0 from a second SID, moving if it is the first.
+.ifdef SND_DETECT
 snd_detect:
     lda #0
     sta snd_stereo
@@ -137,6 +142,7 @@ snd_detect:
     beq :+
     sta SND_SID2+$12
 :   rts
+.endif
 
 snd_fx:
     stx snd_t

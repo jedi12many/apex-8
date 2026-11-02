@@ -55,7 +55,7 @@ function scripts(name) {
   // the look for a second SID, without one and with one at $D420
   for (const sid2 of [false, true]) {
     const dir = path.join(o.scratch, 'd');
-    build(dir, { script: runs([0, 0, 0]) });
+    build(dir, { script: runs([0, 0, 0]), defines: { SND_DETECT: 1 } });
     const lbl = labels(path.join(dir, 'sound.lbl'));
     const [found] = await readMemory(o.exe, path.join(dir, 'sound.prg'), lbl.script_park, lbl.snd_stereo, 1, { ...o.vice, sid2 });
     const ok = found === (sid2 ? 1 : 0);

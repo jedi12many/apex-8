@@ -73,7 +73,7 @@
     <div class="body">
       <span class="kind">Shoot-'em-up</span>
       <h3>The Dreadnought</h3>
-      <p>A vertical scroller over a huge ship, with waves of enemies. Uses an REU and a second SID when there is one.</p>
+      <p>A vertical scroller over a huge ship, with waves of enemies. Uses an REU when there is one.</p>
       <p class="keys">Arrows or W / A / S / D fly · Space, Ctrl or K fire (hold for autofire)</p>
       <div class="actions"><a class="play" href="shmup.html">Play</a><a href="c64/shmup.prg" download>shmup.prg</a><a href="c64/shmup-brick.prg" download>brick look</a></div>
     </div>
@@ -109,7 +109,7 @@
   </ol>
   <ul class="dim">
     <li>Joystick in port 2. The keys above work on the C64's keyboard too.</li>
-    <li>A second SID at $D420 plays the sound effects, so the music keeps all three voices. The shooter also uses an REU when there is one. Without them everything still runs.</li>
+    <li>The games play on one SID. The shooter also uses an REU when there is one; without one it still runs.</li>
     <li>The story mode's zooms and turns need an REU. It loads them from the disk at start-up, which takes a few minutes at a stock drive's speed; preload <code>mountain.reu</code> into the C64 Ultimate's REU (its REU settings) and they are there at once. On a stock C64 it shows still pictures in their place.</li>
   </ul>
 </div>

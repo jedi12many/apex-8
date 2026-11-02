@@ -14,7 +14,10 @@
 // gen(map, dir) writes the files; build.js assembles them. A game can bring its own hero as hero: {
 // sprite: { mc1, mc2, color }, views: [{ stand, walk1, walk2 }] (21 rows of 12 values each), viewOf:
 // (joystick bits) => the view that direction shows, startView, at: the address of its images, in the
-// VIC's bank and not at $1000-$1FFF, and leaving the memory map (its cfg) to fit }.
+// VIC's bank and not at $1000-$1FFF, and leaving the memory map (its cfg) to fit }. It can also have a
+// light the hero carries, as dark: { torch, color }: key C (input bit 32) puts it out and lights it
+// again, and out of the light, more than torch tiles from any wall with a torch, the screen goes black
+// and the hero shows as one shape of that colour. Bit 7 of looks.bin then marks the tiles torches light.
 const fs = require('fs'), path = require('path');
 const ISO = require('../../core/iso.js');
 const VIEW = require('./view.js');
@@ -23,7 +26,7 @@ const VIEW = require('./view.js');
 // opposite direction from X = D.
 const DIRS = [[1, 0], [0, 1], [1, 1], [-1, 1]];
 
-function gen(M, outDir, { hero } = {}) {
+function gen(M, outDir, { hero, dark } = {}) {
   fs.mkdirSync(outDir, { recursive: true });
   if (M.w > 64 || M.h > 64) throw new Error('map too big for the C64 engine (64 x 64 tiles at most)');
   for (let i = 0; i < M.w; i++) for (const [x, y] of [[i, 0], [i, M.h - 1], [0, i], [M.w - 1, i]])
@@ -74,8 +77,8 @@ function gen(M, outDir, { hero } = {}) {
   }
   fs.writeFileSync(path.join(outDir, 'cmap.bin'), cmap);
 
-  const looks = Buffer.alloc(64 * M.h);
-  for (let ty = 0; ty < M.h; ty++) for (let tx = 0; tx < M.w; tx++) looks[ty * 64 + tx] = VIEW.lookAt(M, tx, ty);
+  const looks = Buffer.alloc(64 * M.h), lit = dark && ISO.lightMap(M, dark.torch);
+  for (let ty = 0; ty < M.h; ty++) for (let tx = 0; tx < M.w; tx++) looks[ty * 64 + tx] = VIEW.lookAt(M, tx, ty) | (lit && lit[ty * M.w + tx] ? 0x80 : 0);
   fs.writeFileSync(path.join(outDir, 'looks.bin'), looks);
 
   const light = Buffer.alloc(2000);
@@ -155,6 +158,7 @@ function gen(M, outDir, { hero } = {}) {
     COL_BORDER: VIEW.COLORS.border, COL_BG: VIEW.COLORS.bg, COL_MC1: VIEW.COLORS.mc1, COL_MC2: VIEW.COLORS.mc2,
     SPR_MC1: hero ? hero.sprite.mc1 : VIEW.SPRITE.mc1, SPR_MC2: hero ? hero.sprite.mc2 : VIEW.SPRITE.mc2, SPR_COLOR: hero ? hero.sprite.color : VIEW.SPRITE.color,
     ...(hero ? { HERO_VIEWS: views.length, START_VIEW: hero.startView * 6, SPRITES: hero.at } : {}),
+    ...(dark ? { DARK_COLOR: dark.color } : {}),
   };
   const inc = Object.entries(C).map(([k, v]) => `${k} = ${v}`);
   // movement per joystick bits (0 where the bits are no direction), and which way the hero faces

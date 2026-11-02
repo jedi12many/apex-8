@@ -80,6 +80,14 @@ p_d018:  .res 1             ; the next frame
 p_d016:  .res 1
 p_d011:  .res 1
 p_ptr:   .res 1
+.ifdef DARK_COLOR
+cig:     .res 1             ; 1: the hero's light burns
+cigheld: .res 1             ; the key's bit last tick, so one press is one change
+darkbit: .res 1             ; $40 out of the light: with multicolor, a mode the VIC shows all black
+p_mc1:   .res 1             ; the next frame's sprite colours
+p_mc2:   .res 1
+p_col:   .res 1
+.endif
 
 .segment "CODE"
 start:
@@ -157,6 +165,9 @@ main:
     bcc :+
     jmp kit_park
 :   jsr tick
+.ifdef DARK_COLOR
+    jsr light
+.endif
     jsr view
     jmp main
 
@@ -194,13 +205,22 @@ input:
     lda inp
     ora #2
     sta inp
-:   lda #%11111011          ; row 2: R (bit 1), D (2)
+:   lda #%11111011          ; row 2: R (bit 1), D (2), C (4)
     sta $dc00
     lda $dc01
     eor #$ff
     sta t0
     lda #$ff
     sta $dc00
+.ifdef DARK_COLOR
+    lda t0
+    and #$10
+    beq :+
+    lda inp
+    ora #32
+    sta inp
+:
+.endif
     lda t0
     and #4
     beq :+
@@ -235,7 +255,53 @@ reset_hero:
     lda #START_VIEW
     sta hview
 .endif
+.ifdef DARK_COLOR
+    lda #1
+    sta cig
+    lda #0
+    sta cigheld
+    sta darkbit
+.endif
     rts
+
+.ifdef DARK_COLOR
+; After the hero moves: input bit 32 changes the light, once a press; then it is dark unless the light
+; burns or a torch lights the hero's tile.
+light:
+    lda inp
+    and #32
+    tax
+    beq @held
+    lda cigheld
+    bne @held
+    lda cig
+    eor #1
+    sta cig
+@held:
+    stx cigheld
+    ldx #0
+    lda cig
+    bne @set
+    lda hy+1                ; the hero's tile in LOOKS: bit 7 if a torch lights it
+    lsr
+    lsr
+    clc
+    adc #>LOOKS
+    sta lp+1
+    lda hy+1
+    and #3
+    lsr
+    ror
+    ror
+    sta lp                  ; (row & 3) * 64
+    ldy hx+1
+    lda (lp),y
+    bmi @set
+    ldx #$40
+@set:
+    stx darkbit
+    rts
+.endif
 
 ; One frame: step along x, then along y, each only if the hero's square stays on floor.
 tick:
@@ -384,12 +450,14 @@ clear:
     sta lp                  ; (row & 3) * 64
     ldy tx0
     lda (lp),y
+    and #$7f                ; (bit 7: a torch lights it)
     sec
     sbc #1
     cmp #2
     bcs @done
     ldy tx1
     lda (lp),y
+    and #$7f
     sec
     sbc #1
     cmp #2
@@ -534,7 +602,23 @@ view:
     sta p_d016
     lda ys
     ora #$10                ; screen on, 24 rows
+.ifdef DARK_COLOR
+    ora darkbit
+.endif
     sta p_d011
+.ifdef DARK_COLOR
+    lda #SPR_MC1            ; in the dark the hero is one shape: all three colours the same
+    ldx #SPR_MC2
+    ldy #SPR_COLOR
+    bit darkbit
+    bvc :+
+    lda #DARK_COLOR
+    tax
+    tay
+:   sta p_mc1
+    stx p_mc2
+    sty p_col
+.endif
     ; the sprite's frame: standing, or one of two walking; mirrored facing left
     ldx #0
     lda moving
@@ -890,6 +974,14 @@ apply:
     sta $d016
     lda p_d011
     sta $d011
+.ifdef DARK_COLOR
+    lda p_mc1
+    sta $d025
+    lda p_mc2
+    sta $d026
+    lda p_col
+    sta $d027
+.endif
     lda p_ptr
     sta SCREEN_A + $3f8
     sta SCREEN_B + $3f8
